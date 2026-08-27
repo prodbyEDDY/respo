@@ -1,0 +1,16 @@
+# deps / build
+node_modules/
+dist/
+out/
+release/
+*.local
+
+# claude: версионируем только команды
+.claude/*
+!.claude/commands/
+
+# os / editors
+Thumbs.db
+.DS_Store
+.idea/
+.vscode/
