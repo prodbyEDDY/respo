@@ -2,13 +2,24 @@ import { app, shell, BrowserWindow, nativeTheme } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerHandler } from './ipc'
+import { ViewManager } from './view-manager'
+import { createElectronViewBackend } from './view-backend'
+import { startPerfMonitor, type PerfMonitor } from './perf'
+import { runScrollSpike } from './spike'
 import icon from '../../resources/icon.png?asset'
 
+let viewManager: ViewManager | null = null
+let perf: PerfMonitor | null = null
+let stopSpike: (() => void) | null = null
+
 function createWindow(): void {
-  // Create the browser window.
+  // Wide enough that a handful of device frames fit side by side; this is a
+  // multi-viewport browser, not a single-page window.
   const mainWindow = new BrowserWindow({
-    width: 900,
-    height: 670,
+    width: 1400,
+    height: 900,
+    minWidth: 720,
+    minHeight: 480,
     show: false,
     autoHideMenuBar: true,
     ...(process.platform === 'linux' ? { icon } : {}),
@@ -20,14 +31,36 @@ function createWindow(): void {
     }
   })
 
+  viewManager = new ViewManager(
+    createElectronViewBackend(mainWindow, {
+      canvasLayer: process.env['RESPO_CANVAS_LAYER'] !== '0'
+    })
+  )
+
   mainWindow.on('ready-to-show', () => {
     mainWindow.show()
+  })
+
+  mainWindow.on('closed', () => {
+    viewManager?.destroy()
+    viewManager = null
+    stopSpike?.()
+    stopSpike = null
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
     return { action: 'deny' }
   })
+
+  if (is.dev) {
+    // Renderer instrumentation is part of the R1 evidence; surface it on the
+    // same stdout as the main-process numbers.
+    mainWindow.webContents.on('console-message', (event) => {
+      if (event.level === 'error') console.error(`[renderer] ${event.message}`)
+      else if (event.message.startsWith('[')) console.log(event.message)
+    })
+  }
 
   // HMR for renderer base on electron-vite cli.
   // Load the remote URL for development or the local html file for production.
@@ -36,17 +69,42 @@ function createWindow(): void {
   } else {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
+
+  if (is.dev && process.env['RESPO_SPIKE'] === '1') {
+    const deltaY = Number(process.env['RESPO_SPIKE_DELTA'])
+    stopSpike = runScrollSpike(mainWindow, {
+      captureDir: process.env['RESPO_SPIKE_DIR'],
+      ...(Number.isFinite(deltaY) && deltaY > 0 ? { deltaY } : {})
+    })
+  }
 }
 
 /**
  * Every handler is attached through `registerHandler`, so `@shared/ipc` stays
- * the only place a channel can be introduced. `views:set-layout` and
- * `nav:navigate` are declared there but land with the ViewManager tasks.
+ * the only place a channel can be introduced.
  */
 function registerIpcHandlers(): void {
   registerHandler('app:get-version', () => app.getVersion())
+
   registerHandler('theme:set-source', (_event, source) => {
     nativeTheme.themeSource = source
+  })
+
+  registerHandler('views:sync-devices', (_event, devices) => {
+    viewManager?.syncDevices(devices)
+  })
+
+  // The hot path: one call per animation frame, applied synchronously so every
+  // view lands in the same frame the renderer painted its placeholder in.
+  registerHandler('views:set-layout', (_event, rects, viewport) => {
+    if (viewManager === null) return
+    const startedAt = performance.now()
+    viewManager.applyLayout(rects, viewport)
+    perf?.recordLayoutApply(performance.now() - startedAt)
+  })
+
+  registerHandler('nav:navigate', (_event, url) => {
+    viewManager?.navigateAll(url)
   })
 }
 
@@ -63,6 +121,8 @@ app.whenReady().then(() => {
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
   })
+
+  if (is.dev) perf = startPerfMonitor()
 
   registerIpcHandlers()
 
@@ -84,5 +144,11 @@ app.on('window-all-closed', () => {
   }
 })
 
-// In this file you can include the rest of your app's specific main process
-// code. You can also put them in separate files and require them here.
+app.on('before-quit', () => {
+  viewManager?.destroy()
+  viewManager = null
+  perf?.stop()
+  perf = null
+  stopSpike?.()
+  stopSpike = null
+})

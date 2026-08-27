@@ -6,7 +6,16 @@
  * updates travel batched over the one `MAIN_EVENT_CHANNEL`.
  */
 
-/** Placement of one device view on the canvas, in renderer CSS pixels. */
+import type { DeviceSpec, Rect } from './types'
+
+/**
+ * Placement of one device view on the canvas, in renderer CSS pixels relative
+ * to the window's content area (i.e. straight out of `getBoundingClientRect`).
+ *
+ * `width`/`height` are the *on-screen* size — the device viewport already
+ * multiplied by `zoom`. Main restores the logical viewport with
+ * `webContents.setZoomFactor(zoom)`.
+ */
 export type ViewRect = {
   deviceId: string
   x: number
@@ -36,7 +45,13 @@ export type MainEvent = { type: 'load-state'; payload: LoadStatePayload[] }
 /** renderer -> main request/response channels. Extended by later tasks. */
 export type IpcInvokeMap = {
   'app:get-version': { args: []; result: string }
-  'views:set-layout': { args: [ViewRect[]]; result: void }
+  /**
+   * Sent at most once per animation frame. The trailing `Rect` is the canvas
+   * viewport in window CSS pixels: views are positioned relative to it and
+   * culled against it.
+   */
+  'views:set-layout': { args: [ViewRect[], Rect]; result: void }
+  'views:sync-devices': { args: [DeviceSpec[]]; result: void }
   'nav:navigate': { args: [string]; result: void }
   'theme:set-source': { args: [ThemeSource]; result: void }
 }
@@ -50,6 +65,7 @@ export type IpcChannel = keyof IpcInvokeMap
 const CHANNEL_REGISTRY: Record<IpcChannel, true> = {
   'app:get-version': true,
   'views:set-layout': true,
+  'views:sync-devices': true,
   'nav:navigate': true,
   'theme:set-source': true
 }
