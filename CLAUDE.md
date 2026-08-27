@@ -36,16 +36,18 @@
 
 ## Запуск и проверка
 
-> Кодовая база ещё не создана — команды заявлены спекой (electron-vite скелет), **не проверены**.
-> После scaffolding обнови этот блок реальными командами.
+Команды проверены (W1, 2026-08-28):
 
 ```bash
 npm run dev        # dev-режим (electron-vite)
-npm run typecheck  # tsc --noEmit
-npm test           # Vitest (юниты)
-npm run e2e        # Playwright (Electron)
+npm run typecheck  # typecheck:node + typecheck:web
+npm test           # Vitest (юниты, jsdom для renderer / node для main+shared)
+npm run e2e        # Playwright (_electron.launch; пересобирает out/)
+npm run lint       # ESLint
 npm run build      # прод-сборка + electron-builder
 ```
+
+Грабли, за которые уже платили: React StrictMode дважды гоняет cleanup эффектов (используй dispose-latch паттерн, см. layout-sync тесты); CDP-эмуляция вьюшки без committed-навигации крашит browser process (вьюшки праймятся `about:blank` — фильтруй его из load-событий); клиппинг вьюшек канвас-слоем — недокументированное поведение Chromium (fallback `RESPO_CANVAS_LAYER=0`).
 
 ## Жёсткие правила
 
