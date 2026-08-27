@@ -1,6 +1,7 @@
-import { app, shell, BrowserWindow, ipcMain } from 'electron'
+import { app, shell, BrowserWindow, nativeTheme } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
+import { registerHandler } from './ipc'
 import icon from '../../resources/icon.png?asset'
 
 function createWindow(): void {
@@ -13,6 +14,8 @@ function createWindow(): void {
     ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
       sandbox: false
     }
   })
@@ -35,6 +38,18 @@ function createWindow(): void {
   }
 }
 
+/**
+ * Every handler is attached through `registerHandler`, so `@shared/ipc` stays
+ * the only place a channel can be introduced. `views:set-layout` and
+ * `nav:navigate` are declared there but land with the ViewManager tasks.
+ */
+function registerIpcHandlers(): void {
+  registerHandler('app:get-version', () => app.getVersion())
+  registerHandler('theme:set-source', (_event, source) => {
+    nativeTheme.themeSource = source
+  })
+}
+
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
@@ -49,8 +64,7 @@ app.whenReady().then(() => {
     optimizer.watchWindowShortcuts(window)
   })
 
-  // IPC test
-  ipcMain.on('ping', () => console.log('pong'))
+  registerIpcHandlers()
 
   createWindow()
 

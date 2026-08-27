@@ -1,8 +1,10 @@
-import { ElectronAPI } from '@electron-toolkit/preload'
+import type { RespoApi } from '@shared/ipc'
 
 declare global {
   interface Window {
-    electron: ElectronAPI
-    api: unknown
+    /** Exposed by src/preload/index.ts. Absent outside Electron. */
+    respo: RespoApi
   }
 }
+
+export {}

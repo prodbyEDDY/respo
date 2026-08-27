@@ -1,6 +1,9 @@
 import { create } from 'zustand'
+import type { ThemeSource } from '@shared/ipc'
+import { ipcBridge } from '@renderer/lib/ipc'
 
-export type Theme = 'light' | 'dark' | 'system'
+/** Same three values Electron's `nativeTheme.themeSource` accepts. */
+export type Theme = ThemeSource
 export type ResolvedTheme = 'light' | 'dark'
 
 export interface SettingsState {
@@ -31,6 +34,15 @@ function applyResolvedTheme(resolved: ResolvedTheme): void {
   root.style.colorScheme = resolved
 }
 
+/** Keep the native window chrome (title bar, menus, scrollbars) in step. */
+function syncNativeTheme(theme: Theme): void {
+  const bridge = ipcBridge()
+  if (bridge === null) return
+  void bridge.invoke('theme:set-source', theme).catch((error: unknown) => {
+    console.error('failed to sync native theme', error)
+  })
+}
+
 const INITIAL_THEME: Theme = 'system'
 const initialResolvedTheme = resolveTheme(INITIAL_THEME)
 applyResolvedTheme(initialResolvedTheme)
@@ -41,6 +53,7 @@ export const useSettings = create<SettingsState>((set) => ({
   setTheme: (theme) => {
     const resolvedTheme = resolveTheme(theme)
     applyResolvedTheme(resolvedTheme)
+    syncNativeTheme(theme)
     set({ theme, resolvedTheme })
   }
 }))
