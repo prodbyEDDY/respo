@@ -1,8 +1,10 @@
-import { app, shell, BrowserWindow, nativeTheme } from 'electron'
+import { app, BrowserWindow, nativeTheme } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { normalizeUrl } from '@shared/ipc'
 import { registerHandler, sendMainEvent } from './ipc'
+import { installDevicePermissionHandlers, openExternalSafe } from './security'
+import { validateDeviceSpecs, validateThemeSource } from './validate'
 import { ViewManager } from './view-manager'
 import { createElectronViewBackend } from './view-backend'
 import { createLoadStateBatcher, type LoadStateBatcher } from './load-state-batcher'
@@ -49,7 +51,9 @@ function createWindow(): void {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false
+      // The preload only touches `contextBridge` and `ipcRenderer`, both of
+      // which a sandboxed preload keeps (spec §7a).
+      sandbox: true
     }
   })
 
@@ -80,7 +84,7 @@ function createWindow(): void {
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
-    shell.openExternal(details.url)
+    openExternalSafe(details.url)
     return { action: 'deny' }
   })
 
@@ -120,11 +124,14 @@ function registerIpcHandlers(): void {
   registerHandler('app:get-start-url', () => resolveStartUrl())
 
   registerHandler('theme:set-source', (_event, source) => {
-    nativeTheme.themeSource = source
+    nativeTheme.themeSource = validateThemeSource(source)
   })
 
   registerHandler('views:sync-devices', (_event, devices) => {
-    viewManager?.syncDevices(devices)
+    // Validated before the null check: a malformed payload must reject whether
+    // or not a window happens to be open.
+    const specs = validateDeviceSpecs(devices)
+    viewManager?.syncDevices(specs)
   })
 
   // The hot path: one call per animation frame, applied synchronously so every
@@ -168,6 +175,9 @@ app.whenReady().then(() => {
   })
 
   if (is.dev) perf = startPerfMonitor()
+
+  // Before the first view exists, so no page can ask for anything first.
+  installDevicePermissionHandlers()
 
   registerIpcHandlers()
 

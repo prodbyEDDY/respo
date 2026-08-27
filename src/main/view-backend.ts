@@ -1,7 +1,8 @@
-import { shell, View, WebContentsView, type BaseWindow, type WebContents } from 'electron'
-import type { LoadStatePayload } from '@shared/ipc'
+import { View, WebContentsView, type BaseWindow, type WebContents } from 'electron'
+import type { LoadState, LoadStatePayload } from '@shared/ipc'
 import type { DeviceSpec, Rect } from '@shared/types'
 import { CDPController } from './cdp-controller'
+import { DEVICE_PARTITION, openExternalSafe } from './security'
 import type { ManagedView, ReportLoadState, ViewBackend } from './view-manager'
 
 /**
@@ -15,7 +16,7 @@ const DEVICE_WEB_PREFERENCES = {
   contextIsolation: true,
   nodeIntegration: false,
   webSecurity: true,
-  partition: 'persist:respo'
+  partition: DEVICE_PARTITION
 } as const
 
 /**
@@ -42,8 +43,10 @@ function isPrimer(url: string): boolean {
  * Every event is per-view and unbatched here on purpose: the batcher upstream
  * (`createLoadStateBatcher`) is what turns them into one IPC message per turn,
  * so this function only has to be *correct*, not frugal.
+ *
+ * Exported for its unit test; production code reaches it through `create`.
  */
-function watchLoadState(wc: WebContents, deviceId: string, report: ReportLoadState): void {
+export function watchLoadState(wc: WebContents, deviceId: string, report: ReportLoadState): void {
   let title: string | undefined
   // Latched per navigation: Chromium keeps talking after a main-frame failure
   // (it commits its own error page), and none of that may overwrite `failed`.
@@ -54,12 +57,19 @@ function watchLoadState(wc: WebContents, deviceId: string, report: ReportLoadSta
     report({ deviceId, ...payload, ...(title === undefined ? {} : { title }) })
   }
 
+  /**
+   * Events that are *not* "the load finished" must not claim it did. A title
+   * lands as soon as `<title>` parses and a `pushState` can happen mid-fetch,
+   * so ask the page whether it is still working rather than assuming.
+   */
+  const settledState = (): LoadState => (wc.isLoading() ? 'loading' : 'ready')
+
   wc.on('did-start-navigation', (details) => {
     if (!details.isMainFrame || isPrimer(details.url)) return
     if (details.isSameDocument) {
       // A hash change or `pushState`: no fetch, no spinner — but the address
       // bar still has to follow it.
-      emit({ state: failedThisNavigation ? 'failed' : 'ready', url: details.url })
+      emit({ state: failedThisNavigation ? 'failed' : settledState(), url: details.url })
       return
     }
     failedThisNavigation = false
@@ -92,7 +102,7 @@ function watchLoadState(wc: WebContents, deviceId: string, report: ReportLoadSta
     const url = wc.getURL()
     if (failedThisNavigation || isPrimer(url)) return
     title = next
-    emit({ state: 'ready', url })
+    emit({ state: settledState(), url })
   })
 }
 
@@ -139,8 +149,9 @@ export function createElectronViewBackend(
       views.add(view)
 
       // Popups are a leading-viewport concern (spec §5.4); nothing opens here.
+      // The url is page-controlled, so it goes through the scheme filter.
       view.webContents.setWindowOpenHandler(({ url }) => {
-        void shell.openExternal(url)
+        openExternalSafe(url)
         return { action: 'deny' }
       })
 
