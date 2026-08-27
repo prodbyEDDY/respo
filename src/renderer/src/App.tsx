@@ -1,14 +1,14 @@
 import { useEffect } from 'react'
-import { SPIKE_DEVICES } from '@shared/devices'
 import { Button } from '@renderer/components/ui/button'
 import { Canvas } from '@renderer/components/previewer/Canvas'
 import { ipcBridge } from '@renderer/lib/ipc'
 import { createLayoutTelemetry, type LayoutTelemetry } from '@renderer/lib/layout-telemetry'
+import { useDevices } from '@renderer/stores/devices'
 import { useSettings, type Theme } from '@renderer/stores/settings'
 
 const THEMES: readonly Theme[] = ['light', 'dark', 'system']
 
-/** TEMPORARY: the address bar and device picker arrive in W1/T5 and W1/T6. */
+/** TEMPORARY: the address bar and device picker arrive later in W1. */
 const SPIKE_URL = 'https://example.com'
 const SPIKE_ZOOM = 1
 
@@ -49,20 +49,30 @@ function ThemeSwitcher(): React.JSX.Element {
 }
 
 function App(): React.JSX.Element {
-  const devices = SPIKE_DEVICES
+  const devices = useDevices((s) => s.active)
 
-  // Hand main the device set, then point every view at the same url.
+  // Hand main the device set. Runs again whenever the selection changes; the
+  // view manager reuses the views that stayed and loads the current url into
+  // any device that just joined.
   useEffect(() => {
     const bridge = ipcBridge()
     if (bridge === null) return
 
-    void bridge
-      .invoke('views:sync-devices', [...devices])
-      .then(() => bridge.invoke('nav:navigate', SPIKE_URL))
-      .catch((error: unknown) => {
-        console.error('failed to start device views', error)
-      })
+    void bridge.invoke('views:sync-devices', [...devices]).catch((error: unknown) => {
+      console.error('failed to sync device views', error)
+    })
   }, [devices])
+
+  // Point every view at the start url once. Declared after the sync effect, so
+  // React runs it second and main already knows about the devices.
+  useEffect(() => {
+    const bridge = ipcBridge()
+    if (bridge === null) return
+
+    void bridge.invoke('nav:navigate', SPIKE_URL).catch((error: unknown) => {
+      console.error('failed to open the start url', error)
+    })
+  }, [])
 
   return (
     <div className="flex h-full flex-col bg-background">
