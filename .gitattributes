@@ -1,0 +1,8 @@
+# Working copies use LF everywhere: Prettier writes LF, so CRLF checkouts on
+# Windows would make every file report as unformatted.
+* text=auto eol=lf
+
+# Binary assets
+*.png binary
+*.ico binary
+*.icns binary

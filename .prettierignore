@@ -1,0 +1,14 @@
+out
+dist
+node_modules
+package-lock.json
+pnpm-lock.yaml
+LICENSE.md
+tsconfig.json
+tsconfig.*.json
+
+# Owned outside the app code — never reformat
+docs
+.claude
+.superpowers
+CLAUDE.md
