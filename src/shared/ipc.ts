@@ -58,6 +58,13 @@ export type IpcInvokeMap = {
   'views:set-layout': { args: [ViewRect[], Rect]; result: void }
   'views:sync-devices': { args: [DeviceSpec[]]; result: void }
   'nav:navigate': { args: [string]; result: void }
+  /**
+   * History and reload act on every view at once: Respo drives one page across
+   * many viewports, so there is no per-device history to steer.
+   */
+  'nav:back': { args: []; result: void }
+  'nav:forward': { args: []; result: void }
+  'nav:reload': { args: []; result: void }
   'theme:set-source': { args: [ThemeSource]; result: void }
 }
 
@@ -73,6 +80,9 @@ const CHANNEL_REGISTRY: Record<IpcChannel, true> = {
   'views:set-layout': true,
   'views:sync-devices': true,
   'nav:navigate': true,
+  'nav:back': true,
+  'nav:forward': true,
+  'nav:reload': true,
   'theme:set-source': true
 }
 

@@ -1,7 +1,8 @@
-import { shell, View, WebContentsView, type BaseWindow } from 'electron'
+import { shell, View, WebContentsView, type BaseWindow, type WebContents } from 'electron'
+import type { LoadStatePayload } from '@shared/ipc'
 import type { DeviceSpec, Rect } from '@shared/types'
 import { CDPController } from './cdp-controller'
-import type { ManagedView, ViewBackend } from './view-manager'
+import type { ManagedView, ReportLoadState, ViewBackend } from './view-manager'
 
 /**
  * Web preferences for every device view (spec §7a).
@@ -16,6 +17,84 @@ const DEVICE_WEB_PREFERENCES = {
   webSecurity: true,
   partition: 'persist:respo'
 } as const
+
+/**
+ * The document every view is primed with before CDP emulation is applied. It is
+ * plumbing, never something the user asked for, so it is filtered out of every
+ * load event rather than flashing through the UI as a navigation.
+ */
+const PRIMER_URL = 'about:blank'
+
+/**
+ * `net::ERR_ABORTED`. A navigation superseded by the next one (the user typing
+ * a second url, a redirect) reports this; it is not a failure the user should
+ * ever see (spec §5.2).
+ */
+const ERR_ABORTED = -3
+
+function isPrimer(url: string): boolean {
+  return url === '' || url === PRIMER_URL || url.startsWith('about:')
+}
+
+/**
+ * Translate one view's `webContents` load events into `LoadStatePayload`s.
+ *
+ * Every event is per-view and unbatched here on purpose: the batcher upstream
+ * (`createLoadStateBatcher`) is what turns them into one IPC message per turn,
+ * so this function only has to be *correct*, not frugal.
+ */
+function watchLoadState(wc: WebContents, deviceId: string, report: ReportLoadState): void {
+  let title: string | undefined
+  // Latched per navigation: Chromium keeps talking after a main-frame failure
+  // (it commits its own error page), and none of that may overwrite `failed`.
+  let failedThisNavigation = false
+
+  const emit = (payload: Omit<LoadStatePayload, 'deviceId'>): void => {
+    if (wc.isDestroyed()) return
+    report({ deviceId, ...payload, ...(title === undefined ? {} : { title }) })
+  }
+
+  wc.on('did-start-navigation', (details) => {
+    if (!details.isMainFrame || isPrimer(details.url)) return
+    if (details.isSameDocument) {
+      // A hash change or `pushState`: no fetch, no spinner — but the address
+      // bar still has to follow it.
+      emit({ state: failedThisNavigation ? 'failed' : 'ready', url: details.url })
+      return
+    }
+    failedThisNavigation = false
+    title = undefined
+    emit({ state: 'loading', url: details.url })
+  })
+
+  wc.on('did-finish-load', () => {
+    const url = wc.getURL()
+    if (failedThisNavigation || isPrimer(url)) return
+    title = wc.getTitle()
+    emit({ state: 'ready', url })
+  })
+
+  wc.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    // Sub-frame failures are the page's business, not the browser's, and an
+    // aborted navigation is the *next* navigation announcing itself.
+    if (!isMainFrame || errorCode === ERR_ABORTED || isPrimer(validatedURL)) return
+    failedThisNavigation = true
+    title = undefined
+    emit({
+      state: 'failed',
+      url: validatedURL,
+      errorCode,
+      errorDesc: errorDescription
+    })
+  })
+
+  wc.on('page-title-updated', (_event, next) => {
+    const url = wc.getURL()
+    if (failedThisNavigation || isPrimer(url)) return
+    title = next
+    emit({ state: 'ready', url })
+  })
+}
 
 export type ElectronViewBackendOptions = {
   /**
@@ -51,7 +130,7 @@ export function createElectronViewBackend(
   return {
     clipsToCanvas: layer !== null,
 
-    create(device: DeviceSpec): ManagedView {
+    create(device: DeviceSpec, report: ReportLoadState): ManagedView {
       const view = new WebContentsView({ webPreferences: { ...DEVICE_WEB_PREFERENCES } })
       view.setBackgroundColor('#ffffff')
       // Hidden until the renderer has told us where the frame is.
@@ -73,7 +152,8 @@ export function createElectronViewBackend(
       // crashes; the touch and user-agent calls simply never resolve). Priming
       // with a blank document gives every later CDP call something to talk to.
       const wc = view.webContents
-      const primed = cdp.attach(wc).then(() => wc.loadURL('about:blank').catch(() => undefined))
+      watchLoadState(wc, device.id, report)
+      const primed = cdp.attach(wc).then(() => wc.loadURL(PRIMER_URL).catch(() => undefined))
 
       // `emulated` is the gate every navigation waits behind, so a page is
       // never fetched before its device profile is in place.
@@ -108,6 +188,21 @@ export function createElectronViewBackend(
               () => undefined
             )
           })
+        },
+        goBack(): void {
+          if (wc.isDestroyed() || !wc.navigationHistory.canGoBack()) return
+          wc.navigationHistory.goBack()
+        },
+        goForward(): void {
+          if (wc.isDestroyed() || !wc.navigationHistory.canGoForward()) return
+          wc.navigationHistory.goForward()
+        },
+        reload(): void {
+          if (wc.isDestroyed()) return
+          // A view still sitting on the primer has nothing to reload; give it
+          // the session url instead, once emulation has landed.
+          if (isPrimer(wc.getURL())) return
+          wc.reload()
         },
         dispose(): void {
           views.delete(view)

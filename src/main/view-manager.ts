@@ -1,6 +1,9 @@
-import { normalizeUrl, type ViewRect } from '@shared/ipc'
+import { normalizeUrl, type LoadStatePayload, type ViewRect } from '@shared/ipc'
 import type { DeviceSpec, Rect } from '@shared/types'
 import { planLayout, WINDOW_ORIGIN } from './layout'
+
+/** How a backend tells the manager what one view's page is doing. */
+export type ReportLoadState = (payload: LoadStatePayload) => void
 
 /**
  * The slice of a `WebContentsView` the manager actually drives. Keeping it
@@ -18,6 +21,9 @@ export interface ManagedView {
    */
   applyDevice(device: DeviceSpec): void
   loadUrl(url: string): void
+  goBack(): void
+  goForward(): void
+  reload(): void
   dispose(): void
 }
 
@@ -29,17 +35,35 @@ export interface ViewBackend {
    * `contentView` and bounds are window coordinates.
    */
   readonly clipsToCanvas: boolean
-  create(device: DeviceSpec): ManagedView
+  /** `report` is how this view's load events reach the manager. */
+  create(device: DeviceSpec, report: ReportLoadState): ManagedView
   /** Told whenever the canvas region moves or resizes. */
   setCanvas(viewport: Rect): void
   dispose(): void
+}
+
+export type ViewManagerOptions = {
+  /**
+   * Sink for load events, one payload at a time. Coalescing into a single IPC
+   * message is the caller's job (`createLoadStateBatcher`).
+   */
+  onLoadState?: ReportLoadState
 }
 
 type Entry = {
   device: DeviceSpec
   view: ManagedView
   bounds: Rect | null
+  /** Native visibility as last set. `null` until the first call. */
   visible: boolean | null
+  /** What the newest layout frame wants: on the canvas and not culled. */
+  wantVisible: boolean
+  /**
+   * Latched by a main-frame load failure. A failed view is hidden so the
+   * renderer's own error card — which would otherwise be covered by the native
+   * view compositing above the window — is what the user sees.
+   */
+  failed: boolean
   zoom: number | null
 }
 
@@ -68,13 +92,15 @@ function sameEmulation(a: DeviceSpec, b: DeviceSpec): boolean {
  */
 export class ViewManager {
   private readonly backend: ViewBackend
+  private readonly onLoadState: ReportLoadState | null
   private readonly entries = new Map<string, Entry>()
   private canvas: Rect | null = null
   private url: string | null = null
   private destroyed = false
 
-  constructor(backend: ViewBackend) {
+  constructor(backend: ViewBackend, options: ViewManagerOptions = {}) {
     this.backend = backend
+    this.onLoadState = options.onLoadState ?? null
   }
 
   /** Device ids currently backed by a view, in creation order. */
@@ -102,8 +128,16 @@ export class ViewManager {
         continue
       }
 
-      const view = this.backend.create(device)
-      this.entries.set(device.id, { device, view, bounds: null, visible: null, zoom: null })
+      const view = this.backend.create(device, (payload) => this.reportLoadState(payload))
+      this.entries.set(device.id, {
+        device,
+        view,
+        bounds: null,
+        visible: null,
+        wantVisible: false,
+        failed: false,
+        zoom: null
+      })
       // Emulation before navigation: the user agent a document is fetched with
       // is the one it keeps.
       view.applyDevice(device)
@@ -147,10 +181,8 @@ export class ViewManager {
         entry.zoom = placement.zoom
         entry.view.setZoomFactor(placement.zoom)
       }
-      if (entry.visible !== true) {
-        entry.visible = true
-        entry.view.setVisible(true)
-      }
+      entry.wantVisible = true
+      this.applyVisibility(entry)
     }
 
     // Devices the renderer did not report this frame are not on the canvas.
@@ -167,7 +199,34 @@ export class ViewManager {
     if (normalized === null) throw new Error(`Refusing to load url: ${url}`)
 
     this.url = normalized
-    for (const entry of this.entries.values()) entry.view.loadUrl(normalized)
+    for (const entry of this.entries.values()) {
+      this.clearFailure(entry)
+      entry.view.loadUrl(normalized)
+    }
+  }
+
+  /** Step every view back one entry in its history. */
+  goBack(): void {
+    this.eachView((view, entry) => {
+      this.clearFailure(entry)
+      view.goBack()
+    })
+  }
+
+  /** Step every view forward one entry in its history. */
+  goForward(): void {
+    this.eachView((view, entry) => {
+      this.clearFailure(entry)
+      view.goForward()
+    })
+  }
+
+  /** Reload every view. Also the way out of an error overlay. */
+  reload(): void {
+    this.eachView((view, entry) => {
+      this.clearFailure(entry)
+      view.reload()
+    })
   }
 
   destroy(): void {
@@ -180,8 +239,45 @@ export class ViewManager {
   }
 
   private hide(entry: Entry): void {
-    if (entry.visible === false) return
-    entry.visible = false
-    entry.view.setVisible(false)
+    entry.wantVisible = false
+    this.applyVisibility(entry)
+  }
+
+  /**
+   * The one place native visibility is decided. Two independent inputs — the
+   * layout frame and the failure latch — and a view is only shown when both
+   * agree, so neither can be clobbered by the other arriving later.
+   */
+  private applyVisibility(entry: Entry): void {
+    const desired = entry.wantVisible && !entry.failed
+    if (entry.visible === desired) return
+    entry.visible = desired
+    entry.view.setVisible(desired)
+  }
+
+  private clearFailure(entry: Entry): void {
+    if (!entry.failed) return
+    entry.failed = false
+    this.applyVisibility(entry)
+  }
+
+  private reportLoadState(payload: LoadStatePayload): void {
+    if (this.destroyed) return
+
+    const entry = this.entries.get(payload.deviceId)
+    if (entry !== undefined) {
+      const failed = payload.state === 'failed'
+      if (entry.failed !== failed) {
+        entry.failed = failed
+        this.applyVisibility(entry)
+      }
+    }
+
+    this.onLoadState?.(payload)
+  }
+
+  private eachView(run: (view: ManagedView, entry: Entry) => void): void {
+    if (this.destroyed) return
+    for (const entry of this.entries.values()) run(entry.view, entry)
   }
 }

@@ -1,15 +1,20 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
-import type { ViewRect } from '@shared/ipc'
+import type { LoadStatePayload, ViewRect } from '@shared/ipc'
 import type { DeviceSpec, Rect } from '@shared/types'
-import { ViewManager, type ViewBackend } from '../view-manager'
+import { ViewManager, type ReportLoadState, type ViewBackend } from '../view-manager'
 
 type FakeView = {
   device: DeviceSpec
+  /** What the backend would call when its `webContents` fires a load event. */
+  report: ReportLoadState
   setBounds: Mock<(bounds: Rect) => void>
   setVisible: Mock<(visible: boolean) => void>
   setZoomFactor: Mock<(zoom: number) => void>
   applyDevice: Mock<(device: DeviceSpec) => void>
   loadUrl: Mock<(url: string) => void>
+  goBack: Mock<() => void>
+  goForward: Mock<() => void>
+  reload: Mock<() => void>
   dispose: Mock<() => void>
 }
 
@@ -28,14 +33,18 @@ function fakeBackend(clipsToCanvas = false): FakeBackend {
     views,
     order,
     clipsToCanvas,
-    create(device: DeviceSpec): FakeView {
+    create(device: DeviceSpec, report: ReportLoadState): FakeView {
       const view: FakeView = {
         device,
+        report,
         setBounds: vi.fn<(bounds: Rect) => void>(),
         setVisible: vi.fn<(visible: boolean) => void>(),
         setZoomFactor: vi.fn<(zoom: number) => void>(),
         applyDevice: vi.fn<(device: DeviceSpec) => void>(),
         loadUrl: vi.fn<(url: string) => void>(),
+        goBack: vi.fn<() => void>(),
+        goForward: vi.fn<() => void>(),
+        reload: vi.fn<() => void>(),
         dispose: vi.fn<() => void>()
       }
       views.set(device.id, view)
@@ -262,6 +271,108 @@ describe('ViewManager.navigateAll', () => {
   it('rejects a url no view is allowed to load', () => {
     expect(() => manager.navigateAll('javascript:alert(1)')).toThrow(/url/i)
     expect(backend.views.get('a')?.loadUrl).not.toHaveBeenCalled()
+  })
+})
+
+describe('ViewManager history controls', () => {
+  let backend: FakeBackend
+  let manager: ViewManager
+
+  beforeEach(() => {
+    backend = fakeBackend()
+    manager = new ViewManager(backend)
+    manager.syncDevices([device('a'), device('b')])
+  })
+
+  it('drives back, forward and reload on every view', () => {
+    manager.goBack()
+    manager.goForward()
+    manager.reload()
+
+    for (const id of ['a', 'b']) {
+      expect(backend.views.get(id)?.goBack).toHaveBeenCalledTimes(1)
+      expect(backend.views.get(id)?.goForward).toHaveBeenCalledTimes(1)
+      expect(backend.views.get(id)?.reload).toHaveBeenCalledTimes(1)
+    }
+  })
+})
+
+describe('ViewManager load state', () => {
+  function failure(deviceId: string): LoadStatePayload {
+    return {
+      deviceId,
+      state: 'failed',
+      url: 'https://nope.invalid/',
+      errorCode: -105,
+      errorDesc: 'ERR_NAME_NOT_RESOLVED'
+    }
+  }
+
+  function loading(deviceId: string): LoadStatePayload {
+    return { deviceId, state: 'loading', url: 'https://example.com/' }
+  }
+
+  it('forwards what a view reports to the sink, one payload at a time', () => {
+    const onLoadState = vi.fn<ReportLoadState>()
+    const backend = fakeBackend()
+    const manager = new ViewManager(backend, { onLoadState })
+    manager.syncDevices([device('a')])
+
+    backend.views.get('a')?.report(loading('a'))
+
+    expect(onLoadState).toHaveBeenCalledWith(loading('a'))
+  })
+
+  it('hides a view whose main frame failed, so the renderer overlay is visible', () => {
+    const backend = fakeBackend()
+    const manager = new ViewManager(backend)
+    manager.syncDevices([device('a')])
+    manager.applyLayout([rect('a')], CANVAS)
+    const view = backend.views.get('a')
+    expect(view?.setVisible).toHaveBeenLastCalledWith(true)
+
+    view?.report(failure('a'))
+
+    expect(view?.setVisible).toHaveBeenLastCalledWith(false)
+  })
+
+  it('brings a failed view back as soon as it starts loading again', () => {
+    const backend = fakeBackend()
+    const manager = new ViewManager(backend)
+    manager.syncDevices([device('a')])
+    manager.applyLayout([rect('a')], CANVAS)
+    const view = backend.views.get('a')
+
+    view?.report(failure('a'))
+    view?.report(loading('a'))
+
+    expect(view?.setVisible).toHaveBeenLastCalledWith(true)
+  })
+
+  it('keeps a failed view hidden even when a later layout frame wants it shown', () => {
+    const backend = fakeBackend()
+    const manager = new ViewManager(backend)
+    manager.syncDevices([device('a')])
+    manager.applyLayout([rect('a')], CANVAS)
+    const view = backend.views.get('a')
+
+    view?.report(failure('a'))
+    manager.applyLayout([rect('a', { y: 4 })], CANVAS)
+
+    expect(view?.setVisible).toHaveBeenLastCalledWith(false)
+  })
+
+  it('clears the failed latch on an explicit navigation', () => {
+    const backend = fakeBackend()
+    const manager = new ViewManager(backend)
+    manager.syncDevices([device('a')])
+    manager.applyLayout([rect('a')], CANVAS)
+    const view = backend.views.get('a')
+
+    view?.report(failure('a'))
+    manager.navigateAll('example.com')
+
+    expect(view?.setVisible).toHaveBeenLastCalledWith(true)
   })
 })
 

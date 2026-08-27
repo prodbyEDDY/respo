@@ -1,14 +1,13 @@
 import { useEffect, useState } from 'react'
-import { Button } from '@renderer/components/ui/button'
 import { Canvas } from '@renderer/components/previewer/Canvas'
+import { TopBar } from '@renderer/components/toolbar/TopBar'
+import { TooltipProvider } from '@renderer/components/ui/tooltip'
 import { ipcBridge } from '@renderer/lib/ipc'
 import { createLayoutTelemetry, type LayoutTelemetry } from '@renderer/lib/layout-telemetry'
 import { useDevices } from '@renderer/stores/devices'
-import { useSettings, type Theme } from '@renderer/stores/settings'
+import { attachNavigationBridge, useNavigation } from '@renderer/stores/navigation'
 
-const THEMES: readonly Theme[] = ['light', 'dark', 'system']
-
-/** TEMPORARY: the address bar and device picker arrive later in W1. */
+/** TEMPORARY: the canvas zoom control arrives with Task 8. */
 const SPIKE_ZOOM = 1
 
 /**
@@ -51,34 +50,13 @@ function devTelemetry(): LayoutTelemetry | null {
   return telemetry
 }
 
-/**
- * Temporary theme switcher. Replaced by the real settings surface in W1/T7.
- */
-function ThemeSwitcher(): React.JSX.Element {
-  const theme = useSettings((s) => s.theme)
-  const setTheme = useSettings((s) => s.setTheme)
-
-  return (
-    <div className="inline-flex items-center gap-1 rounded-lg border border-border bg-card p-1">
-      {THEMES.map((option) => (
-        <Button
-          key={option}
-          size="xs"
-          variant={theme === option ? 'default' : 'ghost'}
-          aria-pressed={theme === option}
-          onClick={() => setTheme(option)}
-          className="capitalize"
-        >
-          {option}
-        </Button>
-      ))}
-    </div>
-  )
-}
-
 function App(): React.JSX.Element {
   const devices = useDevices((s) => s.active)
   const startUrl = useStartUrl()
+
+  // Batched `load-state` events from main. Reference-counted inside, so
+  // StrictMode's mount/unmount/mount never leaves two subscriptions behind.
+  useEffect(() => attachNavigationBridge(), [])
 
   // Hand main the device set. Runs again whenever the selection changes; the
   // view manager reuses the views that stayed and loads the current url into
@@ -95,30 +73,20 @@ function App(): React.JSX.Element {
   // Point every view at the start url. It arrives from main a round trip after
   // mount, so the device sync above has always landed first.
   useEffect(() => {
-    const bridge = ipcBridge()
-    if (bridge === null || startUrl === null) return
-
-    void bridge.invoke('nav:navigate', startUrl).catch((error: unknown) => {
-      console.error('failed to open the start url', error)
-    })
+    if (startUrl === null) return
+    useNavigation.getState().navigate(startUrl)
   }, [startUrl])
 
   return (
-    <div className="flex h-full flex-col bg-background">
-      <header className="flex shrink-0 items-center justify-between gap-4 border-b border-border bg-card px-4 py-2">
-        <div className="flex items-baseline gap-3">
-          <span className="text-subheading font-semibold text-foreground">Respo</span>
-          <span className="text-caption text-muted-foreground">
-            {devices.length} devices{startUrl === null ? '' : ` · ${startUrl}`}
-          </span>
-        </div>
-        <ThemeSwitcher />
-      </header>
+    <TooltipProvider>
+      <div className="flex h-full flex-col bg-background">
+        <TopBar />
 
-      <div className="min-h-0 flex-1">
-        <Canvas devices={devices} zoom={SPIKE_ZOOM} onLayoutRoundTrip={devTelemetry()?.record} />
+        <div className="min-h-0 flex-1">
+          <Canvas devices={devices} zoom={SPIKE_ZOOM} onLayoutRoundTrip={devTelemetry()?.record} />
+        </div>
       </div>
-    </div>
+    </TooltipProvider>
   )
 }
 

@@ -2,14 +2,16 @@ import { app, shell, BrowserWindow, nativeTheme } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { normalizeUrl } from '@shared/ipc'
-import { registerHandler } from './ipc'
+import { registerHandler, sendMainEvent } from './ipc'
 import { ViewManager } from './view-manager'
 import { createElectronViewBackend } from './view-backend'
+import { createLoadStateBatcher, type LoadStateBatcher } from './load-state-batcher'
 import { startPerfMonitor, type PerfMonitor } from './perf'
 import { runScrollSpike } from './spike'
 import icon from '../../resources/icon.png?asset'
 
 let viewManager: ViewManager | null = null
+let loadStates: LoadStateBatcher | null = null
 let perf: PerfMonitor | null = null
 let stopSpike: (() => void) | null = null
 
@@ -51,10 +53,17 @@ function createWindow(): void {
     }
   })
 
+  // Every device's load events collapse into one `load-state` message per turn
+  // of the event loop — there is no per-event IPC (CLAUDE.md §4).
+  loadStates = createLoadStateBatcher((payload) => {
+    sendMainEvent(mainWindow.webContents, { type: 'load-state', payload })
+  })
+
   viewManager = new ViewManager(
     createElectronViewBackend(mainWindow, {
       canvasLayer: process.env['RESPO_CANVAS_LAYER'] !== '0'
-    })
+    }),
+    { onLoadState: (payload) => loadStates?.report(payload) }
   )
 
   mainWindow.on('ready-to-show', () => {
@@ -64,6 +73,8 @@ function createWindow(): void {
   mainWindow.on('closed', () => {
     viewManager?.destroy()
     viewManager = null
+    loadStates?.cancel()
+    loadStates = null
     stopSpike?.()
     stopSpike = null
   })
@@ -128,6 +139,18 @@ function registerIpcHandlers(): void {
   registerHandler('nav:navigate', (_event, url) => {
     viewManager?.navigateAll(url)
   })
+
+  registerHandler('nav:back', () => {
+    viewManager?.goBack()
+  })
+
+  registerHandler('nav:forward', () => {
+    viewManager?.goForward()
+  })
+
+  registerHandler('nav:reload', () => {
+    viewManager?.reload()
+  })
 }
 
 // This method will be called when Electron has finished
@@ -169,6 +192,8 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   viewManager?.destroy()
   viewManager = null
+  loadStates?.cancel()
+  loadStates = null
   perf?.stop()
   perf = null
   stopSpike?.()
