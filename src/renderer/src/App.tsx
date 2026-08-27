@@ -1,14 +1,12 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Canvas } from '@renderer/components/previewer/Canvas'
 import { TopBar } from '@renderer/components/toolbar/TopBar'
 import { TooltipProvider } from '@renderer/components/ui/tooltip'
 import { ipcBridge } from '@renderer/lib/ipc'
 import { createLayoutTelemetry, type LayoutTelemetry } from '@renderer/lib/layout-telemetry'
 import { useDevices } from '@renderer/stores/devices'
+import { applyRotation, useLayout } from '@renderer/stores/layout'
 import { attachNavigationBridge, useNavigation } from '@renderer/stores/navigation'
-
-/** TEMPORARY: the canvas zoom control arrives with Task 8. */
-const SPIKE_ZOOM = 1
 
 /**
  * Main owns the start url (CLI/deep-link argument, or the default) and has
@@ -51,8 +49,15 @@ function devTelemetry(): LayoutTelemetry | null {
 }
 
 function App(): React.JSX.Element {
-  const devices = useDevices((s) => s.active)
+  const active = useDevices((s) => s.active)
+  const rotated = useLayout((s) => s.rotated)
   const startUrl = useStartUrl()
+
+  // Rotation is expressed as a device spec with its sides swapped, so it flows
+  // through the existing path: the frame gets the new box, and main re-runs
+  // `Emulation.setDeviceMetricsOverride` because the metrics changed. Memoized
+  // because the effect below re-syncs every view when this array changes.
+  const devices = useMemo(() => applyRotation(active, rotated), [active, rotated])
 
   // Batched `load-state` events from main. Reference-counted inside, so
   // StrictMode's mount/unmount/mount never leaves two subscriptions behind.
@@ -83,7 +88,7 @@ function App(): React.JSX.Element {
         <TopBar />
 
         <div className="min-h-0 flex-1">
-          <Canvas devices={devices} zoom={SPIKE_ZOOM} onLayoutRoundTrip={devTelemetry()?.record} />
+          <Canvas devices={devices} onLayoutRoundTrip={devTelemetry()?.record} />
         </div>
       </div>
     </TooltipProvider>
