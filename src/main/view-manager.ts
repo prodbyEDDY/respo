@@ -11,6 +11,12 @@ export interface ManagedView {
   setBounds(bounds: Rect): void
   setVisible(visible: boolean): void
   setZoomFactor(zoom: number): void
+  /**
+   * Put the device's viewport, pixel ratio, touch profile and user agent on the
+   * page. The Electron backend does this over CDP; it must land before the
+   * first navigation, so the document is fetched with the right user agent.
+   */
+  applyDevice(device: DeviceSpec): void
   loadUrl(url: string): void
   dispose(): void
 }
@@ -39,6 +45,17 @@ type Entry = {
 
 function sameRect(a: Rect | null, b: Rect): boolean {
   return a !== null && a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height
+}
+
+/** Only the fields emulation depends on; a rename must not reload a view. */
+function sameEmulation(a: DeviceSpec, b: DeviceSpec): boolean {
+  return (
+    a.width === b.width &&
+    a.height === b.height &&
+    a.dpr === b.dpr &&
+    a.touch === b.touch &&
+    a.userAgent === b.userAgent
+  )
 }
 
 /**
@@ -79,12 +96,17 @@ export class ViewManager {
     for (const device of devices) {
       const existing = this.entries.get(device.id)
       if (existing !== undefined) {
+        // Same id, different metrics — the catalog entry was edited under us.
+        if (!sameEmulation(existing.device, device)) existing.view.applyDevice(device)
         existing.device = device
         continue
       }
 
       const view = this.backend.create(device)
       this.entries.set(device.id, { device, view, bounds: null, visible: null, zoom: null })
+      // Emulation before navigation: the user agent a document is fetched with
+      // is the one it keeps.
+      view.applyDevice(device)
       // A device that joins mid-session catches up with everyone else.
       if (this.url !== null) view.loadUrl(this.url)
     }

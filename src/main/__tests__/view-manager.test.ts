@@ -8,6 +8,7 @@ type FakeView = {
   setBounds: Mock<(bounds: Rect) => void>
   setVisible: Mock<(visible: boolean) => void>
   setZoomFactor: Mock<(zoom: number) => void>
+  applyDevice: Mock<(device: DeviceSpec) => void>
   loadUrl: Mock<(url: string) => void>
   dispose: Mock<() => void>
 }
@@ -33,6 +34,7 @@ function fakeBackend(clipsToCanvas = false): FakeBackend {
         setBounds: vi.fn<(bounds: Rect) => void>(),
         setVisible: vi.fn<(visible: boolean) => void>(),
         setZoomFactor: vi.fn<(zoom: number) => void>(),
+        applyDevice: vi.fn<(device: DeviceSpec) => void>(),
         loadUrl: vi.fn<(url: string) => void>(),
         dispose: vi.fn<() => void>()
       }
@@ -93,6 +95,30 @@ describe('ViewManager.syncDevices', () => {
 
     expect(removed?.dispose).toHaveBeenCalledTimes(1)
     expect(manager.deviceIds()).toEqual(['a'])
+  })
+
+  it('emulates a new device before the page is ever loaded', () => {
+    manager.syncDevices([device('a')])
+    const view = backend.views.get('a')
+
+    expect(view?.applyDevice).toHaveBeenCalledWith(expect.objectContaining({ id: 'a' }))
+    expect(view?.applyDevice.mock.invocationCallOrder[0]).toBeLessThan(
+      view?.loadUrl.mock.invocationCallOrder[0] ?? Infinity
+    )
+  })
+
+  it('re-emulates a device whose metrics changed', () => {
+    manager.syncDevices([device('a')])
+    manager.syncDevices([{ ...device('a'), width: 1440, dpr: 1 }])
+
+    expect(backend.views.get('a')?.applyDevice).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not re-emulate a device that only got renamed', () => {
+    manager.syncDevices([device('a')])
+    manager.syncDevices([{ ...device('a'), name: 'Renamed' }])
+
+    expect(backend.views.get('a')?.applyDevice).toHaveBeenCalledTimes(1)
   })
 
   it('loads the current url into a device that joins later', () => {

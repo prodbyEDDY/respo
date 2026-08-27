@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { Button } from '@renderer/components/ui/button'
 import { Canvas } from '@renderer/components/previewer/Canvas'
 import { ipcBridge } from '@renderer/lib/ipc'
@@ -9,8 +9,36 @@ import { useSettings, type Theme } from '@renderer/stores/settings'
 const THEMES: readonly Theme[] = ['light', 'dark', 'system']
 
 /** TEMPORARY: the address bar and device picker arrive later in W1. */
-const SPIKE_URL = 'https://example.com'
 const SPIKE_ZOOM = 1
+
+/**
+ * Main owns the start url (CLI/deep-link argument, or the default) and has
+ * already validated it. `null` until it answers, or outside Electron.
+ */
+function useStartUrl(): string | null {
+  const [url, setUrl] = useState<string | null>(null)
+
+  useEffect(() => {
+    const bridge = ipcBridge()
+    if (bridge === null) return
+
+    let live = true
+    void bridge
+      .invoke('app:get-start-url')
+      .then((value) => {
+        if (live) setUrl(value)
+      })
+      .catch((error: unknown) => {
+        console.error('failed to read the start url', error)
+      })
+
+    return () => {
+      live = false
+    }
+  }, [])
+
+  return url
+}
 
 /**
  * One instrument per window, not per mount: it must survive StrictMode's
@@ -50,6 +78,7 @@ function ThemeSwitcher(): React.JSX.Element {
 
 function App(): React.JSX.Element {
   const devices = useDevices((s) => s.active)
+  const startUrl = useStartUrl()
 
   // Hand main the device set. Runs again whenever the selection changes; the
   // view manager reuses the views that stayed and loads the current url into
@@ -63,16 +92,16 @@ function App(): React.JSX.Element {
     })
   }, [devices])
 
-  // Point every view at the start url once. Declared after the sync effect, so
-  // React runs it second and main already knows about the devices.
+  // Point every view at the start url. It arrives from main a round trip after
+  // mount, so the device sync above has always landed first.
   useEffect(() => {
     const bridge = ipcBridge()
-    if (bridge === null) return
+    if (bridge === null || startUrl === null) return
 
-    void bridge.invoke('nav:navigate', SPIKE_URL).catch((error: unknown) => {
+    void bridge.invoke('nav:navigate', startUrl).catch((error: unknown) => {
       console.error('failed to open the start url', error)
     })
-  }, [])
+  }, [startUrl])
 
   return (
     <div className="flex h-full flex-col bg-background">
@@ -80,7 +109,7 @@ function App(): React.JSX.Element {
         <div className="flex items-baseline gap-3">
           <span className="text-subheading font-semibold text-foreground">Respo</span>
           <span className="text-caption text-muted-foreground">
-            {devices.length} devices · {SPIKE_URL}
+            {devices.length} devices{startUrl === null ? '' : ` · ${startUrl}`}
           </span>
         </div>
         <ThemeSwitcher />

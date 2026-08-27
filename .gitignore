@@ -8,6 +8,10 @@ release/
 # tooling caches / logs
 .eslintcache
 *.log*
+test-results/
+playwright-report/
+blob-report/
+.playwright/
 
 # claude: версионируем только команды
 .claude/*

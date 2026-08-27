@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>probe</title>
+    <style>
+      body {
+        margin: 0;
+        font:
+          14px/1.4 system-ui,
+          sans-serif;
+        padding: 12px;
+      }
+      pre {
+        margin: 0;
+        white-space: pre-wrap;
+        word-break: break-all;
+      }
+    </style>
+  </head>
+  <body>
+    <pre id="out"></pre>
+    <script>
+      // What the page believes about itself. The title is the channel the e2e
+      // suite reads: main can pull it off any webContents with `getTitle()`,
+      // without needing a Playwright page for a WebContentsView.
+      function report() {
+        var probe = {
+          innerWidth: window.innerWidth,
+          innerHeight: window.innerHeight,
+          dpr: window.devicePixelRatio,
+          ua: navigator.userAgent,
+          maxTouchPoints: navigator.maxTouchPoints
+        }
+        document.title = JSON.stringify(probe)
+        document.getElementById('out').textContent = JSON.stringify(probe, null, 2)
+      }
+
+      report()
+      window.addEventListener('resize', report)
+      window.addEventListener('load', report)
+    </script>
+  </body>
+</html>

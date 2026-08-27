@@ -46,6 +46,11 @@ export type MainEvent = { type: 'load-state'; payload: LoadStatePayload[] }
 export type IpcInvokeMap = {
   'app:get-version': { args: []; result: string }
   /**
+   * The url the session opens on: a CLI/deep-link argument when there is one,
+   * otherwise the built-in default. Already normalized by main.
+   */
+  'app:get-start-url': { args: []; result: string }
+  /**
    * Sent at most once per animation frame. The trailing `Rect` is the canvas
    * viewport in window CSS pixels: views are positioned relative to it and
    * culled against it.
@@ -64,6 +69,7 @@ export type IpcChannel = keyof IpcInvokeMap
  */
 const CHANNEL_REGISTRY: Record<IpcChannel, true> = {
   'app:get-version': true,
+  'app:get-start-url': true,
   'views:set-layout': true,
   'views:sync-devices': true,
   'nav:navigate': true,

@@ -1,5 +1,6 @@
 import { shell, View, WebContentsView, type BaseWindow } from 'electron'
-import type { Rect } from '@shared/types'
+import type { DeviceSpec, Rect } from '@shared/types'
+import { CDPController } from './cdp-controller'
 import type { ManagedView, ViewBackend } from './view-manager'
 
 /**
@@ -37,6 +38,7 @@ export function createElectronViewBackend(
   const views = new Set<WebContentsView>()
   const layer = useLayer ? new View() : null
   const parent = layer ?? window.contentView
+  const cdp = new CDPController()
   let disposed = false
 
   if (layer !== null) {
@@ -49,9 +51,7 @@ export function createElectronViewBackend(
   return {
     clipsToCanvas: layer !== null,
 
-    // `DeviceSpec` starts mattering with CDP emulation; until then a view only
-    // needs its bounds, so the parameter is deliberately not taken here.
-    create(): ManagedView {
+    create(device: DeviceSpec): ManagedView {
       const view = new WebContentsView({ webPreferences: { ...DEVICE_WEB_PREFERENCES } })
       view.setBackgroundColor('#ffffff')
       // Hidden until the renderer has told us where the frame is.
@@ -65,29 +65,55 @@ export function createElectronViewBackend(
         return { action: 'deny' }
       })
 
+      // One debugger attach for this view's whole life (CLAUDE.md §3).
+      //
+      // The `about:blank` load is not cosmetic: a `WebContentsView` that has
+      // never committed a navigation has no live renderer, and CDP emulation
+      // against one takes the browser process down (`setDeviceMetricsOverride`
+      // crashes; the touch and user-agent calls simply never resolve). Priming
+      // with a blank document gives every later CDP call something to talk to.
+      const wc = view.webContents
+      const primed = cdp.attach(wc).then(() => wc.loadURL('about:blank').catch(() => undefined))
+
+      // `emulated` is the gate every navigation waits behind, so a page is
+      // never fetched before its device profile is in place.
+      let emulated = primed.then(() => cdp.applyDevice(wc, device))
+
       return {
         setBounds(bounds: Rect): void {
-          if (view.webContents.isDestroyed()) return
+          if (wc.isDestroyed()) return
           view.setBounds(bounds)
         },
         setVisible(visible: boolean): void {
-          if (view.webContents.isDestroyed()) return
+          if (wc.isDestroyed()) return
           view.setVisible(visible)
         },
         setZoomFactor(zoom: number): void {
-          if (view.webContents.isDestroyed()) return
-          view.webContents.setZoomFactor(zoom)
+          if (wc.isDestroyed()) return
+          wc.setZoomFactor(zoom)
+        },
+        applyDevice(next: DeviceSpec): void {
+          if (wc.isDestroyed()) return
+          emulated = emulated.then(() => cdp.applyDevice(wc, next))
         },
         loadUrl(url: string): void {
-          if (view.webContents.isDestroyed()) return
-          // A navigation superseded by the next one rejects with ERR_ABORTED;
-          // real failures surface through `did-fail-load` in a later task.
-          view.webContents.loadURL(url).catch(() => undefined)
+          if (wc.isDestroyed()) return
+          // Queued behind emulation so the document is fetched with the device
+          // user agent. A navigation superseded by the next one rejects with
+          // ERR_ABORTED; real failures surface through `did-fail-load` later.
+          emulated = emulated.then(() => {
+            if (wc.isDestroyed()) return
+            return wc.loadURL(url).then(
+              () => undefined,
+              () => undefined
+            )
+          })
         },
         dispose(): void {
           views.delete(view)
+          cdp.detachSafe(wc)
           parent.removeChildView(view)
-          if (!view.webContents.isDestroyed()) view.webContents.close()
+          if (!wc.isDestroyed()) wc.close()
         }
       }
     },
@@ -104,6 +130,7 @@ export function createElectronViewBackend(
     dispose(): void {
       if (disposed) return
       disposed = true
+      cdp.detachAll()
       for (const view of views) {
         parent.removeChildView(view)
         if (!view.webContents.isDestroyed()) view.webContents.close()

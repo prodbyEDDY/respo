@@ -1,6 +1,7 @@
 import { app, shell, BrowserWindow, nativeTheme } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
+import { normalizeUrl } from '@shared/ipc'
 import { registerHandler } from './ipc'
 import { ViewManager } from './view-manager'
 import { createElectronViewBackend } from './view-backend'
@@ -11,6 +12,25 @@ import icon from '../../resources/icon.png?asset'
 let viewManager: ViewManager | null = null
 let perf: PerfMonitor | null = null
 let stopSpike: (() => void) | null = null
+
+/** Until the address bar lands, every session opens here. */
+const DEFAULT_START_URL = 'https://example.com'
+
+/**
+ * The url the views open on. `RESPO_START_URL` is the seam the e2e suite (and,
+ * later, the CLI/deep-link entry point) uses; it goes through the same
+ * validation as anything else main is asked to load (spec §7a).
+ */
+function resolveStartUrl(): string {
+  const requested = process.env['RESPO_START_URL']
+  if (requested === undefined || requested.trim() === '') return DEFAULT_START_URL
+  const normalized = normalizeUrl(requested)
+  if (normalized === null) {
+    console.error(`ignoring unloadable RESPO_START_URL: ${requested}`)
+    return DEFAULT_START_URL
+  }
+  return normalized
+}
 
 function createWindow(): void {
   // Wide enough that a handful of device frames fit side by side; this is a
@@ -85,6 +105,8 @@ function createWindow(): void {
  */
 function registerIpcHandlers(): void {
   registerHandler('app:get-version', () => app.getVersion())
+
+  registerHandler('app:get-start-url', () => resolveStartUrl())
 
   registerHandler('theme:set-source', (_event, source) => {
     nativeTheme.themeSource = source
