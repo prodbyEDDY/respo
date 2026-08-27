@@ -5,6 +5,10 @@ out/
 release/
 *.local
 
+# tooling caches / logs
+.eslintcache
+*.log*
+
 # claude: версионируем только команды
 .claude/*
 !.claude/commands/
