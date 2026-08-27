@@ -3,169 +3,160 @@
 
 @custom-variant dark (&:is(.dark *));
 
-/* Design tokens — see docs/design/FAMILY-STYLE-REFERENCE.md (section "Tailwind v4"). */
-@theme {
-  /* Colors */
-  --color-cream-canvas: #fbfaf9;
-  --color-stone-surface: #f2f0ed;
-  --color-ink-black: #121212;
-  --color-heading-charcoal: #343433;
-  --color-body-brown: #474645;
-  --color-muted-gray: #7e7e7d;
-  --color-stone-border: #e5d5c3;
-  --color-link-blue: #0086fc;
-  --color-sky-blue: #64c6ff;
-  --color-alt-blue: #00b2ff;
-  --color-grass-green: #00c978;
-  --color-mint: #00ca48;
-  --color-ember-orange: #ff3e00;
-  --color-sun-yellow: #ffcd6c;
-  --color-gold: #d48f00;
-  --color-honey: #ffbb26;
-  --color-coral-pink: #ff58ae;
-  --color-plum-violet: #9f4fff;
-  --color-alert-red: #ff2b3a;
+/* ---------------------------------------------------------------------------
+   Family design tokens — raw values, namespaced under `--respo-*`.
+
+   These are plain custom properties, NOT a Tailwind `@theme` block, on purpose:
+   the Family reference names (`--spacing-16`, `--radius-full`, `--leading-body`,
+   `--font-family`) sit inside Tailwind v4 theme namespaces and would silently
+   redefine the framework's own scales (`p-4` -> 4px, `rounded-full` -> 72px).
+   Utilities are published deliberately in the `@theme inline` blocks below.
+
+   Family's 4px spacing base is already Tailwind's default step (0.25rem), so no
+   spacing tokens are declared here — the stock scale is the design-system scale.
+
+   Source: docs/design/FAMILY-STYLE-REFERENCE.md, docs/design/DESIGN-SYSTEM.md
+   --------------------------------------------------------------------------- */
+:root {
+  /* Palette */
+  --respo-cream-canvas: #fbfaf9;
+  --respo-stone-surface: #f2f0ed;
+  --respo-sand-surface: #f6f4ef;
+  --respo-ink-black: #121212;
+  --respo-heading-charcoal: #343433;
+  --respo-body-brown: #474645;
+  --respo-muted-gray: #7e7e7d;
+  --respo-stone-border: #e5d5c3;
+  --respo-link-blue: #0086fc;
+  --respo-sky-blue: #64c6ff;
+  --respo-alt-blue: #00b2ff;
+  --respo-grass-green: #00c978;
+  --respo-mint: #00ca48;
+  --respo-ember-orange: #ff3e00;
+  --respo-sun-yellow: #ffcd6c;
+  --respo-gold: #d48f00;
+  --respo-honey: #ffbb26;
+  --respo-coral-pink: #ff58ae;
+  --respo-plum-violet: #9f4fff;
+  --respo-alert-red: #ff2b3a;
+
+  /* Dark-theme palette (docs/design/DESIGN-SYSTEM.md, "Тёмная тема") */
+  --respo-dark-canvas: #151413;
+  --respo-dark-surface: #1e1d1b;
+  --respo-dark-stone: #2a2927;
+  --respo-dark-sand: #242322;
+  --respo-dark-heading: #f2f0ed;
+  --respo-dark-body: #c9c7c4;
+  --respo-dark-muted: #8a8886;
+  --respo-dark-accent: #4da3ff;
+  --respo-dark-on-accent: #10131a;
 
   /* Typography */
-  --font-family:
-    'Family', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
-    sans-serif;
-  --font-inter:
+  --respo-font-sans:
     'Inter', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
     sans-serif;
 
-  /* Typography — Scale */
-  --text-micro: 12px;
-  --leading-micro: 19;
-  --tracking-micro: -0.01px;
-  --text-caption: 15px;
-  --leading-caption: 22;
-  --tracking-caption: -0.14px;
-  --text-body: 17px;
-  --leading-body: 26;
-  --tracking-body: -0.22px;
-  --text-subheading: 19px;
-  --leading-subheading: 27;
-  --tracking-subheading: -0.3px;
-  --text-heading: 23px;
-  --leading-heading: 25;
-  --tracking-heading: -0.44px;
-  --text-heading-lg: 44px;
-  --leading-heading-lg: 53;
-  --tracking-heading-lg: -0.88px;
-  --text-display: 68px;
-  --leading-display: 75;
-  --tracking-display: -2.1px;
+  /* Type scale — size / line-height / tracking */
+  --respo-text-micro: 12px;
+  --respo-leading-micro: 19px;
+  --respo-tracking-micro: -0.01px;
+  --respo-text-caption: 15px;
+  --respo-leading-caption: 22px;
+  --respo-tracking-caption: -0.14px;
+  --respo-text-body: 17px;
+  --respo-leading-body: 26px;
+  --respo-tracking-body: -0.22px;
+  --respo-text-subheading: 19px;
+  --respo-leading-subheading: 27px;
+  --respo-tracking-subheading: -0.3px;
+  --respo-text-heading: 23px;
+  --respo-leading-heading: 25px;
+  --respo-tracking-heading: -0.44px;
+  --respo-text-heading-lg: 44px;
+  --respo-leading-heading-lg: 53px;
+  --respo-tracking-heading-lg: -0.88px;
 
-  /* Spacing */
-  --spacing-4: 4px;
-  --spacing-8: 8px;
-  --spacing-12: 12px;
-  --spacing-16: 16px;
-  --spacing-20: 20px;
-  --spacing-24: 24px;
-  --spacing-28: 28px;
-  --spacing-32: 32px;
-  --spacing-36: 36px;
-  --spacing-48: 48px;
-  --spacing-60: 60px;
-  --spacing-76: 76px;
-  --spacing-80: 80px;
-  --spacing-92: 92px;
-  --spacing-96: 96px;
-  --spacing-104: 104px;
-
-  /* Border Radius */
-  --radius-sm: 2px;
-  --radius-md: 6px;
-  --radius-lg: 10px;
-  --radius-2xl: 17px;
-  --radius-3xl: 24px;
-  --radius-3xl-2: 32px;
-  --radius-3xl-3: 40px;
-  --radius-full: 72px;
-  --radius-full-2: 9999px;
-
-  /* Shadows */
-  --shadow-subtle: color(display-p3 0.94902 0.941176 0.929412) 0px 0px 0px 1px inset;
-  --shadow-subtle-2: color(display-p3 0.94902 0.941176 0.929412) 0px 0px 0px 0px inset;
-  --shadow-subtle-3: rgba(0, 0, 0, 0.04) 0px 0px 0px 1px;
-  --shadow-lg: rgba(0, 0, 0, 0.15) 0px 0px 24px 0px;
-  --shadow-sm: rgba(0, 0, 0, 0.04) 0px 1px 6px 0px, rgba(0, 0, 0, 0.05) 0px 0px 24px 0px;
+  /* Elevation — Respo defines surfaces with 1px inset hairlines, not shadows. */
+  --respo-shadow-hairline: rgba(0, 0, 0, 0.04) 0px 0px 0px 1px;
+  --respo-shadow-soft: rgba(0, 0, 0, 0.04) 0px 1px 6px 0px, rgba(0, 0, 0, 0.05) 0px 0px 24px 0px;
+  --respo-shadow-float: rgba(0, 0, 0, 0.15) 0px 0px 24px 0px;
 }
 
-/* shadcn/ui semantic tokens (base color: neutral). */
+/* ---------------------------------------------------------------------------
+   shadcn/ui semantic tokens, mapped onto the Respo palette.
+   --------------------------------------------------------------------------- */
 :root {
-  --radius: 0.625rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  --background: #fbfaf9;
+  --foreground: #343433;
+  --card: #ffffff;
+  --card-foreground: #474645;
+  --popover: #ffffff;
+  --popover-foreground: #474645;
+  --muted: #f2f0ed;
+  --muted-foreground: #7e7e7d;
+  --primary: #0086fc;
+  --primary-foreground: #ffffff;
+  --secondary: #f6f4ef;
+  --secondary-foreground: #121212;
+  --accent: #f2f0ed;
+  --accent-foreground: #343433;
+  --destructive: #ff2b3a;
+  --border: #f2f0ed;
+  --input: #f2f0ed;
+  --ring: #0086fc;
+  --radius: 10px;
+
+  --sidebar: #f6f4ef;
+  --sidebar-foreground: #343433;
+  --sidebar-primary: #0086fc;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #f2f0ed;
+  --sidebar-accent-foreground: #343433;
+  --sidebar-border: #f2f0ed;
+  --sidebar-ring: #0086fc;
+
+  --chart-1: #0086fc;
+  --chart-2: #00ca48;
+  --chart-3: #ffbb26;
+  --chart-4: #ff58ae;
+  --chart-5: #9f4fff;
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  --background: #151413;
+  --foreground: #f2f0ed;
+  --card: #1e1d1b;
+  --card-foreground: #c9c7c4;
+  --popover: #1e1d1b;
+  --popover-foreground: #c9c7c4;
+  --muted: #2a2927;
+  --muted-foreground: #8a8886;
+  --primary: #4da3ff;
+  --primary-foreground: #10131a;
+  --secondary: #242322;
+  --secondary-foreground: #f2f0ed;
+  --accent: #2a2927;
+  --accent-foreground: #f2f0ed;
+  --destructive: #ff2b3a;
+  --border: #2a2927;
+  --input: #2a2927;
+  --ring: #4da3ff;
+
+  --sidebar: #1e1d1b;
+  --sidebar-foreground: #f2f0ed;
+  --sidebar-primary: #4da3ff;
+  --sidebar-primary-foreground: #10131a;
+  --sidebar-accent: #2a2927;
+  --sidebar-accent-foreground: #f2f0ed;
+  --sidebar-border: #2a2927;
+  --sidebar-ring: #4da3ff;
 }
 
-/* Radius utilities intentionally stay on the design-system scale above, so the
-   shadcn `--radius-*` mappings are not re-declared here. */
+/* ---------------------------------------------------------------------------
+   Published utilities. Everything here is either a shadcn semantic token or an
+   additive name — the stock Tailwind spacing, color, and `rounded-full` scales
+   are left untouched.
+   --------------------------------------------------------------------------- */
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -198,6 +189,44 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+
+  /* Status colors — identical in both themes (DESIGN-SYSTEM.md). */
+  --color-status-ok: var(--respo-mint);
+  --color-status-warn: var(--respo-honey);
+  --color-status-error: var(--respo-alert-red);
+  --color-status-loading: var(--respo-sky-blue);
+  --color-link: var(--respo-ember-orange);
+
+  --font-sans: var(--respo-font-sans);
+
+  --text-micro: var(--respo-text-micro);
+  --text-micro--line-height: var(--respo-leading-micro);
+  --text-micro--letter-spacing: var(--respo-tracking-micro);
+  --text-caption: var(--respo-text-caption);
+  --text-caption--line-height: var(--respo-leading-caption);
+  --text-caption--letter-spacing: var(--respo-tracking-caption);
+  --text-body: var(--respo-text-body);
+  --text-body--line-height: var(--respo-leading-body);
+  --text-body--letter-spacing: var(--respo-tracking-body);
+  --text-subheading: var(--respo-text-subheading);
+  --text-subheading--line-height: var(--respo-leading-subheading);
+  --text-subheading--letter-spacing: var(--respo-tracking-subheading);
+  --text-heading: var(--respo-text-heading);
+  --text-heading--line-height: var(--respo-leading-heading);
+  --text-heading--letter-spacing: var(--respo-tracking-heading);
+  --text-heading-lg: var(--respo-text-heading-lg);
+  --text-heading-lg--line-height: var(--respo-leading-heading-lg);
+  --text-heading-lg--letter-spacing: var(--respo-tracking-heading-lg);
+
+  /* Radii follow the shadcn `--radius` base (10px: cards and panels). */
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --shadow-hairline: var(--respo-shadow-hairline);
+  --shadow-soft: var(--respo-shadow-soft);
+  --shadow-float: var(--respo-shadow-float);
 }
 
 @layer base {
@@ -212,11 +241,9 @@
   }
 
   body {
+    @apply bg-background text-foreground;
     margin: 0;
     overflow: hidden;
     user-select: none;
-    background-color: var(--color-cream-canvas);
-    color: var(--color-body-brown);
-    font-family: var(--font-inter);
   }
 }
