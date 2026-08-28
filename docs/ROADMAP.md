@@ -56,7 +56,9 @@ Responsively App, написанный с нуля (их AGPL-код не исп
 | DESIGN-01 | ✅ | Выбрано направление «Light Studio» + дизайн-система Family (токены), выведена тёмная тема | [`design/DESIGN-SYSTEM.md`](design/DESIGN-SYSTEM.md), [`design/FAMILY-STYLE-REFERENCE.md`](design/FAMILY-STYLE-REFERENCE.md) |
 | PLAN-W1 | ✅ | План волны W1 «Foundation» (скаффолд, темы, IPC, ViewManager+спайк R1, каталог, CDP, навигация, зум) | [`superpowers/plans/2026-08-28-w1-foundation.md`](superpowers/plans/2026-08-28-w1-foundation.md) |
 | IMPL-W1 | ✅ | W1 «Foundation» реализована и смержена: каркас, темы, IPC, ViewManager (R1 снят: p99 4–5 мс), 38 устройств, CDP-эмуляция, топ-бар/навигация, зум/поворот, секьюрити-хардening | [отчёт W1](progress/W1-foundation-2026-08-28.md), тесты 231 unit + 4 e2e |
-| PLAN-W2+ | ⬜ | Планы волн W2–W6 (sync/suites → devtools/screenshots → адресные фичи → дизайнер-инструменты → полировка); follow-ups W1 — в отчёте волны | карта в конце плана W1 |
+| IMPL-W2 | ✅ | W2 «Sync + Suites» смержена: SyncEngine (CDP-зеркалирование, p99 2.4 мс), Device Manager, сьюты, персистентность, follow-ups W1 | [отчёт W2](progress/W2-sync-suites-2026-08-28.md), 569 unit + 11 e2e |
+| IMPL-W3 | 🟡 | W3 «DevTools + Screenshots»: DevTools-док на девайс, инспект-режим, контекстное меню, очередь скриншотов (full-page CDP), настройки; + фикс zoom-viewport десктопов | план W3 |
+| PLAN-W4+ | ⬜ | W4 (адресные фичи + раскладки) → W5 (инструменты дизайнера + live-reload) → W6 (полировка/дистрибуция) | карта в конце плана W1 |
 
 ## §11. Журнал решений
 

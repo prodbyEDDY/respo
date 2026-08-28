@@ -47,7 +47,7 @@ npm run lint       # ESLint
 npm run build      # прод-сборка + electron-builder
 ```
 
-Грабли, за которые уже платили: React StrictMode дважды гоняет cleanup эффектов (используй dispose-latch паттерн, см. layout-sync тесты); CDP-эмуляция вьюшки без committed-навигации крашит browser process (вьюшки праймятся `about:blank` — фильтруй его из load-событий); клиппинг вьюшек канвас-слоем — недокументированное поведение Chromium (fallback `RESPO_CANVAS_LAYER=0`).
+Грабли, за которые уже платили: React StrictMode дважды гоняет cleanup эффектов (используй dispose-latch паттерн, см. layout-sync тесты); CDP-эмуляция вьюшки без committed-навигации крашит browser process (вьюшки праймятся `about:blank` — фильтруй его из load-событий); клиппинг вьюшек канвас-слоем — недокументированное поведение Chromium (fallback `RESPO_CANVAS_LAYER=0`); `about:blank`-праймер попадает в navigationHistory (canGoBack лжёт на старте — фильтруется); WebContentsView не виден в `page.screenshot` Playwright (гарды — через `View.children` из main); Escape-хендлеры окна конфликтуют с Radix-диалогами (гард по фокусу и `[data-slot]`); mouseenter над нативной вьюшкой не срабатывает (lead-election — hit-test); electron-store — ESM (`.default` в CJS-бандле main); sandboxed preload не должен делить runtime-модули с другими entry (rollup эмитит незагружаемый chunk); CDP `Input.dispatchMouseEvent` координаты zoom-relative (делить на zoomFactor); тесты гонять фокусно, полный набор — один раз перед коммитом.
 
 ## Жёсткие правила
 
