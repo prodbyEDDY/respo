@@ -23,6 +23,13 @@ export interface PanelsState {
   detached: Record<string, true>
   /** Thickness of the docked strip in CSS pixels: height at the bottom, width at the right. */
   size: number
+  /**
+   * Whether the element picker is armed on every device.
+   *
+   * Not persisted, and not a per-device flag: it is one mode over the whole
+   * canvas, and it ends the moment something is picked.
+   */
+  inspecting: boolean
 
   /** Open DevTools for a device, or close it if this device already has it. */
   toggle: (deviceId: string) => void
@@ -36,22 +43,29 @@ export interface PanelsState {
    * the value it settles on comes through the store.
    */
   setSize: (size: number) => void
+  /** Arm or disarm the element picker across every device. */
+  setInspecting: (active: boolean) => void
+  toggleInspecting: () => void
   /** Install a state main just reported. Idempotent. */
   applyState: (state: DevtoolsStatePayload) => void
+  /** Install the picker state main just reported — a pick ends the mode. */
+  applyInspecting: (active: boolean) => void
   /** Install what main restored at boot. Writes nothing back. */
   hydrate: (devtools: DevtoolsSettings) => void
 }
 
-function withBridge(run: (bridge: RespoApi) => Promise<DevtoolsStatePayload>): void {
+function withBridge<T>(run: (bridge: RespoApi) => Promise<T>, install: (answer: T) => void): void {
   const bridge = ipcBridge()
   // Absent outside Electron (unit tests, the dev server in a plain browser).
   if (bridge === null) return
-  void run(bridge).then(
-    (state) => usePanels.getState().applyState(state),
-    (error: unknown) => {
-      console.error('devtools ipc failed', error)
-    }
-  )
+  void run(bridge).then(install, (error: unknown) => {
+    console.error('devtools ipc failed', error)
+  })
+}
+
+/** The common case: main answers with the whole DevTools state. */
+function withState(run: (bridge: RespoApi) => Promise<DevtoolsStatePayload>): void {
+  withBridge(run, (state) => usePanels.getState().applyState(state))
 }
 
 function detachedMap(deviceIds: readonly string[]): Record<string, true> {
@@ -70,6 +84,7 @@ export const usePanels = create<PanelsState>((set, get) => ({
   dockedDeviceId: null,
   detached: {},
   size: DEFAULT_DOCK_SIZE,
+  inspecting: false,
 
   toggle: (deviceId) => {
     if (selectIsOpen(get(), deviceId)) get().close(deviceId)
@@ -77,11 +92,11 @@ export const usePanels = create<PanelsState>((set, get) => ({
   },
 
   open: (deviceId) => {
-    withBridge((bridge) => bridge.invoke('devtools:open', deviceId))
+    withState((bridge) => bridge.invoke('devtools:open', deviceId))
   },
 
   close: (deviceId = null) => {
-    withBridge((bridge) => bridge.invoke('devtools:close', deviceId))
+    withState((bridge) => bridge.invoke('devtools:close', deviceId))
   },
 
   setDock: (dock) => {
@@ -91,7 +106,7 @@ export const usePanels = create<PanelsState>((set, get) => ({
     // same value plus whatever the migration did to the open panel.
     set({ dock })
     savePersistedState({ devtools: { dock, size: get().size } })
-    withBridge((bridge) => bridge.invoke('devtools:set-dock', dock))
+    withState((bridge) => bridge.invoke('devtools:set-dock', dock))
   },
 
   setSize: (next) => {
@@ -99,6 +114,26 @@ export const usePanels = create<PanelsState>((set, get) => ({
     if (get().size === size) return
     set({ size })
     savePersistedState({ devtools: { dock: get().dock, size } })
+  },
+
+  setInspecting: (active) => {
+    if (get().inspecting === active) return
+    // Optimistic, like the dock edge: the cursor has to change on the click,
+    // and main answers with the mode it really ended up in.
+    set({ inspecting: active })
+    withBridge(
+      (bridge) => bridge.invoke('inspect:set', active),
+      (answer) => set({ inspecting: answer })
+    )
+  },
+
+  toggleInspecting: () => {
+    get().setInspecting(!get().inspecting)
+  },
+
+  applyInspecting: (active) => {
+    if (get().inspecting === active) return
+    set({ inspecting: active })
   },
 
   applyState: (state) => {
@@ -148,8 +183,12 @@ export function attachPanelsBridge(): () => void {
     const bridge = ipcBridge()
     unsubscribe =
       bridge?.onMainEvent((event: MainEvent) => {
-        if (event.type !== 'devtools-state') return
-        usePanels.getState().applyState(event.payload)
+        if (event.type === 'devtools-state') usePanels.getState().applyState(event.payload)
+        // The picker turns itself off as soon as something is picked, and this
+        // is the only way the renderer hears about it.
+        else if (event.type === 'inspect-mode') {
+          usePanels.getState().applyInspecting(event.payload.active)
+        }
       }) ?? (() => undefined)
   }
 

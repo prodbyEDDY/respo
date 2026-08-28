@@ -4,6 +4,7 @@ import { DevtoolsDock } from '@renderer/components/devtools/DevtoolsDock'
 import { Canvas } from '@renderer/components/previewer/Canvas'
 import { TopBar } from '@renderer/components/toolbar/TopBar'
 import { TooltipProvider } from '@renderer/components/ui/tooltip'
+import { useInspectHotkeys } from '@renderer/hooks/useInspectHotkeys'
 import { ipcBridge } from '@renderer/lib/ipc'
 import { createLayoutTelemetry, type LayoutTelemetry } from '@renderer/lib/layout-telemetry'
 import { loadPersistedState } from '@renderer/lib/persistence'
@@ -115,6 +116,9 @@ function App(): React.JSX.Element {
   // a DevTools window was closed from its own title bar. Reference-counted the
   // same way, for the same StrictMode reason.
   useEffect(() => attachPanelsBridge(), [])
+
+  // mod+i arms the element picker, Escape puts it away.
+  useInspectHotkeys()
 
   // Hand main the device set. Runs again whenever the selection changes; the
   // view manager reuses the views that stayed and loads the current url into

@@ -50,7 +50,8 @@ beforeEach(() => {
     dock: 'bottom',
     dockedDeviceId: null,
     detached: {},
-    size: DEFAULT_DOCK_SIZE
+    size: DEFAULT_DOCK_SIZE,
+    inspecting: false
   })
   savePersistedState.mockClear()
 })
@@ -142,6 +143,41 @@ describe('panels store — the dock', () => {
     expect(usePanels.getState().dockedDeviceId).toBeNull()
     // Hydration is an install, not a change: nothing is written back.
     expect(savePersistedState).not.toHaveBeenCalled()
+  })
+})
+
+describe('panels store — the element picker', () => {
+  it('arms on the click and tells main, without waiting for the answer', async () => {
+    usePanels.getState().setInspecting(true)
+    expect(usePanels.getState().inspecting).toBe(true)
+
+    await settle()
+    expect(calls).toEqual([{ channel: 'inspect:set', args: [true] }])
+  })
+
+  it('takes the answer main gives when it disagrees — nothing to arm, no mode', async () => {
+    reply = false as unknown as DevtoolsStatePayload
+    usePanels.getState().toggleInspecting()
+    await settle()
+
+    expect(usePanels.getState().inspecting).toBe(false)
+  })
+
+  it('does nothing when asked for the mode it is already in', () => {
+    usePanels.getState().setInspecting(false)
+    expect(calls).toEqual([])
+  })
+
+  it('follows main when a pick ends the mode', () => {
+    const release = attachPanelsBridge()
+    usePanels.setState({ inspecting: true })
+
+    for (const listener of listeners) {
+      listener({ type: 'inspect-mode', payload: { active: false } })
+    }
+
+    expect(usePanels.getState().inspecting).toBe(false)
+    release()
   })
 })
 

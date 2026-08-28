@@ -53,6 +53,8 @@ type FakePanel = DevtoolsPanel & {
   title: string
   bounds: Rect | null
   destroyed: boolean
+  /** Panels the frontend was asked to bring to the front, in order. */
+  panelsShown: string[]
   /** Simulate the user closing this panel's own window. */
   userClose: () => void
 }
@@ -70,8 +72,12 @@ function makeFactory(): { create: CreateDevtoolsPanel; panels: FakePanel[] } {
       title,
       bounds: null,
       destroyed: false,
+      panelsShown: [],
       setBounds: (bounds) => {
         panel.bounds = bounds
+      },
+      showPanel: (name) => {
+        panel.panelsShown.push(name)
       },
       onClosed: (listener) => {
         listeners.push(listener)
@@ -261,6 +267,16 @@ describe('DevtoolsManager', () => {
 
     expect(factory.panels).toHaveLength(0)
     expect(manager.state().dockedDeviceId).toBeNull()
+  })
+
+  it('opens DevTools with the console showing, every time it is asked', () => {
+    manager.openConsole('phone')
+    expect(factory.panels[0]?.panelsShown).toEqual(['console'])
+
+    // Already open on some other panel: the request is what the user wants.
+    manager.openConsole('phone')
+    expect(factory.panels).toHaveLength(1)
+    expect(factory.panels[0]?.panelsShown).toEqual(['console', 'console'])
   })
 
   it('opens DevTools before asking it to select an element', () => {

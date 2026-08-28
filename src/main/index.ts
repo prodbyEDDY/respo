@@ -5,6 +5,7 @@ import { normalizeUrl, type DevtoolsStatePayload } from '@shared/ipc'
 import { defaultPersistedState } from '@shared/persistence-types'
 import { CDPController } from './cdp-controller'
 import { DevtoolsManager } from './devtools-manager'
+import { Inspector } from './inspector'
 import { registerHandler, registerInputListener, sendMainEvent } from './ipc'
 import {
   createBackupFileIO,
@@ -42,6 +43,7 @@ let stopSpike: (() => void) | null = null
 let persistence: Persistence | null = null
 let syncEngine: SyncEngine | null = null
 let devtools: DevtoolsManager | null = null
+let inspector: Inspector | null = null
 /**
  * Device names, by id, as the renderer last reported them.
  *
@@ -124,12 +126,24 @@ function createWindow(): void {
     }
   })
 
+  // The element picker is one toggle over every view at once, so it lives
+  // beside the manager rather than inside it: it decides *which* device's
+  // DevTools opens, and the manager opens it.
+  inspector = new Inspector({
+    cdp,
+    devtools,
+    onState: (active) => {
+      sendMainEvent(mainWindow.webContents, { type: 'inspect-mode', payload: { active } })
+    }
+  })
+
   viewManager = new ViewManager(
     createElectronViewBackend(mainWindow, {
       canvasLayer: process.env['RESPO_CANVAS_LAYER'] !== '0',
       cdp,
       sync: syncEngine,
-      devtools
+      devtools,
+      inspect: inspector
     }),
     { onLoadState: (payload) => loadStates?.report(payload) }
   )
@@ -145,7 +159,10 @@ function createWindow(): void {
     syncEngine?.dispose()
     syncEngine = null
     // Before the views: a DevTools window outliving the canvas it belongs to
-    // would keep the app alive with nothing to debug.
+    // would keep the app alive with nothing to debug, and a view left in the
+    // picker would swallow the next click in a page that is still loading.
+    inspector?.dispose()
+    inspector = null
     devtools?.dispose()
     devtools = null
     deviceNames.clear()
@@ -243,7 +260,9 @@ function registerIpcHandlers(): void {
     // A device that left the canvas takes its DevTools with it. The backend
     // already unregistered the views it disposed; this catches a manager that
     // is holding a panel for a device no layout will ever mention again.
-    devtools?.retain(new Set(specs.map((spec) => spec.id)))
+    const live = new Set(specs.map((spec) => spec.id))
+    devtools?.retain(live)
+    inspector?.retain(live)
   })
 
   // The hot path: one call per animation frame, applied synchronously so every
@@ -304,6 +323,14 @@ function registerIpcHandlers(): void {
   registerHandler('devtools:set-bounds', (_event, bounds) => {
     devtools?.setBounds(validateBounds(bounds))
   })
+
+  // The picker is global — one toggle, every view — so it takes no device id.
+  // Main answers with the mode it is actually in, and pushes `inspect-mode`
+  // when a pick ends the mode without the renderer asking.
+  registerHandler(
+    'inspect:set',
+    (_event, active) => inspector?.setActive(validateBoolean(active, 'inspect:set')) ?? false
+  )
 
   registerHandler('devtools:set-dock', (_event, dock) => {
     const next = validateDockPosition(dock)
@@ -372,6 +399,8 @@ app.on('before-quit', () => {
   persistence = null
   syncEngine?.dispose()
   syncEngine = null
+  inspector?.dispose()
+  inspector = null
   devtools?.dispose()
   devtools = null
   viewManager?.destroy()

@@ -80,6 +80,15 @@ export interface DevtoolsPanel {
   /** Position the docked strip. A window panel ignores it. */
   setBounds(bounds: Rect): void
   /**
+   * Bring one of the frontend's own panels to the front — `'console'`, say.
+   *
+   * Best-effort by nature: this is the embedder API the frontend exposes to
+   * whatever is hosting it, not a contract Electron carries. A frontend that
+   * does not answer stays on the panel it opened with, which is Elements — a
+   * worse answer to "Open Console", not a broken one.
+   */
+  showPanel(name: string): void
+  /**
    * The user closed this panel's own window. A docked panel never calls it —
    * the dock is closed through the manager, not around it.
    */
@@ -118,6 +127,17 @@ export type DevtoolsManagerOptions = {
 export interface DevtoolsRegistry {
   registerDevice(deviceId: string, host: DevtoolsHost): void
   unregisterDevice(deviceId: string): void
+}
+
+/**
+ * What something acting on a device — a context menu, the inspector — asks the
+ * manager to do. Separate from the registry for the same reason: one is about
+ * a view's lifetime, the other about what the user just chose.
+ */
+export interface DevtoolsCommands {
+  inspectElement(deviceId: string, x: number, y: number): unknown
+  openConsole(deviceId: string): unknown
+  openFor(deviceId: string): unknown
 }
 
 const ZERO_RECT: Rect = { x: 0, y: 0, width: 0, height: 0 }
@@ -267,6 +287,21 @@ export class DevtoolsManager implements DevtoolsRegistry {
 
     this.openFor(deviceId)
     host.inspectElement(Math.round(x), Math.round(y))
+    return this.state()
+  }
+
+  /**
+   * Open this device's DevTools with the console showing.
+   *
+   * The panel request is made every time rather than only on a fresh open: a
+   * frontend that is already up is exactly the case where the user is asking
+   * for a *different* panel than the one they are looking at.
+   */
+  openConsole(deviceId: string): DevtoolsStatePayload {
+    if (this.disposed) return this.state()
+
+    this.openFor(deviceId)
+    this.open.get(deviceId)?.panel.showPanel('console')
     return this.state()
   }
 

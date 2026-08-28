@@ -13,6 +13,13 @@ export interface CdpDebugger {
   detach(): void
   sendCommand(method: string, commandParams?: object): Promise<unknown>
   on(event: 'detach', listener: (event: unknown, reason: string) => void): void
+  /**
+   * Protocol *events* from the page, as opposed to answers to our commands.
+   *
+   * Only the inspector needs these — `Overlay.inspectNodeRequested` is how
+   * Chromium's own element picker reports a click.
+   */
+  on(event: 'message', listener: (event: unknown, method: string, params: unknown) => void): void
 }
 
 export interface CdpTarget {
@@ -77,7 +84,41 @@ type Session = {
   reattaches: number
   /** Set by `detachSafe`, so our own detach is not mistaken for an eviction. */
   closing: boolean
+  /** Told about every protocol event on this session. See `onEvent`. */
+  listeners: Set<CdpEventListener>
 }
+
+/** A protocol event from a page: the method, and its raw parameters. */
+export type CdpEventListener = (method: string, params: unknown) => void
+
+/** A point in a page's own CSS pixels, relative to its viewport. */
+export type Point = { x: number; y: number }
+
+/**
+ * Chromium's element-picker colours, in its own `HighlightConfig` shape.
+ *
+ * The same values DevTools uses for its own inspect mode, so the highlight over
+ * a device view looks like the one people already know rather than like a Respo
+ * invention.
+ */
+const HIGHLIGHT_CONFIG = {
+  showInfo: true,
+  showStyles: false,
+  showRulers: false,
+  showExtensionLines: false,
+  contentColor: { r: 111, g: 168, b: 220, a: 0.66 },
+  paddingColor: { r: 147, g: 196, b: 125, a: 0.55 },
+  borderColor: { r: 255, g: 229, b: 153, a: 0.66 },
+  marginColor: { r: 246, g: 178, b: 107, a: 0.66 }
+}
+
+/**
+ * How far inside a node's own box a candidate point is nudged.
+ *
+ * Small enough to stay inside a one-pixel divider, large enough to clear an
+ * antialiased border.
+ */
+const INSET = 2
 
 /**
  * Whether the page should believe it is running on a mobile device.
@@ -127,13 +168,17 @@ export class CDPController {
       device: null,
       attached: false,
       reattaches: 0,
-      closing: false
+      closing: false,
+      listeners: new Set()
     }
     this.sessions.set(target.id, session)
 
     // Registered once, before the first attach: Electron keeps the listener on
     // the debugger, and every later re-attach reuses it.
     target.debugger.on('detach', (_event, reason) => this.onDetach(session, reason))
+    target.debugger.on('message', (_event, method, params) => {
+      for (const listener of session.listeners) listener(method, params)
+    })
     this.open(session)
   }
 
@@ -222,6 +267,116 @@ export class CDPController {
     })
   }
 
+  /**
+   * Listen to protocol events from one view. Returns an unsubscribe.
+   *
+   * The session is attached once per view for its whole life (CLAUDE.md §3), so
+   * this is a subscription on a channel that is already open rather than a
+   * reason to open another one.
+   */
+  onEvent(target: CdpTarget, listener: CdpEventListener): () => void {
+    const session = this.sessions.get(target.id)
+    if (session === undefined) return () => undefined
+
+    session.listeners.add(listener)
+    return () => {
+      session.listeners.delete(listener)
+    }
+  }
+
+  /**
+   * Turn Chromium's own element picker on or off for one view.
+   *
+   * `Overlay.setInspectMode` is refused outright until `DOM` is enabled — the
+   * picker answers in node ids, and there is no node id space before that — so
+   * all three calls travel together. Enabling a domain twice is a no-op, which
+   * is what makes this safe to call on every view every time the mode changes.
+   *
+   * The highlight is drawn by the page's own compositor, so it lands inside the
+   * device's `WebContentsView` with no Respo surface involved and no script in
+   * the page.
+   */
+  async setInspectMode(target: CdpTarget, enabled: boolean): Promise<boolean> {
+    if (!this.live(target)) return false
+
+    if (!enabled) {
+      // `Overlay.enable` may never have happened on this view (the mode was
+      // switched off before it registered); `setInspectMode` alone is enough to
+      // clear it, and a failure here means there was nothing to clear.
+      return this.send(target, 'Overlay.setInspectMode', { mode: 'none' })
+    }
+
+    if (!(await this.send(target, 'DOM.enable', {}))) return false
+    if (!(await this.send(target, 'Overlay.enable', {}))) return false
+    return this.send(target, 'Overlay.setInspectMode', {
+      mode: 'searchForNode',
+      highlightConfig: HIGHLIGHT_CONFIG
+    })
+  }
+
+  /**
+   * A point inside a node, in the page's own CSS pixels.
+   *
+   * The picker reports *which* node was clicked and not where, but the only way
+   * to hand a node to Electron's `inspectElement` is as a coordinate. So the
+   * node's box comes back from `DOM.getBoxModel`, and each candidate point is
+   * checked against `DOM.getNodeForLocation` — the same hit test the browser
+   * runs for `inspectElement` — until one of them resolves to the node we
+   * actually want. The centre alone is not enough: a container's centre is
+   * usually over one of its children, and inspecting the child instead of the
+   * element the user picked is exactly the bug this avoids.
+   */
+  async nodePoint(target: CdpTarget, backendNodeId: number): Promise<Point | null> {
+    if (!this.live(target)) return null
+
+    const box = await this.request<{ model?: { content?: number[] } }>(target, 'DOM.getBoxModel', {
+      backendNodeId
+    })
+    const quad = box?.model?.content
+    if (quad === undefined || quad.length < 8) return null
+
+    const xs: number[] = []
+    const ys: number[] = []
+    for (let i = 0; i < 8; i += 2) {
+      const x = quad[i]
+      const y = quad[i + 1]
+      if (typeof x !== 'number' || typeof y !== 'number') return null
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return null
+      xs.push(x)
+      ys.push(y)
+    }
+
+    const left = Math.min(...xs)
+    const right = Math.max(...xs)
+    const top = Math.min(...ys)
+    const bottom = Math.max(...ys)
+    const centre: Point = { x: (left + right) / 2, y: (top + bottom) / 2 }
+
+    // Corners first, centre last: a node's own padding and border are the parts
+    // of it a child cannot be drawn over, and they live at the edges.
+    const candidates: Point[] = [
+      { x: left + INSET, y: top + INSET },
+      { x: right - INSET, y: top + INSET },
+      { x: left + INSET, y: bottom - INSET },
+      { x: right - INSET, y: bottom - INSET },
+      centre
+    ]
+
+    for (const candidate of candidates) {
+      const point = { x: Math.round(candidate.x), y: Math.round(candidate.y) }
+      const hit = await this.request<{ backendNodeId?: number }>(target, 'DOM.getNodeForLocation', {
+        ...point,
+        includeUserAgentShadowDOM: false
+      })
+      if (hit?.backendNodeId === backendNodeId) return point
+    }
+
+    // Nothing hit-tested back to it — a node under a fixed overlay, or one that
+    // moved between the click and now. Its centre still opens DevTools
+    // somewhere sensible, which beats not opening it at all.
+    return { x: Math.round(centre.x), y: Math.round(centre.y) }
+  }
+
   /** Detach on purpose (view going away). Never throws, never re-attaches. */
   detachSafe(target: CdpTarget): void {
     const session = this.sessions.get(target.id)
@@ -293,6 +448,16 @@ export class CDPController {
     } catch (error) {
       console.error(`cdp: ${method} failed on view ${target.id}`, error)
       return false
+    }
+  }
+
+  /** `send`, for the calls whose answer is the point of making them. */
+  private async request<T>(target: CdpTarget, method: string, params: object): Promise<T | null> {
+    try {
+      return (await target.debugger.sendCommand(method, params)) as T
+    } catch (error) {
+      console.error(`cdp: ${method} failed on view ${target.id}`, error)
+      return null
     }
   }
 }

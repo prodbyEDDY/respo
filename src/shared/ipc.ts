@@ -237,6 +237,14 @@ export type IpcInvokeMap = {
   'devtools:set-bounds': { args: [Rect]; result: void }
   /** Move the panel between the two docked edges and a window of its own. */
   'devtools:set-dock': { args: [DockPosition]; result: DevtoolsStatePayload }
+  /**
+   * Arm or disarm the element picker on every device at once.
+   *
+   * Answers with the mode main is actually in. It turns itself off again as
+   * soon as something is picked, and says so through the `inspect-mode` event —
+   * the renderer never has to time that itself.
+   */
+  'inspect:set': { args: [boolean]; result: boolean }
 }
 
 export type IpcChannel = keyof IpcInvokeMap
@@ -265,7 +273,8 @@ const CHANNEL_REGISTRY: Record<IpcChannel, true> = {
   'devtools:open': true,
   'devtools:close': true,
   'devtools:set-bounds': true,
-  'devtools:set-dock': true
+  'devtools:set-dock': true,
+  'inspect:set': true
 }
 
 export const IPC_CHANNELS: readonly IpcChannel[] = Object.keys(CHANNEL_REGISTRY) as IpcChannel[]

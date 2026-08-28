@@ -4,6 +4,7 @@ import {
   ArrowTopRightOnSquareIcon,
   Bars2Icon,
   ComputerDesktopIcon,
+  CursorArrowRaysIcon,
   EllipsisVerticalIcon,
   LinkIcon,
   LinkSlashIcon,
@@ -171,6 +172,39 @@ function DevtoolsDockItems(): React.JSX.Element {
   )
 }
 
+/**
+ * The element picker, as one toggle over the whole canvas.
+ *
+ * Deliberately not per device: the question people ask is "what is *this*",
+ * pointing at whichever viewport shows the problem, and having to say which
+ * device first would be a step that answers nothing. Clicking anything in any
+ * device ends the mode and opens that device's DevTools on the element.
+ */
+function InspectToggle(): React.JSX.Element {
+  const inspecting = usePanels((s) => s.inspecting)
+  const toggle = usePanels((s) => s.toggleInspecting)
+  const label = inspecting ? 'Stop inspecting (Esc)' : 'Inspect an element (Ctrl+I)'
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label={label}
+          aria-pressed={inspecting}
+          data-inspecting={inspecting ? 'on' : 'off'}
+          onClick={toggle}
+          className={cn(inspecting && 'bg-primary/15 text-primary')}
+        >
+          <CursorArrowRaysIcon />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
+  )
+}
+
 function OverflowMenu(): React.JSX.Element {
   const zoom = useLayout((s) => s.zoom)
   const zoomIn = useLayout((s) => s.zoomIn)
@@ -231,6 +265,7 @@ export function TopBar(): React.JSX.Element {
         <SuiteSelector />
         <DeviceLibraryButton />
         <SyncChip />
+        <InspectToggle />
         <IconButton label="Rotate all devices" onClick={rotateAll}>
           <ArrowPathRoundedSquareIcon />
         </IconButton>

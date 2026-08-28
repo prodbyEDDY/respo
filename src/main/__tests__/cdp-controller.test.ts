@@ -28,7 +28,11 @@ type FakeTarget = CdpTarget & {
   calls: Array<[string, object | undefined]>
   detachListener: ((event: unknown, reason: string) => void) | null
   fireDetach: (reason: string) => void
+  /** Emit a protocol event, the way a page does through `debugger.on('message')`. */
+  fireMessage: (method: string, params: unknown) => void
   failNext: Set<string>
+  /** What `sendCommand` answers with, by method. Anything else answers `{}`. */
+  replies: Map<string, unknown>
 }
 
 let nextId = 1
@@ -40,7 +44,9 @@ function fakeTarget(): FakeTarget {
     attachedVersions: [] as string[],
     calls: [] as Array<[string, object | undefined]>,
     detachListener: null as ((event: unknown, reason: string) => void) | null,
-    failNext: new Set<string>()
+    messageListeners: [] as ((event: unknown, method: string, params: unknown) => void)[],
+    failNext: new Set<string>(),
+    replies: new Map<string, unknown>()
   }
 
   const target: FakeTarget = {
@@ -63,6 +69,12 @@ function fakeTarget(): FakeTarget {
     get failNext(): Set<string> {
       return state.failNext
     },
+    get replies(): Map<string, unknown> {
+      return state.replies
+    },
+    fireMessage(method: string, params: unknown): void {
+      for (const listener of state.messageListeners) listener(null, method, params)
+    },
     fireDetach(reason: string): void {
       state.attached = false
       state.detachListener?.(null, reason)
@@ -84,10 +96,16 @@ function fakeTarget(): FakeTarget {
           throw new Error(`${method} rejected`)
         }
         state.calls.push([method, params])
-        return {}
+        return state.replies.get(method) ?? {}
       },
-      on(_event: 'detach', listener: (event: unknown, reason: string) => void): void {
-        state.detachListener = listener
+      on(event: 'detach' | 'message', listener: (...args: never[]) => void): void {
+        if (event === 'detach') {
+          state.detachListener = listener as unknown as (e: unknown, reason: string) => void
+          return
+        }
+        state.messageListeners.push(
+          listener as unknown as (e: unknown, method: string, params: unknown) => void
+        )
       }
     }
   }
@@ -319,5 +337,131 @@ describe('CDPController detach handling', () => {
     expect(controller.attachedIds()).toEqual([])
     expect(a.debugger.isAttached()).toBe(false)
     expect(b.debugger.isAttached()).toBe(false)
+  })
+})
+
+describe('CDPController — the element picker', () => {
+  let controller: CDPController
+
+  beforeEach(() => {
+    controller = new CDPController()
+  })
+
+  it('enables DOM before Overlay, because the picker is refused otherwise', async () => {
+    const target = fakeTarget()
+    await controller.attach(target)
+
+    expect(await controller.setInspectMode(target, true)).toBe(true)
+    expect(methods(target)).toEqual(['DOM.enable', 'Overlay.enable', 'Overlay.setInspectMode'])
+    expect(paramsOf(target, 'Overlay.setInspectMode')).toMatchObject({ mode: 'searchForNode' })
+  })
+
+  it('turns the picker off with one call, without enabling anything', async () => {
+    const target = fakeTarget()
+    await controller.attach(target)
+
+    await controller.setInspectMode(target, false)
+
+    expect(methods(target)).toEqual(['Overlay.setInspectMode'])
+    expect(paramsOf(target, 'Overlay.setInspectMode')).toEqual({ mode: 'none' })
+  })
+
+  it('does not arm a view with no live session', async () => {
+    const target = fakeTarget()
+    expect(await controller.setInspectMode(target, true)).toBe(false)
+    expect(methods(target)).toEqual([])
+  })
+
+  it('stops at the first refusal instead of pretending the mode is on', async () => {
+    const target = fakeTarget()
+    await controller.attach(target)
+    target.failNext.add('DOM.enable')
+
+    expect(await controller.setInspectMode(target, true)).toBe(false)
+    expect(methods(target)).toEqual([])
+  })
+
+  it('delivers protocol events until unsubscribed', async () => {
+    const target = fakeTarget()
+    await controller.attach(target)
+
+    const seen: [string, unknown][] = []
+    const off = controller.onEvent(target, (method, params) => seen.push([method, params]))
+    target.fireMessage('Overlay.inspectNodeRequested', { backendNodeId: 7 })
+    off()
+    target.fireMessage('Overlay.inspectNodeRequested', { backendNodeId: 8 })
+
+    expect(seen).toEqual([['Overlay.inspectNodeRequested', { backendNodeId: 7 }]])
+  })
+
+  it('has nothing to subscribe to before a view is attached', () => {
+    const target = fakeTarget()
+    expect(() => controller.onEvent(target, () => undefined)()).not.toThrow()
+  })
+})
+
+describe('CDPController.nodePoint', () => {
+  let controller: CDPController
+
+  /** A box model answer for a node occupying `rect`. */
+  function boxOf(x: number, y: number, w: number, h: number): unknown {
+    return { model: { content: [x, y, x + w, y, x + w, y + h, x, y + h] } }
+  }
+
+  beforeEach(() => {
+    controller = new CDPController()
+  })
+
+  it('returns a point that hit-tests back to the very node that was picked', async () => {
+    const target = fakeTarget()
+    await controller.attach(target)
+    target.replies.set('DOM.getBoxModel', boxOf(0, 200, 200, 100))
+    target.replies.set('DOM.getNodeForLocation', { backendNodeId: 11 })
+
+    expect(await controller.nodePoint(target, 11)).toEqual({ x: 2, y: 202 })
+    // The first candidate answered, so only one hit test was needed.
+    expect(methods(target).filter((m) => m === 'DOM.getNodeForLocation')).toHaveLength(1)
+  })
+
+  it('keeps trying candidates while a child answers instead', async () => {
+    const target = fakeTarget()
+    await controller.attach(target)
+    target.replies.set('DOM.getBoxModel', boxOf(0, 0, 100, 100))
+
+    let asked = 0
+    target.replies.set('DOM.getNodeForLocation', { backendNodeId: 99 })
+    const original = target.debugger.sendCommand.bind(target.debugger)
+    target.debugger.sendCommand = async (method, params): Promise<unknown> => {
+      const answer = await original(method, params)
+      if (method !== 'DOM.getNodeForLocation') return answer
+      asked += 1
+      // Only the third candidate is really the node.
+      return asked === 3 ? { backendNodeId: 5 } : { backendNodeId: 99 }
+    }
+
+    expect(await controller.nodePoint(target, 5)).toEqual({ x: 2, y: 98 })
+    expect(asked).toBe(3)
+  })
+
+  it('falls back to the centre when nothing hit-tests back to it', async () => {
+    const target = fakeTarget()
+    await controller.attach(target)
+    target.replies.set('DOM.getBoxModel', boxOf(10, 10, 100, 40))
+    target.replies.set('DOM.getNodeForLocation', { backendNodeId: 99 })
+
+    expect(await controller.nodePoint(target, 5)).toEqual({ x: 60, y: 30 })
+  })
+
+  it('gives up on a node with no box — one that is not rendered', async () => {
+    const target = fakeTarget()
+    await controller.attach(target)
+    target.replies.set('DOM.getBoxModel', { model: { content: [1, 2] } })
+
+    expect(await controller.nodePoint(target, 5)).toBeNull()
+  })
+
+  it('gives up when the view has no live session', async () => {
+    const target = fakeTarget()
+    expect(await controller.nodePoint(target, 5)).toBeNull()
   })
 })
