@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { ThemeSource } from '@shared/ipc'
 import { ipcBridge } from '@renderer/lib/ipc'
+import { savePersistedState } from '@renderer/lib/persistence'
 
 /** Same three values Electron's `nativeTheme.themeSource` accepts. */
 export type Theme = ThemeSource
@@ -12,6 +13,11 @@ export interface SettingsState {
   /** `theme` with `system` collapsed to the value actually applied to the DOM. */
   resolvedTheme: ResolvedTheme
   setTheme: (theme: Theme) => void
+  /**
+   * Apply the theme main restored at boot. Same effect as `setTheme` minus the
+   * write-back: re-persisting what we were just handed is pure noise.
+   */
+  hydrate: (theme: Theme) => void
 }
 
 const DARK_MEDIA_QUERY = '(prefers-color-scheme: dark)'
@@ -54,6 +60,13 @@ export const useSettings = create<SettingsState>((set) => ({
     const resolvedTheme = resolveTheme(theme)
     applyResolvedTheme(resolvedTheme)
     syncNativeTheme(theme)
+    set({ theme, resolvedTheme })
+    savePersistedState({ ui: { theme } })
+  },
+
+  hydrate: (theme) => {
+    const resolvedTheme = resolveTheme(theme)
+    applyResolvedTheme(resolvedTheme)
     set({ theme, resolvedTheme })
   }
 }))

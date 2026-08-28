@@ -4,9 +4,11 @@ import { TopBar } from '@renderer/components/toolbar/TopBar'
 import { TooltipProvider } from '@renderer/components/ui/tooltip'
 import { ipcBridge } from '@renderer/lib/ipc'
 import { createLayoutTelemetry, type LayoutTelemetry } from '@renderer/lib/layout-telemetry'
+import { loadPersistedState } from '@renderer/lib/persistence'
 import { useDevices } from '@renderer/stores/devices'
 import { applyRotation, useLayout } from '@renderer/stores/layout'
 import { attachNavigationBridge, useNavigation } from '@renderer/stores/navigation'
+import { useSettings } from '@renderer/stores/settings'
 
 /**
  * Main owns the start url (CLI/deep-link argument, or the default) and has
@@ -38,6 +40,36 @@ function useStartUrl(): string | null {
 }
 
 /**
+ * Pull the saved document out of main and install it in the stores.
+ *
+ * Returns `false` until that has happened, which is what keeps the first
+ * `views:sync-devices` from being spent on the default suite: creating five
+ * views only to tear them down a round trip later is visible, and expensive.
+ * Outside Electron there is nothing to load, so the gate opens immediately.
+ */
+function usePersistedState(): boolean {
+  const [hydrated, setHydrated] = useState(false)
+
+  useEffect(() => {
+    let live = true
+    void loadPersistedState().then((state) => {
+      if (!live) return
+      if (state !== null) {
+        useSettings.getState().hydrate(state.ui.theme)
+        useDevices.getState().hydrate(state)
+      }
+      setHydrated(true)
+    })
+
+    return () => {
+      live = false
+    }
+  }, [])
+
+  return hydrated
+}
+
+/**
  * One instrument per window, not per mount: it must survive StrictMode's
  * double-invoke, and its reporting interval outlives any component.
  */
@@ -52,6 +84,7 @@ function App(): React.JSX.Element {
   const active = useDevices((s) => s.active)
   const rotated = useLayout((s) => s.rotated)
   const startUrl = useStartUrl()
+  const hydrated = usePersistedState()
 
   // Rotation is expressed as a device spec with its sides swapped, so it flows
   // through the existing path: the frame gets the new box, and main re-runs
@@ -67,13 +100,14 @@ function App(): React.JSX.Element {
   // view manager reuses the views that stayed and loads the current url into
   // any device that just joined.
   useEffect(() => {
+    if (!hydrated) return
     const bridge = ipcBridge()
     if (bridge === null) return
 
     void bridge.invoke('views:sync-devices', [...devices]).catch((error: unknown) => {
       console.error('failed to sync device views', error)
     })
-  }, [devices])
+  }, [devices, hydrated])
 
   // Point every view at the start url. It arrives from main a round trip after
   // mount, so the device sync above has always landed first.

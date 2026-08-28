@@ -2,9 +2,11 @@ import { app, BrowserWindow, nativeTheme } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { normalizeUrl } from '@shared/ipc'
+import { defaultPersistedState } from '@shared/persistence-types'
 import { registerHandler, sendMainEvent } from './ipc'
+import { createElectronStoreBackend, createPersistence, type Persistence } from './persistence'
 import { installDevicePermissionHandlers, openExternalSafe } from './security'
-import { validateDeviceSpecs, validateThemeSource } from './validate'
+import { validateDeviceSpecs, validatePersistedPatch, validateThemeSource } from './validate'
 import { ViewManager } from './view-manager'
 import { createElectronViewBackend } from './view-backend'
 import { createLoadStateBatcher, type LoadStateBatcher } from './load-state-batcher'
@@ -16,6 +18,7 @@ let viewManager: ViewManager | null = null
 let loadStates: LoadStateBatcher | null = null
 let perf: PerfMonitor | null = null
 let stopSpike: (() => void) | null = null
+let persistence: Persistence | null = null
 
 /** Until the address bar lands, every session opens here. */
 const DEFAULT_START_URL = 'https://example.com'
@@ -75,6 +78,9 @@ function createWindow(): void {
   })
 
   mainWindow.on('closed', () => {
+    // The window is where every patch comes from, so its last one has to land
+    // now — `before-quit` is not guaranteed to run before the process goes.
+    persistence?.flush()
     viewManager?.destroy()
     viewManager = null
     loadStates?.cancel()
@@ -127,6 +133,14 @@ function registerIpcHandlers(): void {
     nativeTheme.themeSource = validateThemeSource(source)
   })
 
+  // Disk lives entirely on this side of the boundary: the renderer reads the
+  // document once at boot and posts patches (CLAUDE.md §7).
+  registerHandler('store:load', () => persistence?.load() ?? defaultPersistedState())
+
+  registerHandler('store:save', (_event, patch) => {
+    persistence?.save(validatePersistedPatch(patch))
+  })
+
   registerHandler('views:sync-devices', (_event, devices) => {
     // Validated before the null check: a malformed payload must reject whether
     // or not a window happens to be open.
@@ -176,6 +190,12 @@ app.whenReady().then(() => {
 
   if (is.dev) perf = startPerfMonitor()
 
+  // Before the first handler can be called, and before the window asks.
+  persistence = createPersistence(createElectronStoreBackend())
+  // Restore the native chrome the user left the app on; the renderer applies
+  // the same value to the DOM once it has hydrated.
+  nativeTheme.themeSource = persistence.load().ui.theme
+
   // Before the first view exists, so no page can ask for anything first.
   installDevicePermissionHandlers()
 
@@ -200,6 +220,10 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  // Flush first: a debounced patch from the last second of the session must
+  // reach disk before anything else starts tearing down.
+  persistence?.dispose()
+  persistence = null
   viewManager?.destroy()
   viewManager = null
   loadStates?.cancel()

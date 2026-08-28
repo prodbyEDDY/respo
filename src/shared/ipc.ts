@@ -6,6 +6,7 @@
  * updates travel batched over the one `MAIN_EVENT_CHANNEL`.
  */
 
+import type { PersistedState } from './persistence-types'
 import type { DeviceSpec, Rect } from './types'
 
 /**
@@ -66,6 +67,13 @@ export type IpcInvokeMap = {
   'nav:forward': { args: []; result: void }
   'nav:reload': { args: []; result: void }
   'theme:set-source': { args: [ThemeSource]; result: void }
+  /** Read the whole persisted document, already migrated and repaired by main. */
+  'store:load': { args: []; result: PersistedState }
+  /**
+   * Post a partial update. Main merges it onto the document it holds and writes
+   * behind a debounce — the renderer never touches disk (CLAUDE.md §7).
+   */
+  'store:save': { args: [Partial<PersistedState>]; result: void }
 }
 
 export type IpcChannel = keyof IpcInvokeMap
@@ -83,7 +91,9 @@ const CHANNEL_REGISTRY: Record<IpcChannel, true> = {
   'nav:back': true,
   'nav:forward': true,
   'nav:reload': true,
-  'theme:set-source': true
+  'theme:set-source': true,
+  'store:load': true,
+  'store:save': true
 }
 
 export const IPC_CHANNELS: readonly IpcChannel[] = Object.keys(CHANNEL_REGISTRY) as IpcChannel[]

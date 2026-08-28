@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { DeviceSpec } from '@shared/types'
-import { validateDeviceSpecs, validateThemeSource } from '../validate'
+import { validateDeviceSpecs, validatePersistedPatch, validateThemeSource } from '../validate'
 
 function device(over: Partial<Record<keyof DeviceSpec, unknown>> = {}): unknown {
   return {
@@ -50,6 +50,57 @@ describe('validateDeviceSpecs', () => {
     const tooMany = Array.from({ length: 65 }, (_v, i) => device({ id: `d${i}` }))
     expect(() => validateDeviceSpecs(tooMany)).toThrow(/at most 64/i)
     expect(() => validateDeviceSpecs(tooMany.slice(0, 64))).not.toThrow()
+  })
+})
+
+describe('validatePersistedPatch', () => {
+  it('accepts an empty patch', () => {
+    expect(validatePersistedPatch({})).toEqual({})
+  })
+
+  it('passes through the keys it recognises', () => {
+    const patch = {
+      customDevices: [device()],
+      suites: [{ id: 's1', name: 'One', deviceIds: ['iphone-15'] }],
+      activeSuiteId: 's1',
+      ui: { theme: 'dark' }
+    }
+    expect(validatePersistedPatch(patch)).toEqual(patch)
+  })
+
+  it('drops keys that are not part of the document', () => {
+    const patch = validatePersistedPatch({ activeSuiteId: 's1', __proto__hack: 1, secrets: 'x' })
+    expect(patch).toEqual({ activeSuiteId: 's1' })
+  })
+
+  it('never lets a patch dictate the schema version', () => {
+    expect(validatePersistedPatch({ schemaVersion: 99 })).toEqual({})
+  })
+
+  it.each([
+    ['not an object', 'suites'],
+    ['null', null],
+    ['an array', []],
+    ['a non-string activeSuiteId', { activeSuiteId: 7 }],
+    ['an empty activeSuiteId', { activeSuiteId: '' }],
+    ['suites that are not an array', { suites: {} }],
+    ['a suite without an id', { suites: [{ name: 'One', deviceIds: [] }] }],
+    ['a suite without a name', { suites: [{ id: 's1', deviceIds: [] }] }],
+    ['a suite with junk deviceIds', { suites: [{ id: 's1', name: 'One', deviceIds: [7] }] }],
+    ['a malformed custom device', { customDevices: [device({ width: 0 })] }],
+    ['a bad theme', { ui: { theme: 'neon' } }],
+    ['a non-object ui', { ui: 'dark' }]
+  ])('rejects %s', (_label, payload) => {
+    expect(() => validatePersistedPatch(payload)).toThrow(/invalid ipc payload/i)
+  })
+
+  it('rejects more suites than the cap', () => {
+    const suites = Array.from({ length: 65 }, (_v, i) => ({
+      id: `s${i}`,
+      name: `S${i}`,
+      deviceIds: []
+    }))
+    expect(() => validatePersistedPatch({ suites })).toThrow(/at most 64/i)
   })
 })
 
