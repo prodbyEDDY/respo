@@ -22,12 +22,28 @@ export type Suite = {
   deviceIds: string[]
 }
 
+/**
+ * Where the user left the mirroring switches.
+ *
+ * Only the *exceptions* are stored: a device is mirroring unless its id is in
+ * `disabledDeviceIds`. Devices come and go (a suite change, a custom device
+ * deleted) and a positive list would have to be reconciled with every one of
+ * those; a list of opt-outs simply stops matching anything.
+ */
+export type SyncSettings = {
+  /** Master switch. Off means no view mirrors anything. */
+  enabled: boolean
+  /** Devices the user took out of mirroring, by id. */
+  disabledDeviceIds: string[]
+}
+
 export type PersistedState = {
   schemaVersion: number
   customDevices: DeviceSpec[]
   suites: Suite[]
   activeSuiteId: string
   ui: { theme: ThemeSource }
+  sync: SyncSettings
 }
 
 export const DEFAULT_SUITE_ID = 'default'
@@ -52,7 +68,9 @@ export function defaultPersistedState(): PersistedState {
       }
     ],
     activeSuiteId: DEFAULT_SUITE_ID,
-    ui: { theme: 'system' }
+    ui: { theme: 'system' },
+    // Mirroring is the product: it is on out of the box, with nothing muted.
+    sync: { enabled: true, disabledDeviceIds: [] }
   }
 }
 
@@ -75,6 +93,7 @@ export function mergePersistedState(
     ...(patch.suites === undefined ? {} : { suites: patch.suites.map(cloneSuite) }),
     ...(patch.activeSuiteId === undefined ? {} : { activeSuiteId: patch.activeSuiteId }),
     ui: { ...base.ui, ...(patch.ui ?? {}) },
+    sync: cloneSync(patch.sync ?? base.sync),
     schemaVersion: SCHEMA_VERSION
   }
   return next
@@ -128,7 +147,8 @@ export function migratePersistedState(raw: unknown): MigrationResult {
       customDevices: sanitizeDevices(doc['customDevices']),
       suites: resolvedSuites,
       activeSuiteId: active,
-      ui: { theme: sanitizeTheme((doc['ui'] as Record<string, unknown> | undefined)?.['theme']) }
+      ui: { theme: sanitizeTheme((doc['ui'] as Record<string, unknown> | undefined)?.['theme']) },
+      sync: sanitizeSync(doc['sync'])
     },
     backup: null
   }
@@ -136,6 +156,10 @@ export function migratePersistedState(raw: unknown): MigrationResult {
 
 function cloneSuite(suite: Suite): Suite {
   return { id: suite.id, name: suite.name, deviceIds: [...suite.deviceIds] }
+}
+
+function cloneSync(sync: SyncSettings): SyncSettings {
+  return { enabled: sync.enabled, disabledDeviceIds: [...sync.disabledDeviceIds] }
 }
 
 function isFilledString(value: unknown): value is string {
@@ -178,6 +202,31 @@ function sanitizeDevices(value: unknown): DeviceSpec[] {
     })
   }
   return out
+}
+
+/**
+ * Repair the mirroring switches.
+ *
+ * A missing or malformed slice means "mirroring on, nothing muted" rather than
+ * a reset of the document: the switches are a preference, and the safe reading
+ * of a damaged one is the product working.
+ */
+function sanitizeSync(value: unknown): SyncSettings {
+  const defaults: SyncSettings = { enabled: true, disabledDeviceIds: [] }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return defaults
+
+  const sync = value as Record<string, unknown>
+  const raw = Array.isArray(sync['disabledDeviceIds']) ? sync['disabledDeviceIds'] : []
+  const seen = new Set<string>()
+  for (const id of raw.slice(0, MAX_DEVICES)) {
+    if (!isFilledString(id)) continue
+    seen.add(id)
+  }
+
+  return {
+    enabled: typeof sync['enabled'] === 'boolean' ? sync['enabled'] : true,
+    disabledDeviceIds: [...seen]
+  }
 }
 
 /** Drop unusable suites; inside a usable one, drop only the junk ids. */

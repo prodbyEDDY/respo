@@ -21,7 +21,7 @@
  */
 
 import { ipcRenderer } from 'electron'
-import type { InputEventPayload, SyncInputChannel } from '@shared/ipc'
+import type { InputEventPayload, SyncCaptureChannel, SyncInputChannel } from '@shared/ipc'
 
 /**
  * The channel, restated rather than imported.
@@ -33,6 +33,9 @@ import type { InputEventPayload, SyncInputChannel } from '@shared/ipc'
  * honest: rename the channel in `@shared/ipc` and this stops compiling.
  */
 const SYNC_INPUT_CHANNEL: SyncInputChannel = 'sync:input'
+
+/** Same restated-constant contract as above. */
+const SYNC_CAPTURE_CHANNEL: SyncCaptureChannel = 'sync:capture'
 
 /**
  * Ceiling on one frame's batch. A page firing synthetic events in a loop must
@@ -57,6 +60,25 @@ let batch: InputEventPayload[] = []
 let scrollAt = -1
 let scheduled = false
 
+/**
+ * Whether this view is the one driving the others right now.
+ *
+ * Starts `true` on purpose. Main decides who leads and drops input from anyone
+ * else, so reporting is always *safe*; this flag exists only to stop the eight
+ * followers paying for a message per frame that will be discarded on arrival.
+ * A view that never hears from main — the message raced this document's load,
+ * or main is an older build — therefore behaves exactly as it did before.
+ */
+let capturing = true
+
+ipcRenderer.on(SYNC_CAPTURE_CHANNEL, (_event, next: unknown) => {
+  capturing = next !== false
+  if (capturing) return
+  // Whatever this frame had collected is no longer anybody's input.
+  batch = []
+  scrollAt = -1
+})
+
 function flush(): void {
   scheduled = false
   scrollAt = -1
@@ -79,7 +101,7 @@ function schedule(): void {
 }
 
 function push(event: InputEventPayload): void {
-  if (batch.length >= MAX_BATCH) return
+  if (!capturing || batch.length >= MAX_BATCH) return
   batch.push(event)
   schedule()
 }
@@ -97,6 +119,7 @@ function ratio(offset: number, max: number): number {
  * height in every viewport — proportion is the only thing they share.
  */
 function sampleScroll(): void {
+  if (!capturing) return
   const el = document.scrollingElement ?? document.documentElement
   if (el === null) return
 

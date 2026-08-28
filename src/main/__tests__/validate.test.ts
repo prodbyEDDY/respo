@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import type { DeviceSpec } from '@shared/types'
 import {
+  validateBoolean,
+  validateDeviceId,
   validateDeviceSpecs,
+  validateLeadDeviceId,
   validatePersistedPatch,
   validateSyncInputBatch,
   validateThemeSource
@@ -188,4 +191,70 @@ describe('validateThemeSource', () => {
       expect(() => validateThemeSource(source)).toThrow(/invalid ipc payload/i)
     }
   )
+})
+
+describe('sync control payloads', () => {
+  it('accepts a device id as the lead', () => {
+    expect(validateLeadDeviceId('pixel-8')).toBe('pixel-8')
+  })
+
+  it('accepts null: leaving the canvas means nothing leads', () => {
+    expect(validateLeadDeviceId(null)).toBeNull()
+  })
+
+  it.each([
+    ['an empty string', ''],
+    ['undefined', undefined],
+    ['a number', 7],
+    ['an object', {}]
+  ])('rejects %s as a lead', (_label, value) => {
+    expect(() => validateLeadDeviceId(value)).toThrow(/invalid ipc payload/i)
+  })
+
+  it('rejects a lead id longer than a label could ever be', () => {
+    expect(() => validateLeadDeviceId('x'.repeat(201))).toThrow(/invalid ipc payload/i)
+  })
+
+  it('requires a real device id for sync:set-enabled', () => {
+    expect(validateDeviceId('pixel-8')).toBe('pixel-8')
+    expect(() => validateDeviceId(null)).toThrow(/invalid ipc payload/i)
+    expect(() => validateDeviceId('')).toThrow(/invalid ipc payload/i)
+  })
+
+  it('requires a real boolean, not something truthy', () => {
+    expect(validateBoolean(false, 'sync:set-global')).toBe(false)
+    expect(() => validateBoolean(1, 'sync:set-global')).toThrow(/sync:set-global/)
+    expect(() => validateBoolean('true', 'sync:set-global')).toThrow(/invalid ipc payload/i)
+  })
+})
+
+describe('validatePersistedPatch — sync switches', () => {
+  it('passes a well-formed sync slice through', () => {
+    const sync = { enabled: false, disabledDeviceIds: ['pixel-8'] }
+    expect(validatePersistedPatch({ sync })).toEqual({ sync })
+  })
+
+  it('copies the id list rather than keeping the caller’s array', () => {
+    const disabledDeviceIds = ['pixel-8']
+    const out = validatePersistedPatch({ sync: { enabled: true, disabledDeviceIds } })
+    expect(out.sync?.disabledDeviceIds).not.toBe(disabledDeviceIds)
+  })
+
+  it.each([
+    ['not an object', 'sync'],
+    ['an array', []],
+    ['missing enabled', { disabledDeviceIds: [] }],
+    ['a non-boolean enabled', { enabled: 'yes', disabledDeviceIds: [] }],
+    ['a non-array id list', { enabled: true, disabledDeviceIds: 'pixel-8' }],
+    ['an empty id', { enabled: true, disabledDeviceIds: [''] }]
+  ])('rejects %s', (_label, sync) => {
+    expect(() => validatePersistedPatch({ sync })).toThrow(/invalid ipc payload/i)
+  })
+
+  it('rejects more muted ids than there could be devices', () => {
+    const disabledDeviceIds = Array.from({ length: 65 }, (_v, i) => `d${i}`)
+    expect(() => validatePersistedPatch({ sync: { enabled: true, disabledDeviceIds } })).toThrow(
+      /at most 64/i
+    )
+  })
 })

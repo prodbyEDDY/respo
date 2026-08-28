@@ -26,6 +26,15 @@ export type SyncDeviceRegistration = {
   /** The emulated viewport, in device CSS pixels — what ratios scale against. */
   width: number
   height: number
+  /**
+   * Tell this view's preload whether it is currently the input source.
+   *
+   * Optional, and only ever an optimisation: `handleInput` drops everything
+   * that is not the lead regardless, so a backend that supplies nothing here
+   * behaves identically — it just pays for one IPC message per follower per
+   * frame that main immediately discards.
+   */
+  setCapturing?: (capturing: boolean) => void
 }
 
 /**
@@ -36,6 +45,15 @@ export interface SyncRegistry {
   registerDevice(registration: SyncDeviceRegistration): void
   updateDevice(deviceId: string, size: { width: number; height: number }): void
   unregisterDevice(deviceId: string): void
+  /**
+   * Re-tell one view whether it is the source.
+   *
+   * A preload is a *document's* script: it runs again on every navigation, and
+   * the fresh copy starts from its own safe default. The backend calls this
+   * when a view commits a document so the view is not left reporting input for
+   * the rest of the session.
+   */
+  refreshCapture(deviceId: string): void
 }
 
 /** Defer a task by roughly one frame. Returns a canceller. */
@@ -47,6 +65,13 @@ export type SyncEngineOptions = {
 
 /** One animation frame at 60Hz. Scrolls are applied at most this often. */
 const FRAME_MS = 16
+
+/**
+ * Ceiling on remembered mutes. A user can only mute devices they can see; the
+ * cap is here so a compromised renderer cannot grow the set without bound by
+ * muting ids that never existed.
+ */
+const MAX_DISABLED = 256
 
 const defaultScheduler: FrameScheduler = (task) => {
   const handle = setTimeout(task, FRAME_MS)
@@ -92,7 +117,14 @@ function clamp01(value: number): number {
   return value
 }
 
-type Entry = SyncDeviceRegistration & { enabled: boolean }
+type Entry = SyncDeviceRegistration & {
+  enabled: boolean
+  /**
+   * Last capture flag actually delivered, so an unchanged state costs nothing.
+   * `null` until the view has been told once.
+   */
+  capturing: boolean | null
+}
 
 export class SyncEngine implements SyncRegistry {
   private readonly dispatcher: SyncDispatcher
@@ -104,6 +136,16 @@ export class SyncEngine implements SyncRegistry {
 
   private leadDeviceId: string | null = null
   private globalEnabled = true
+
+  /**
+   * Devices the user muted, whether or not they currently have a view.
+   *
+   * Kept apart from the registry on purpose: the restored session applies its
+   * switches before the first view exists, and a device that leaves a suite and
+   * comes back must come back muted. Only the exceptions are held, so the set
+   * is empty for the session everybody actually has.
+   */
+  private readonly disabled = new Set<string>()
 
   /** Newest scroll target per follower, applied on the next frame. */
   private readonly pendingScroll = new Map<string, { ratioX: number; ratioY: number }>()
@@ -128,7 +170,11 @@ export class SyncEngine implements SyncRegistry {
     const previous = this.byDeviceId.get(registration.deviceId)
     if (previous !== undefined) this.byWcId.delete(previous.target.id)
 
-    const entry: Entry = { ...registration, enabled: previous?.enabled ?? true }
+    const entry: Entry = {
+      ...registration,
+      enabled: !this.disabled.has(registration.deviceId),
+      capturing: null
+    }
     this.byDeviceId.set(entry.deviceId, entry)
     this.byWcId.set(entry.target.id, entry)
 
@@ -136,6 +182,7 @@ export class SyncEngine implements SyncRegistry {
     // opens with mirroring silently inert. The hover election in the UI
     // overrides this the moment the pointer touches a frame.
     this.leadDeviceId ??= entry.deviceId
+    this.publishCapture()
   }
 
   updateDevice(deviceId: string, size: { width: number; height: number }): void {
@@ -156,11 +203,25 @@ export class SyncEngine implements SyncRegistry {
     if (this.leadDeviceId === deviceId) {
       this.leadDeviceId = this.byDeviceId.keys().next().value ?? null
     }
+    this.publishCapture()
+  }
+
+  /**
+   * Re-tell one view whether it is the source. Called by the backend when a
+   * view commits a document, because the new document's preload starts fresh.
+   */
+  refreshCapture(deviceId: string): void {
+    const entry = this.byDeviceId.get(deviceId)
+    if (entry === undefined) return
+    entry.capturing = null
+    this.publishCapture()
   }
 
   /** The one view whose interactions drive the others. `null` disables sync. */
   setLead(deviceId: string | null): void {
+    if (this.leadDeviceId === deviceId) return
     this.leadDeviceId = deviceId
+    this.publishCapture()
   }
 
   /** Which view is currently leading. */
@@ -168,18 +229,32 @@ export class SyncEngine implements SyncRegistry {
     return this.leadDeviceId
   }
 
-  /** Take one device in or out of mirroring. A disabled lead drives nothing. */
+  /**
+   * Take one device in or out of mirroring. A disabled lead drives nothing.
+   *
+   * Accepted for a device that has no view yet: the restored session sets its
+   * switches before the first `WebContentsView` exists.
+   */
   setEnabled(deviceId: string, enabled: boolean): void {
+    if (this.disabled.has(deviceId) === !enabled) return
+    if (enabled) this.disabled.delete(deviceId)
+    else if (this.disabled.size < MAX_DISABLED) this.disabled.add(deviceId)
+    else return
+
     const entry = this.byDeviceId.get(deviceId)
-    if (entry === undefined) return
-    entry.enabled = enabled
-    if (!enabled) this.pendingScroll.delete(deviceId)
+    if (entry !== undefined) {
+      entry.enabled = enabled
+      if (!enabled) this.pendingScroll.delete(deviceId)
+    }
+    this.publishCapture()
   }
 
   /** The master switch. Off means no view mirrors anything. */
   setGlobalEnabled(enabled: boolean): void {
+    if (this.globalEnabled === enabled) return
     this.globalEnabled = enabled
     if (!enabled) this.clearPending()
+    this.publishCapture()
   }
 
   /**
@@ -218,7 +293,26 @@ export class SyncEngine implements SyncRegistry {
     this.clearPending()
     this.byDeviceId.clear()
     this.byWcId.clear()
+    this.disabled.clear()
     this.leadDeviceId = null
+  }
+
+  /**
+   * Tell every view whether it is currently worth reporting input.
+   *
+   * Exactly one view can be — the enabled lead, and only while the master
+   * switch is on. This is what `handleInput` already enforces; saying it out
+   * loud just means the other eight views stop sending messages that would be
+   * dropped on arrival. Only changes are delivered, and a lead election is a
+   * hover, not an event stream, so this is nowhere near the hot path.
+   */
+  private publishCapture(): void {
+    for (const entry of this.byDeviceId.values()) {
+      const capturing = this.globalEnabled && entry.enabled && entry.deviceId === this.leadDeviceId
+      if (entry.capturing === capturing) continue
+      entry.capturing = capturing
+      entry.setCapturing?.(capturing)
+    }
   }
 
   private *followers(source: Entry): Generator<Entry> {

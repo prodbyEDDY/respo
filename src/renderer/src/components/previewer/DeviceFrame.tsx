@@ -1,8 +1,16 @@
-import { ArrowPathIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline'
+import {
+  ArrowPathIcon,
+  ExclamationTriangleIcon,
+  LinkIcon,
+  LinkSlashIcon
+} from '@heroicons/react/24/outline'
 import type { LoadStatePayload } from '@shared/ipc'
 import type { DeviceSpec } from '@shared/types'
 import { Button } from '@renderer/components/ui/button'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
+import { cn } from '@renderer/lib/utils'
 import { useNavigation } from '@renderer/stores/navigation'
+import { useSync } from '@renderer/stores/sync'
 
 export type DeviceFrameProps = {
   device: DeviceSpec
@@ -60,6 +68,39 @@ function LoadError({ state }: { state: LoadStatePayload }): React.JSX.Element {
 }
 
 /**
+ * Take one device in or out of mirroring, from its own header.
+ *
+ * The switch is per-device and instant: main stops dispatching to a muted view
+ * on the very next event, and stops listening to it as a source.
+ */
+function MirrorToggle({ deviceId }: { deviceId: string }): React.JSX.Element {
+  const muted = useSync((s) => s.disabled[deviceId] === true)
+  const toggleDevice = useSync((s) => s.toggleDevice)
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          role="switch"
+          aria-checked={!muted}
+          aria-label="Mirror interactions on this device"
+          data-mirroring={muted ? 'off' : 'on'}
+          onClick={() => toggleDevice(deviceId)}
+          className={cn(muted ? 'text-status-warn' : 'text-muted-foreground hover:text-foreground')}
+        >
+          {muted ? <LinkSlashIcon /> : <LinkIcon />}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>
+        {muted ? 'Not mirroring — click to include this device' : 'Mirroring — click to exclude'}
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
+/**
  * Chrome around one device: a caption, and an empty rectangle standing in for
  * the page.
  *
@@ -72,18 +113,48 @@ function LoadError({ state }: { state: LoadStatePayload }): React.JSX.Element {
  */
 export function DeviceFrame({ device, zoom, viewportRef }: DeviceFrameProps): React.JSX.Element {
   const load = useNavigation((s) => s.perDevice[device.id])
+  const isLead = useSync((s) => s.leadDeviceId === device.id)
+  const setLead = useSync((s) => s.setLead)
   const width = Math.round(device.width * zoom)
   const height = Math.round(device.height * zoom)
 
   return (
-    <section className="flex flex-col gap-1" aria-label={device.name}>
-      <header className="flex items-baseline gap-2 px-0.5">
+    <section
+      className="relative flex flex-col gap-1"
+      aria-label={device.name}
+      data-lead={isLead ? 'true' : undefined}
+      // Pointing at a device is what elects it: no click, no mode, no third
+      // control to learn. The store coalesces this to one message per frame,
+      // so sweeping the pointer across the canvas costs one round trip.
+      onMouseEnter={() => setLead(device.id)}
+    >
+      {/*
+        The lead marker.
+
+        It lives 4px outside the section rather than on the viewport itself:
+        main glues the `WebContentsView` to that element's border box, so a
+        border or ring drawn there would be composited over and never seen.
+        Opacity only, 150ms (DESIGN-SYSTEM.md motion budget).
+      */}
+      <span
+        aria-hidden="true"
+        className={cn(
+          'pointer-events-none absolute -inset-1 rounded-lg border border-primary',
+          'transition-opacity duration-150 ease-out',
+          isLead ? 'opacity-100' : 'opacity-0'
+        )}
+      />
+
+      <header className="flex items-center gap-2 px-0.5">
         <h2 className="text-caption font-medium text-foreground">{device.name}</h2>
         <p className="text-micro tabular-nums text-muted-foreground">
           {device.width} × {device.height}
           {zoom === 1 ? '' : ` · ${Math.round(zoom * 100)}%`}
         </p>
         {load?.state === 'loading' ? <Spinner /> : null}
+        <div className="ml-auto">
+          <MirrorToggle deviceId={device.id} />
+        </div>
       </header>
 
       <div

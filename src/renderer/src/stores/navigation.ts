@@ -22,6 +22,15 @@ export interface NavigationState {
 
   /** Apply one batched `load-state` event. Never called per event. */
   applyLoadStates: (batch: readonly LoadStatePayload[]) => void
+  /**
+   * Forget devices that are no longer on the canvas, and hand the address bar
+   * to a survivor if the one it was following is among them.
+   *
+   * Called when the device set changes. Without it a removed device keeps its
+   * load state forever and, if it happened to be the leading view, the bar
+   * stops following anything at all.
+   */
+  pruneDevices: (deviceIds: readonly string[]) => void
   /** Seed the bar with main's start url without navigating again. */
   setUrl: (url: string) => void
 }
@@ -76,6 +85,26 @@ export const useNavigation = create<NavigationState>((set, get) => ({
     }
 
     set({ perDevice: next, leadDeviceId: lead, url: nextUrl })
+  },
+
+  pruneDevices: (deviceIds) => {
+    const { perDevice, leadDeviceId } = get()
+    const live = new Set(deviceIds)
+
+    const next: Record<string, LoadStatePayload> = {}
+    let dropped = false
+    for (const [id, payload] of Object.entries(perDevice)) {
+      if (live.has(id)) next[id] = payload
+      else dropped = true
+    }
+
+    const leadGone = leadDeviceId !== null && !live.has(leadDeviceId)
+    if (!dropped && !leadGone) return
+
+    // Re-elect in canvas order, not in whatever order the old states happened
+    // to be keyed: the bar should follow the first device the user sees.
+    const lead = leadGone ? (deviceIds.find((id) => next[id] !== undefined) ?? null) : leadDeviceId
+    set({ perDevice: next, leadDeviceId: lead })
   },
 
   setUrl: (url) => set({ url })

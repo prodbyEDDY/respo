@@ -139,3 +139,53 @@ describe('migratePersistedState', () => {
     expect(state.customDevices).toEqual([custom])
   })
 })
+
+describe('sync switches', () => {
+  it('a fresh install mirrors everything', () => {
+    expect(defaultPersistedState().sync).toEqual({ enabled: true, disabledDeviceIds: [] })
+  })
+
+  it('a patch replaces the whole slice', () => {
+    const base = defaultPersistedState()
+    const next = mergePersistedState(base, {
+      sync: { enabled: false, disabledDeviceIds: ['pixel-8'] }
+    })
+    expect(next.sync).toEqual({ enabled: false, disabledDeviceIds: ['pixel-8'] })
+  })
+
+  it('a patch that says nothing about sync leaves it alone', () => {
+    const base = defaultPersistedState()
+    base.sync = { enabled: false, disabledDeviceIds: ['pixel-8'] }
+    expect(mergePersistedState(base, { activeSuiteId: 'x' }).sync).toEqual(base.sync)
+  })
+
+  it('the merged slice does not alias the patch', () => {
+    const disabledDeviceIds = ['pixel-8']
+    const next = mergePersistedState(defaultPersistedState(), {
+      sync: { enabled: true, disabledDeviceIds }
+    })
+    disabledDeviceIds.push('ipad-mini')
+    expect(next.sync.disabledDeviceIds).toEqual(['pixel-8'])
+  })
+
+  it('a document written before sync existed reads as "everything mirrors"', () => {
+    const stored: Record<string, unknown> = { ...defaultPersistedState() }
+    delete stored['sync']
+    expect(migratePersistedState(stored).state.sync).toEqual({
+      enabled: true,
+      disabledDeviceIds: []
+    })
+  })
+
+  it('repairs a damaged slice instead of resetting the document', () => {
+    const stored: Record<string, unknown> = {
+      ...defaultPersistedState(),
+      sync: { enabled: 'yes', disabledDeviceIds: ['pixel-8', '', 7, 'pixel-8'] }
+    }
+    const { state, backup } = migratePersistedState(stored)
+
+    expect(state.sync).toEqual({ enabled: true, disabledDeviceIds: ['pixel-8'] })
+    expect(state.suites).toEqual(defaultPersistedState().suites)
+    expect(backup).toBeNull()
+  })
+})

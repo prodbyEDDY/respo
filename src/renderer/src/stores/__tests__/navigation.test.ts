@@ -128,6 +128,53 @@ describe('navigation store', () => {
     expect(useNavigation.getState().perDevice['a']?.state).toBe('ready')
   })
 
+  describe('pruneDevices', () => {
+    it('forgets the load state of a device that left the canvas', () => {
+      useNavigation.getState().applyLoadStates([payload('a'), payload('b')])
+      useNavigation.getState().pruneDevices(['a'])
+
+      expect(Object.keys(useNavigation.getState().perDevice)).toEqual(['a'])
+    })
+
+    it('hands the address bar to a survivor when the leading view is removed', () => {
+      useNavigation.getState().applyLoadStates([payload('a'), payload('b'), payload('c')])
+      expect(useNavigation.getState().leadDeviceId).toBe('a')
+
+      useNavigation.getState().pruneDevices(['b', 'c'])
+      expect(useNavigation.getState().leadDeviceId).toBe('b')
+    })
+
+    it('re-elects in canvas order, not in the order states happened to arrive', () => {
+      useNavigation.getState().applyLoadStates([payload('a'), payload('c'), payload('b')])
+      useNavigation.getState().pruneDevices(['b', 'c'])
+
+      expect(useNavigation.getState().leadDeviceId).toBe('b')
+    })
+
+    it('leaves no lead when the last device goes', () => {
+      useNavigation.getState().applyLoadStates([payload('a')])
+      useNavigation.getState().pruneDevices([])
+
+      expect(useNavigation.getState().leadDeviceId).toBeNull()
+      expect(useNavigation.getState().perDevice).toEqual({})
+    })
+
+    it('keeps the lead when it is still on the canvas', () => {
+      useNavigation.getState().applyLoadStates([payload('a'), payload('b')])
+      useNavigation.getState().pruneDevices(['a', 'b'])
+
+      expect(useNavigation.getState().leadDeviceId).toBe('a')
+    })
+
+    it('changes nothing when nothing left — a device joining is not a prune', () => {
+      useNavigation.getState().applyLoadStates([payload('a')])
+      const before = useNavigation.getState().perDevice
+      useNavigation.getState().pruneDevices(['a', 'b'])
+
+      expect(useNavigation.getState().perDevice).toBe(before)
+    })
+  })
+
   it('subscribes once no matter how many times it is attached (StrictMode)', () => {
     const first = attachNavigationBridge()
     const second = attachNavigationBridge()

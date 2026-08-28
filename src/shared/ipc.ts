@@ -82,6 +82,22 @@ export const SYNC_INPUT_CHANNEL = 'sync:input'
  */
 export type SyncInputChannel = typeof SYNC_INPUT_CHANNEL
 
+/**
+ * main -> device view: "you are (not) the input source right now".
+ *
+ * Purely an optimisation, and a safe-by-default one. Main already drops input
+ * from anything that is not the lead — that is what stops a follower scrolled
+ * by CDP from echoing back — so a view that never hears this message keeps
+ * reporting and stays correct. Hearing it lets nine followers stop spending an
+ * IPC message per frame each on input main would only throw away.
+ *
+ * Sent once per lead/enablement change, never per event (CLAUDE.md §4).
+ */
+export const SYNC_CAPTURE_CHANNEL = 'sync:capture'
+
+/** The capture channel's literal type. Same restated-constant contract. */
+export type SyncCaptureChannel = typeof SYNC_CAPTURE_CHANNEL
+
 /** renderer -> main request/response channels. Extended by later tasks. */
 export type IpcInvokeMap = {
   'app:get-version': { args: []; result: string }
@@ -113,6 +129,18 @@ export type IpcInvokeMap = {
    * behind a debounce — the renderer never touches disk (CLAUDE.md §7).
    */
   'store:save': { args: [Partial<PersistedState>]; result: void }
+  /**
+   * Elect the view whose interactions drive the others, or `null` for none.
+   *
+   * Called on hover, coalesced to one message per animation frame by the
+   * renderer — a pointer crossing five frames must not cost five round trips
+   * (CLAUDE.md §4).
+   */
+  'sync:set-lead': { args: [string | null]; result: void }
+  /** Take one device in or out of mirroring. */
+  'sync:set-enabled': { args: [string, boolean]; result: void }
+  /** The master switch: off means no view mirrors anything. */
+  'sync:set-global': { args: [boolean]; result: void }
 }
 
 export type IpcChannel = keyof IpcInvokeMap
@@ -132,7 +160,10 @@ const CHANNEL_REGISTRY: Record<IpcChannel, true> = {
   'nav:reload': true,
   'theme:set-source': true,
   'store:load': true,
-  'store:save': true
+  'store:save': true,
+  'sync:set-lead': true,
+  'sync:set-enabled': true,
+  'sync:set-global': true
 }
 
 export const IPC_CHANNELS: readonly IpcChannel[] = Object.keys(CHANNEL_REGISTRY) as IpcChannel[]

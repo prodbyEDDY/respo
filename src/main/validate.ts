@@ -8,7 +8,7 @@
  */
 
 import type { InputEventPayload, ThemeSource } from '@shared/ipc'
-import type { PersistedState, Suite } from '@shared/persistence-types'
+import type { PersistedState, Suite, SyncSettings } from '@shared/persistence-types'
 import type { DeviceSpec } from '@shared/types'
 
 /** More device views than a canvas could ever show is a bug or an attack. */
@@ -119,8 +119,63 @@ export function validatePersistedPatch(value: unknown): Partial<PersistedState> 
     }
     out.ui = { theme: validateThemeSource((ui as Record<string, unknown>)['theme']) }
   }
+  if (patch['sync'] !== undefined) out.sync = validateSyncSettings(patch['sync'])
 
   return out
+}
+
+function validateSyncSettings(value: unknown): SyncSettings {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    fail('store:save sync must be an object')
+  }
+  const sync = value as Record<string, unknown>
+
+  if (typeof sync['enabled'] !== 'boolean') fail('store:save sync.enabled must be a boolean')
+  if (!Array.isArray(sync['disabledDeviceIds'])) {
+    fail('store:save sync.disabledDeviceIds must be an array')
+  }
+  if (sync['disabledDeviceIds'].length > MAX_DEVICES) {
+    fail(`store:save sync.disabledDeviceIds accepts at most ${MAX_DEVICES} ids`)
+  }
+  for (const id of sync['disabledDeviceIds']) {
+    if (!isFilledString(id) || id.length > MAX_NAME_LENGTH) {
+      fail('store:save sync.disabledDeviceIds entries must be non-empty strings')
+    }
+  }
+
+  return {
+    enabled: sync['enabled'],
+    disabledDeviceIds: [...(sync['disabledDeviceIds'] as string[])]
+  }
+}
+
+/**
+ * Validate a `sync:set-lead` payload: a device id, or `null` for "no lead".
+ *
+ * The id is not checked against the live registry — the engine ignores one it
+ * does not know, and a lead elected a frame before its view finishes
+ * registering is a race, not an attack.
+ */
+export function validateLeadDeviceId(value: unknown): string | null {
+  if (value === null) return null
+  if (!isFilledString(value) || value.length > MAX_NAME_LENGTH) {
+    fail('sync:set-lead expects a device id or null')
+  }
+  return value
+}
+
+/** Validate the device id argument of `sync:set-enabled`. */
+export function validateDeviceId(value: unknown): string {
+  if (!isFilledString(value) || value.length > MAX_NAME_LENGTH) {
+    fail('sync:set-enabled expects a device id')
+  }
+  return value
+}
+
+/** Validate a boolean argument. `what` names the channel for the error. */
+export function validateBoolean(value: unknown, what: string): boolean {
+  if (typeof value !== 'boolean') fail(`${what} expects a boolean`)
+  return value
 }
 
 /** Ceiling on one frame's worth of input. Matches the preload's own cap. */

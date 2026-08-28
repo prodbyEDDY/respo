@@ -9,6 +9,7 @@ import { useDevices } from '@renderer/stores/devices'
 import { applyRotation, useLayout } from '@renderer/stores/layout'
 import { attachNavigationBridge, useNavigation } from '@renderer/stores/navigation'
 import { useSettings } from '@renderer/stores/settings'
+import { useSync } from '@renderer/stores/sync'
 
 /**
  * Main owns the start url (CLI/deep-link argument, or the default) and has
@@ -57,6 +58,7 @@ function usePersistedState(): boolean {
       if (state !== null) {
         useSettings.getState().hydrate(state.ui.theme)
         useDevices.getState().hydrate(state)
+        useSync.getState().hydrate(state.sync)
       }
       setHydrated(true)
     })
@@ -108,6 +110,12 @@ function App(): React.JSX.Element {
       console.error('failed to sync device views', error)
     })
   }, [devices, hydrated])
+
+  // A device that left the canvas must not keep a load state — or the address
+  // bar, if it was the view the bar was following.
+  useEffect(() => {
+    useNavigation.getState().pruneDevices(devices.map((d) => d.id))
+  }, [devices])
 
   // Point every view at the start url. It arrives from main a round trip after
   // mount, so the device sync above has always landed first.

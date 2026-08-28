@@ -334,6 +334,126 @@ describe('SyncEngine', () => {
     })
   })
 
+  describe('capture notification', () => {
+    /** A registry that records what each view was told about its own role. */
+    function captureHarness(): {
+      engine: SyncEngine
+      told: Record<string, boolean[]>
+      add: (deviceId: string, id: number) => void
+    } {
+      const told: Record<string, boolean[]> = {}
+      const engine = new SyncEngine({
+        dispatchMouse: () => undefined,
+        dispatchKey: () => undefined,
+        scrollToRatio: () => undefined
+      })
+
+      return {
+        engine,
+        told,
+        add(deviceId, id) {
+          told[deviceId] ??= []
+          engine.registerDevice({
+            deviceId,
+            target: fakeTarget(id),
+            width: 100,
+            height: 100,
+            setCapturing: (capturing) => told[deviceId]?.push(capturing)
+          })
+        }
+      }
+    }
+
+    it('only the lead is asked to report input', () => {
+      const h2 = captureHarness()
+      h2.add('a', 1)
+      h2.add('b', 2)
+
+      expect(h2.told['a']).toEqual([true])
+      expect(h2.told['b']).toEqual([false])
+    })
+
+    it('a new lead is switched on and the old one off', () => {
+      const h2 = captureHarness()
+      h2.add('a', 1)
+      h2.add('b', 2)
+      h2.engine.setLead('b')
+
+      expect(h2.told['a']).toEqual([true, false])
+      expect(h2.told['b']).toEqual([false, true])
+    })
+
+    it('says nothing when the lead did not actually change', () => {
+      const h2 = captureHarness()
+      h2.add('a', 1)
+      h2.engine.setLead('a')
+      h2.engine.setLead('a')
+      expect(h2.told['a']).toEqual([true])
+    })
+
+    it('a muted lead stops reporting: main would drop it anyway', () => {
+      const h2 = captureHarness()
+      h2.add('a', 1)
+      h2.add('b', 2)
+      h2.engine.setEnabled('a', false)
+      expect(h2.told['a']).toEqual([true, false])
+    })
+
+    it('the master switch silences every view', () => {
+      const h2 = captureHarness()
+      h2.add('a', 1)
+      h2.add('b', 2)
+      h2.engine.setGlobalEnabled(false)
+      expect(h2.told['a']).toEqual([true, false])
+      expect(h2.told['b']).toEqual([false])
+    })
+
+    it('refreshCapture re-states the flag, for a preload that just reloaded', () => {
+      const h2 = captureHarness()
+      h2.add('a', 1)
+      h2.engine.refreshCapture('a')
+      expect(h2.told['a']).toEqual([true, true])
+    })
+
+    it('refreshCapture on an unknown device is a no-op', () => {
+      const h2 = captureHarness()
+      h2.add('a', 1)
+      expect(() => h2.engine.refreshCapture('nope')).not.toThrow()
+      expect(h2.told['a']).toEqual([true])
+    })
+  })
+
+  describe('restored switches', () => {
+    it('a device muted before it had a view comes up muted', () => {
+      // This is the boot order: main applies the saved switches, then the
+      // first `WebContentsView` is created.
+      h.engine.setEnabled('newcomer', false)
+      h.engine.registerDevice({
+        deviceId: 'newcomer',
+        target: fakeTarget(9),
+        width: 100,
+        height: 100
+      })
+
+      h.engine.handleInput(1, [mouseDown(0.5, 0.5)])
+      expect(h.mouse.every((c) => c.id !== 9)).toBe(true)
+    })
+
+    it('a muted device that leaves and comes back is still muted', () => {
+      h.engine.setEnabled('tablet', false)
+      h.engine.unregisterDevice('tablet')
+      h.engine.registerDevice({
+        deviceId: 'tablet',
+        target: fakeTarget(2),
+        width: 800,
+        height: 1000
+      })
+
+      h.engine.handleInput(1, [mouseDown(0.5, 0.5)])
+      expect(h.mouse.every((c) => c.id !== 2)).toBe(true)
+    })
+  })
+
   describe('lifecycle', () => {
     it('dispose cancels a pending frame and stops dispatching', () => {
       const cancel = vi.fn()

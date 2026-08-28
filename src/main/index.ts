@@ -9,7 +9,10 @@ import { createElectronStoreBackend, createPersistence, type Persistence } from 
 import { installDevicePermissionHandlers, openExternalSafe } from './security'
 import { SyncEngine } from './sync-engine'
 import {
+  validateBoolean,
+  validateDeviceId,
   validateDeviceSpecs,
+  validateLeadDeviceId,
   validatePersistedPatch,
   validateSyncInputBatch,
   validateThemeSource
@@ -79,6 +82,15 @@ function createWindow(): void {
   // (CLAUDE.md §3), so there is never a second attach.
   const cdp = new CDPController()
   syncEngine = new SyncEngine(cdp)
+
+  // Restore the mirroring switches here rather than from the renderer: they
+  // have to be in place before the first view registers, and the renderer only
+  // finishes hydrating after that.
+  const savedSync = persistence?.load().sync
+  if (savedSync !== undefined) {
+    syncEngine.setGlobalEnabled(savedSync.enabled)
+    for (const deviceId of savedSync.disabledDeviceIds) syncEngine.setEnabled(deviceId, false)
+  }
 
   viewManager = new ViewManager(
     createElectronViewBackend(mainWindow, {
@@ -189,6 +201,21 @@ function registerIpcHandlers(): void {
 
   registerHandler('nav:reload', () => {
     viewManager?.reload()
+  })
+
+  // Mirroring controls. All three are user gestures — a hover, a click on a
+  // toggle — so they are ordinary invokes, not part of any stream. The renderer
+  // coalesces the hover election to one call per frame before it gets here.
+  registerHandler('sync:set-lead', (_event, deviceId) => {
+    syncEngine?.setLead(validateLeadDeviceId(deviceId))
+  })
+
+  registerHandler('sync:set-enabled', (_event, deviceId, enabled) => {
+    syncEngine?.setEnabled(validateDeviceId(deviceId), validateBoolean(enabled, 'sync:set-enabled'))
+  })
+
+  registerHandler('sync:set-global', (_event, enabled) => {
+    syncEngine?.setGlobalEnabled(validateBoolean(enabled, 'sync:set-global'))
   })
 
   // The one-way stream from the device views. Its sender is an untrusted page,

@@ -1,6 +1,6 @@
 import { View, WebContentsView, type BaseWindow, type WebContents } from 'electron'
 import { join } from 'path'
-import type { LoadState, LoadStatePayload } from '@shared/ipc'
+import { SYNC_CAPTURE_CHANNEL, type LoadState, type LoadStatePayload } from '@shared/ipc'
 import type { DeviceSpec, Rect } from '@shared/types'
 import { CDPController } from './cdp-controller'
 import { DEVICE_PARTITION, openExternalSafe } from './security'
@@ -188,7 +188,18 @@ export function createElectronViewBackend(
         deviceId: device.id,
         target: wc,
         width: device.width,
-        height: device.height
+        height: device.height,
+        setCapturing: (capturing) => {
+          if (wc.isDestroyed()) return
+          wc.send(SYNC_CAPTURE_CHANNEL, capturing)
+        }
+      })
+
+      // A preload is a document's script: the copy running in the page this
+      // view just committed has not been told anything yet, and starts from
+      // its own "report everything" default. Say it again now.
+      wc.on('dom-ready', () => {
+        sync?.refreshCapture(device.id)
       })
 
       // `emulated` is the gate every navigation waits behind, so a page is
