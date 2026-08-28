@@ -6,6 +6,7 @@
  * updates travel batched over the one `MAIN_EVENT_CHANNEL`.
  */
 
+import type { RespoBackupV1 } from './backup'
 import type { PersistedState } from './persistence-types'
 import type { DeviceSpec, Rect } from './types'
 
@@ -98,6 +99,24 @@ export const SYNC_CAPTURE_CHANNEL = 'sync:capture'
 /** The capture channel's literal type. Same restated-constant contract. */
 export type SyncCaptureChannel = typeof SYNC_CAPTURE_CHANNEL
 
+/**
+ * The answer to a backup round trip through a system dialog.
+ *
+ * `cancelled` is not an error and must never be reported as one: dismissing a
+ * file dialog is a decision, and telling the user it failed would be a lie.
+ */
+export type BackupExportResult =
+  | { ok: true; path: string }
+  | { ok: false; reason: 'cancelled' }
+  | { ok: false; reason: 'failed'; message: string }
+
+export type BackupImportResult =
+  | { ok: true; backup: RespoBackupV1; path: string }
+  | { ok: false; reason: 'cancelled' }
+  /** The file is not a backup this build can read. `message` says which part. */
+  | { ok: false; reason: 'invalid'; message: string }
+  | { ok: false; reason: 'failed'; message: string }
+
 /** renderer -> main request/response channels. Extended by later tasks. */
 export type IpcInvokeMap = {
   'app:get-version': { args: []; result: string }
@@ -141,6 +160,16 @@ export type IpcInvokeMap = {
   'sync:set-enabled': { args: [string, boolean]; result: void }
   /** The master switch: off means no view mirrors anything. */
   'sync:set-global': { args: [boolean]; result: void }
+  /**
+   * Write the document's portable half to a file the user picks.
+   *
+   * The renderer hands over the *value* and main does the dialog, the
+   * validation and the write: the renderer never touches disk (CLAUDE.md §7),
+   * and a path it could name would be a path it could choose.
+   */
+  'backup:export': { args: [RespoBackupV1]; result: BackupExportResult }
+  /** Read a backup the user picks. Main validates it before it comes back. */
+  'backup:import': { args: []; result: BackupImportResult }
 }
 
 export type IpcChannel = keyof IpcInvokeMap
@@ -163,7 +192,9 @@ const CHANNEL_REGISTRY: Record<IpcChannel, true> = {
   'store:save': true,
   'sync:set-lead': true,
   'sync:set-enabled': true,
-  'sync:set-global': true
+  'sync:set-global': true,
+  'backup:export': true,
+  'backup:import': true
 }
 
 export const IPC_CHANNELS: readonly IpcChannel[] = Object.keys(CHANNEL_REGISTRY) as IpcChannel[]

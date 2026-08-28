@@ -5,7 +5,14 @@ import { normalizeUrl } from '@shared/ipc'
 import { defaultPersistedState } from '@shared/persistence-types'
 import { CDPController } from './cdp-controller'
 import { registerHandler, registerInputListener, sendMainEvent } from './ipc'
-import { createElectronStoreBackend, createPersistence, type Persistence } from './persistence'
+import {
+  createBackupFileIO,
+  createElectronStoreBackend,
+  createPersistence,
+  exportBackup,
+  importBackup,
+  type Persistence
+} from './persistence'
 import { installDevicePermissionHandlers, openExternalSafe } from './security'
 import { SyncEngine } from './sync-engine'
 import {
@@ -170,6 +177,17 @@ function registerIpcHandlers(): void {
   registerHandler('store:save', (_event, patch) => {
     persistence?.save(validatePersistedPatch(patch))
   })
+
+  // Import and export are the only paths to a file the *user* names, and both
+  // of them run here: the dialog, the validation and the read/write all live in
+  // main, and the renderer only ever sees a value (CLAUDE.md §7).
+  registerHandler('backup:export', (event, backup) =>
+    exportBackup(createBackupFileIO(BrowserWindow.fromWebContents(event.sender)), backup)
+  )
+
+  registerHandler('backup:import', (event) =>
+    importBackup(createBackupFileIO(BrowserWindow.fromWebContents(event.sender)))
+  )
 
   registerHandler('views:sync-devices', (_event, devices) => {
     // Validated before the null check: a malformed payload must reject whether

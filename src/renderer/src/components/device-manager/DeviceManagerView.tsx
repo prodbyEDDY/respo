@@ -18,6 +18,7 @@ import { useDevices } from '@renderer/stores/devices'
 import { useLayout } from '@renderer/stores/layout'
 import { DeviceCard } from './DeviceCard'
 import { DeviceEditDialog } from './DeviceEditDialog'
+import { SuitesPanel } from './SuitesPanel'
 
 function Section({
   title,
@@ -68,6 +69,7 @@ export function DeviceManagerView(): React.JSX.Element {
   const [pendingDelete, setPendingDelete] = useState<DeviceSpec | null>(null)
   const [deleteError, setDeleteError] = useState<string | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
+  const [suiteError, setSuiteError] = useState<string | null>(null)
 
   const close = (): void => setView('canvas')
 
@@ -94,6 +96,21 @@ export function DeviceManagerView(): React.JSX.Element {
   )
   const catalog = useMemo(() => DEVICE_CATALOG.filter((d) => matchesQuery(d, query)), [query])
   const nothingFound = custom.length === 0 && catalog.length === 0
+
+  /**
+   * Membership, from the card. The only way this is refused is the suite's last
+   * device, which is worth a sentence — everything else just happens.
+   */
+  const toggleSuite = (device: DeviceSpec): void => {
+    const result = useDevices.getState().toggleDeviceInSuite(device.id)
+    setSuiteError(
+      result.ok
+        ? null
+        : result.reason === 'last-in-suite'
+          ? 'A suite keeps at least one device. Add another one before removing this.'
+          : 'That device is no longer there.'
+    )
+  }
 
   const openEditor = (device: DeviceSpec | null): void => {
     setEditing(device)
@@ -166,8 +183,16 @@ export function DeviceManagerView(): React.JSX.Element {
         </div>
       </header>
 
+      <SuitesPanel />
+
       <div className="min-h-0 flex-1 overflow-auto px-5 py-4">
         <div className="flex flex-col gap-6">
+          {suiteError === null ? null : (
+            <p role="status" className="text-caption text-status-error">
+              {suiteError}
+            </p>
+          )}
+
           <Section
             title="Your devices"
             count={custom.length}
@@ -186,6 +211,7 @@ export function DeviceManagerView(): React.JSX.Element {
                     key={device.id}
                     device={device}
                     inSuite={inSuite.has(device.id)}
+                    onToggleSuite={() => toggleSuite(device)}
                     onEdit={() => openEditor(device)}
                     onDelete={() => {
                       setDeleteError(null)
@@ -200,7 +226,12 @@ export function DeviceManagerView(): React.JSX.Element {
           <Section title="Built-in devices" count={catalog.length} caption="read-only">
             <Grid>
               {catalog.map((device) => (
-                <DeviceCard key={device.id} device={device} inSuite={inSuite.has(device.id)} />
+                <DeviceCard
+                  key={device.id}
+                  device={device}
+                  inSuite={inSuite.has(device.id)}
+                  onToggleSuite={() => toggleSuite(device)}
+                />
               ))}
             </Grid>
           </Section>

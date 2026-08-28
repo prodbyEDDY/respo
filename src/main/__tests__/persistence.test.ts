@@ -1,16 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // `persistence` pulls in electron-store for its production backend; nothing in
-// this suite touches it — every test drives an in-memory backend instead.
+// this suite touches it — every test drives an in-memory backend instead. Same
+// for `electron`: the backup helpers take their dialog and disk access as an
+// injected `BackupFileIO`, so the real one is never constructed here.
 vi.mock('electron-store', () => ({ default: class {} }))
+vi.mock('electron', () => ({ dialog: { showSaveDialog: vi.fn(), showOpenDialog: vi.fn() } }))
 
 import {
   BACKUP_KEY,
+  MAX_BACKUP_BYTES,
   SAVE_DEBOUNCE_MS,
   STATE_KEY,
   createPersistence,
+  exportBackup,
+  importBackup,
+  type BackupFileIO,
   type PersistenceBackend
 } from '../persistence'
+import { serializeBackup } from '@shared/backup'
 import { defaultPersistedState, SCHEMA_VERSION } from '@shared/persistence-types'
 
 function memoryBackend(seed: Record<string, unknown> = {}): PersistenceBackend & {
@@ -191,5 +199,147 @@ describe('createPersistence', () => {
     expect(() => persistence.load()).not.toThrow()
     persistence.save({ activeSuiteId: 'x' })
     expect(() => persistence.flush()).not.toThrow()
+  })
+})
+
+/** A document worth exporting: one device of the user's own, in one suite. */
+function sampleBackup(): ReturnType<typeof serializeBackup> {
+  return serializeBackup({
+    customDevices: [
+      {
+        id: 'custom-kiosk',
+        name: 'Kiosk',
+        width: 1080,
+        height: 1920,
+        dpr: 1,
+        userAgent: 'KioskOS',
+        touch: true,
+        type: 'tablet',
+        rotatable: false
+      }
+    ],
+    suites: [{ id: 'default', name: 'Default', deviceIds: ['custom-kiosk', 'iphone-15-pro'] }]
+  })
+}
+
+function fileIO(over: Partial<BackupFileIO> = {}): BackupFileIO & { written: string | null } {
+  const io = {
+    written: null as string | null,
+    showSave: async () => 'C:/tmp/backup.json',
+    showOpen: async () => 'C:/tmp/backup.json',
+    read: async () => JSON.stringify(sampleBackup()),
+    size: async () => 512,
+    write: async (_path: string, contents: string) => {
+      io.written = contents
+    },
+    ...over
+  }
+  return io
+}
+
+describe('exportBackup', () => {
+  it('writes the document as readable JSON to the chosen path', async () => {
+    const io = fileIO()
+    const result = await exportBackup(io, sampleBackup())
+
+    expect(result).toEqual({ ok: true, path: 'C:/tmp/backup.json' })
+    expect(io.written).not.toBeNull()
+    expect(JSON.parse(io.written as string)).toEqual(sampleBackup())
+    // Indented, because a person may well open the file.
+    expect(io.written).toContain('\n  "version": 1')
+  })
+
+  it('offers a dated file name', async () => {
+    let offered = ''
+    await exportBackup(
+      fileIO({
+        showSave: async (name) => {
+          offered = name
+          return 'C:/tmp/backup.json'
+        }
+      }),
+      sampleBackup()
+    )
+    expect(offered).toMatch(/^respo-devices-\d{4}-\d{2}-\d{2}\.json$/)
+  })
+
+  it('reports a dismissed dialog as cancelled, not as a failure', async () => {
+    const io = fileIO({ showSave: async () => null })
+    expect(await exportBackup(io, sampleBackup())).toEqual({ ok: false, reason: 'cancelled' })
+    expect(io.written).toBeNull()
+  })
+
+  it('refuses a payload that is not a backup — the renderer is not trusted', async () => {
+    const io = fileIO()
+    const result = await exportBackup(io, { version: 1, customDevices: 'nope', suites: [] })
+
+    expect(result.ok).toBe(false)
+    expect(io.written).toBeNull()
+  })
+
+  it('reports a failed write instead of throwing at the renderer', async () => {
+    const result = await exportBackup(
+      fileIO({
+        write: async () => {
+          throw new Error('disk full')
+        }
+      }),
+      sampleBackup()
+    )
+    expect(result).toEqual({ ok: false, reason: 'failed', message: 'disk full' })
+  })
+})
+
+describe('importBackup', () => {
+  it('returns the validated document', async () => {
+    const result = await importBackup(fileIO())
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.backup).toEqual(sampleBackup())
+    expect(result.path).toBe('C:/tmp/backup.json')
+  })
+
+  it('reports a dismissed dialog as cancelled', async () => {
+    expect(await importBackup(fileIO({ showOpen: async () => null }))).toEqual({
+      ok: false,
+      reason: 'cancelled'
+    })
+  })
+
+  it('refuses a file that is not JSON', async () => {
+    const result = await importBackup(fileIO({ read: async () => 'not json at all' }))
+    expect(result).toMatchObject({ ok: false, reason: 'invalid' })
+  })
+
+  it('refuses a JSON file that is not a backup', async () => {
+    const result = await importBackup(fileIO({ read: async () => '{"hello":"world"}' }))
+    expect(result).toMatchObject({ ok: false, reason: 'invalid' })
+  })
+
+  it('refuses a file too large to be a backup, without reading it', async () => {
+    let read = false
+    const result = await importBackup(
+      fileIO({
+        size: async () => MAX_BACKUP_BYTES + 1,
+        read: async () => {
+          read = true
+          return ''
+        }
+      })
+    )
+    expect(result).toMatchObject({ ok: false, reason: 'invalid' })
+    expect(read).toBe(false)
+  })
+
+  it('reports an unreadable file as a failure', async () => {
+    const result = await importBackup(
+      fileIO({
+        read: async () => {
+          throw new Error('permission denied')
+        }
+      })
+    )
+    expect(result).toEqual({ ok: false, reason: 'failed', message: 'permission denied' })
   })
 })

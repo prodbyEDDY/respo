@@ -7,6 +7,7 @@
  * lives somewhere a unit test can reach it.
  */
 
+import { slugify } from './custom-devices'
 import { DEFAULT_ACTIVE_DEVICE_IDS } from './deviceCatalog'
 import type { ThemeSource } from './ipc'
 import type { DeviceSpec } from './types'
@@ -48,6 +49,22 @@ export type PersistedState = {
 
 export const DEFAULT_SUITE_ID = 'default'
 export const DEFAULT_SUITE_NAME = 'Default'
+
+/**
+ * A stable, readable id for a new suite, distinct from everything `taken`.
+ *
+ * Derived from the name for the same reason device ids are: a document someone
+ * exports and reads should say `suite-marketing-site`, not a uuid.
+ */
+export function makeSuiteId(name: string, taken: ReadonlySet<string>): string {
+  const base = `suite-${slugify(name, 'suite')}`
+  if (!taken.has(base)) return base
+  for (let n = 2; n < 1000; n += 1) {
+    const candidate = `${base}-${n}`
+    if (!taken.has(candidate)) return candidate
+  }
+  return `${base}-${Date.now()}`
+}
 
 /** Guard rails for anything read back off disk. Same spirit as `main/validate`. */
 const MAX_DEVICES = 64

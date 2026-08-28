@@ -4,6 +4,7 @@ import {
   DevicePhoneMobileIcon,
   DeviceTabletIcon,
   PencilSquareIcon,
+  PlusCircleIcon,
   TrashIcon
 } from '@heroicons/react/24/outline'
 import { deviceTypeOf, isRotatable } from '@shared/custom-devices'
@@ -22,6 +23,8 @@ export type DeviceCardProps = {
   device: DeviceSpec
   /** Whether the device is part of the suite the canvas is showing. */
   inSuite: boolean
+  /** Put the device in the active suite, or take it out. One click, either way. */
+  onToggleSuite: () => void
   /** Edit/delete controls. Absent for catalog devices, which are read-only. */
   onEdit?: () => void
   onDelete?: () => void
@@ -45,6 +48,7 @@ function Tag({ children }: { children: React.ReactNode }): React.JSX.Element {
 export function DeviceCard({
   device,
   inSuite,
+  onToggleSuite,
   onEdit,
   onDelete
 }: DeviceCardProps): React.JSX.Element {
@@ -55,9 +59,11 @@ export function DeviceCard({
   return (
     <li
       data-device-id={device.id}
+      data-in-suite={inSuite ? 'true' : 'false'}
       className={cn(
-        'group flex items-center gap-3 rounded-lg border border-border bg-card px-3 py-2.5',
-        'shadow-hairline transition-colors duration-150 ease-out hover:border-primary/40'
+        'group flex items-center gap-3 rounded-lg border bg-card px-3 py-2.5',
+        'shadow-hairline transition-colors duration-150 ease-out hover:border-primary/40',
+        inSuite ? 'border-primary/30' : 'border-border'
       )}
     >
       <Icon aria-hidden="true" className="size-5 shrink-0 text-muted-foreground" />
@@ -65,17 +71,6 @@ export function DeviceCard({
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
           <h4 className="truncate text-caption font-medium text-foreground">{device.name}</h4>
-          {inSuite ? (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <CheckCircleIcon
-                  aria-label="On the canvas"
-                  className="size-3.5 shrink-0 text-primary"
-                />
-              </TooltipTrigger>
-              <TooltipContent>On the canvas in the current suite</TooltipContent>
-            </Tooltip>
-          ) : null}
         </div>
         <div className="mt-0.5 flex flex-wrap items-center gap-1">
           <span className="text-micro tabular-nums text-muted-foreground">
@@ -87,41 +82,69 @@ export function DeviceCard({
         </div>
       </div>
 
-      {editable ? (
-        <div className="flex shrink-0 items-center gap-0.5">
-          {onEdit === undefined ? null : (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label={`Edit ${device.name}`}
-                  onClick={onEdit}
-                >
-                  <PencilSquareIcon />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Edit</TooltipContent>
-            </Tooltip>
-          )}
-          {onDelete === undefined ? null : (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label={`Delete ${device.name}`}
-                  onClick={onDelete}
-                  className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                >
-                  <TrashIcon />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Delete</TooltipContent>
-            </Tooltip>
-          )}
-        </div>
-      ) : null}
+      <div className="flex shrink-0 items-center gap-0.5">
+        {/*
+          Suite membership, as one control on the card itself. The state and the
+          action are the same button: the icon says whether the device is on the
+          canvas, and clicking it is what puts it there or takes it away.
+        */}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              role="switch"
+              aria-checked={inSuite}
+              aria-label={
+                inSuite ? `Remove ${device.name} from the suite` : `Add ${device.name} to the suite`
+              }
+              onClick={onToggleSuite}
+              className={cn(inSuite ? 'text-primary hover:text-primary' : 'text-muted-foreground')}
+            >
+              {inSuite ? <CheckCircleIcon /> : <PlusCircleIcon />}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            {inSuite ? 'On the canvas — click to remove' : 'Add to the current suite'}
+          </TooltipContent>
+        </Tooltip>
+
+        {editable ? (
+          <>
+            {onEdit === undefined ? null : (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={`Edit ${device.name}`}
+                    onClick={onEdit}
+                  >
+                    <PencilSquareIcon />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Edit</TooltipContent>
+              </Tooltip>
+            )}
+            {onDelete === undefined ? null : (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={`Delete ${device.name}`}
+                    onClick={onDelete}
+                    className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                  >
+                    <TrashIcon />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Delete</TooltipContent>
+              </Tooltip>
+            )}
+          </>
+        ) : null}
+      </div>
     </li>
   )
 }

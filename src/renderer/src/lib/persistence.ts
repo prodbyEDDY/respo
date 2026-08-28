@@ -1,3 +1,5 @@
+import type { RespoBackupV1 } from '@shared/backup'
+import type { BackupExportResult, BackupImportResult } from '@shared/ipc'
 import type { PersistedState } from '@shared/persistence-types'
 import { ipcBridge } from './ipc'
 
@@ -27,4 +29,33 @@ export function savePersistedState(patch: Partial<PersistedState>): void {
   void bridge.invoke('store:save', patch).catch((error: unknown) => {
     console.error('store:save failed', error)
   })
+}
+
+/** What a backup round trip reports when there is no main process to ask. */
+const NO_BRIDGE = 'Backups are only available in the Respo app.'
+
+/**
+ * Hand a backup to main, which puts a save dialog in front of the user and
+ * writes the file. Awaited, unlike `savePersistedState`: the user is standing
+ * in front of a dialog and is owed an answer.
+ */
+export async function exportBackupFile(backup: RespoBackupV1): Promise<BackupExportResult> {
+  const bridge = ipcBridge()
+  if (bridge === null) return { ok: false, reason: 'failed', message: NO_BRIDGE }
+  try {
+    return await bridge.invoke('backup:export', backup)
+  } catch (error) {
+    return { ok: false, reason: 'failed', message: String(error) }
+  }
+}
+
+/** The other direction: main opens a file and validates it before we see it. */
+export async function importBackupFile(): Promise<BackupImportResult> {
+  const bridge = ipcBridge()
+  if (bridge === null) return { ok: false, reason: 'failed', message: NO_BRIDGE }
+  try {
+    return await bridge.invoke('backup:import')
+  } catch (error) {
+    return { ok: false, reason: 'failed', message: String(error) }
+  }
 }

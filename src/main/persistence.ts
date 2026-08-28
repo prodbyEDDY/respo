@@ -7,7 +7,11 @@
  * through themes costs one file write instead of dozens.
  */
 
+import { dialog, type BrowserWindow } from 'electron'
+import { readFile, stat, writeFile } from 'node:fs/promises'
 import ElectronStore from 'electron-store'
+import { validateBackup } from '@shared/backup'
+import type { BackupExportResult, BackupImportResult } from '@shared/ipc'
 import {
   defaultPersistedState,
   mergePersistedState,
@@ -146,4 +150,133 @@ export function createElectronStoreBackend(): PersistenceBackend {
     get: (key) => store.get(key),
     set: (key, value) => store.set(key, value)
   }
+}
+
+/* ---------------------------------------------------------------------------
+   Backup files.
+
+   The other half of "the renderer never writes disk": import and export are the
+   only places Respo touches a path the user chose, and both of them live here,
+   behind a system dialog. The renderer sends a value and receives a value; it
+   never learns a path it did not already see in the dialog.
+   --------------------------------------------------------------------------- */
+
+/** No plausible backup is anywhere near this. Enough to refuse a decoy. */
+export const MAX_BACKUP_BYTES = 4 * 1024 * 1024
+
+const BACKUP_FILTERS = [
+  { name: 'Respo backup', extensions: ['json'] },
+  { name: 'All files', extensions: ['*'] }
+]
+
+/** `respo-devices-2026-08-28.json` — sortable, and obvious a year later. */
+function defaultBackupName(now: Date = new Date()): string {
+  const pad = (value: number): string => String(value).padStart(2, '0')
+  const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
+  return `respo-devices-${stamp}.json`
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+/**
+ * The dialog and filesystem calls, behind an interface.
+ *
+ * Not for the production path — that is the default below — but so the failure
+ * handling, which is the part that has to be right, is reachable by a unit test
+ * without a real window or a real disk.
+ */
+export interface BackupFileIO {
+  showSave(defaultName: string): Promise<string | null>
+  showOpen(): Promise<string | null>
+  read(path: string): Promise<string>
+  size(path: string): Promise<number>
+  write(path: string, contents: string): Promise<void>
+}
+
+export function createBackupFileIO(window: BrowserWindow | null): BackupFileIO {
+  return {
+    async showSave(defaultName) {
+      const result = await (window === null
+        ? dialog.showSaveDialog({ defaultPath: defaultName, filters: BACKUP_FILTERS })
+        : dialog.showSaveDialog(window, { defaultPath: defaultName, filters: BACKUP_FILTERS }))
+      return result.canceled || result.filePath === '' ? null : result.filePath
+    },
+    async showOpen() {
+      const options = { properties: ['openFile' as const], filters: BACKUP_FILTERS }
+      const result = await (window === null
+        ? dialog.showOpenDialog(options)
+        : dialog.showOpenDialog(window, options))
+      return result.canceled ? null : (result.filePaths[0] ?? null)
+    },
+    read: (path) => readFile(path, 'utf8'),
+    size: async (path) => (await stat(path)).size,
+    write: (path, contents) => writeFile(path, contents, 'utf8')
+  }
+}
+
+/**
+ * Write a backup the renderer handed over to a file the user picks.
+ *
+ * Validated here rather than trusted: `store:save` is not the only door into
+ * this process, and a payload that reaches the disk is exactly the one that
+ * must not be taken on the renderer's word (CLAUDE.md §6).
+ */
+export async function exportBackup(io: BackupFileIO, value: unknown): Promise<BackupExportResult> {
+  const validated = validateBackup(value)
+  if (!validated.ok) return { ok: false, reason: 'failed', message: validated.error }
+
+  let path: string | null
+  try {
+    path = await io.showSave(defaultBackupName())
+  } catch (error) {
+    return { ok: false, reason: 'failed', message: messageOf(error) }
+  }
+  if (path === null) return { ok: false, reason: 'cancelled' }
+
+  try {
+    // Indented: a backup is a file a person may well open and read.
+    await io.write(path, `${JSON.stringify(validated.backup, null, 2)}\n`)
+  } catch (error) {
+    return { ok: false, reason: 'failed', message: messageOf(error) }
+  }
+
+  return { ok: true, path }
+}
+
+/** Read a backup the user picks, refusing anything that is not one. */
+export async function importBackup(io: BackupFileIO): Promise<BackupImportResult> {
+  let path: string | null
+  try {
+    path = await io.showOpen()
+  } catch (error) {
+    return { ok: false, reason: 'failed', message: messageOf(error) }
+  }
+  if (path === null) return { ok: false, reason: 'cancelled' }
+
+  let contents: string
+  try {
+    // Sized before it is read: the dialog accepts any file, and a multi-gigabyte
+    // one picked by mistake must not be pulled into memory to find that out.
+    const bytes = await io.size(path)
+    if (bytes > MAX_BACKUP_BYTES) {
+      return { ok: false, reason: 'invalid', message: 'That file is too large to be a backup.' }
+    }
+    contents = await io.read(path)
+  } catch (error) {
+    return { ok: false, reason: 'failed', message: messageOf(error) }
+  }
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(contents)
+  } catch {
+    return { ok: false, reason: 'invalid', message: 'The file is not valid JSON.' }
+  }
+
+  const validated = validateBackup(parsed)
+  if (!validated.ok) return { ok: false, reason: 'invalid', message: validated.error }
+
+  return { ok: true, backup: validated.backup, path }
 }

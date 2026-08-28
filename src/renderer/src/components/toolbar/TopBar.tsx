@@ -12,6 +12,7 @@ import {
   RectangleGroupIcon,
   SunIcon
 } from '@heroicons/react/24/outline'
+import { SuiteSelector } from '@renderer/components/device-manager/SuiteSelector'
 import { Button } from '@renderer/components/ui/button'
 import {
   DropdownMenu,
@@ -187,6 +188,7 @@ export function TopBar(): React.JSX.Element {
       <NavControls />
       <AddressBar />
       <div className="flex items-center gap-1">
+        <SuiteSelector />
         <DeviceLibraryButton />
         <SyncChip />
         <IconButton label="Rotate all devices" onClick={rotateAll}>

@@ -211,12 +211,20 @@ export function validateDraft(draft: DeviceDraft, options: ValidateDraftOptions)
 /** Ids of user devices are namespaced, so one can never shadow a catalog entry. */
 export const CUSTOM_ID_PREFIX = 'custom-'
 
-function slug(name: string): string {
+/**
+ * A readable, url-safe stem for an id. `fallback` is what an entirely
+ * unrepresentable name (emoji, another script) collapses to.
+ */
+export function slugify(name: string, fallback: string): string {
   const cleaned = name
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
-  return cleaned === '' ? 'device' : cleaned.slice(0, 40)
+  return cleaned === '' ? fallback : cleaned.slice(0, 40)
+}
+
+function slug(name: string): string {
+  return slugify(name, 'device')
 }
 
 /**
