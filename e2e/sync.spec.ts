@@ -1,12 +1,27 @@
-import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test'
+import {
+  test,
+  expect,
+  _electron as electron,
+  type ElectronApplication,
+  type Page
+} from '@playwright/test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { ownProfile } from './profile'
 import { PROBE_URL } from './probe'
 
-/** The one channel the zoom spec writes, as the page sees it. */
-type SaveInvoke = (channel: 'store:save', patch: unknown) => Promise<void>
+/**
+ * The two channels this spec drives directly, as the page sees them.
+ *
+ * Both are the ones the UI itself uses: seeding a suite is a `store:save`, and
+ * electing a lead is the `sync:set-lead` a hover ends in.
+ */
+type RespoInvoke = {
+  (channel: 'store:save', patch: unknown): Promise<void>
+  (channel: 'sync:set-lead', deviceId: string | null): Promise<void>
+}
 
 const ROOT = resolve(__dirname, '..')
 const MAIN_ENTRY = resolve(ROOT, 'out', 'main', 'index.js')
@@ -17,14 +32,51 @@ const CLICK_URL = pathToFileURL(resolve(__dirname, 'fixtures', 'click.html')).hr
 /** The five default devices each get one view. */
 const DEVICE_COUNT = 5
 
+/** The first device of the default suite — the one every view list starts with. */
+const FIRST_DEVICE_ID = 'iphone-15-pro'
+
+/**
+ * A profile of this spec's own (see `ownProfile`).
+ *
+ * Mirroring is *persisted state*: the master switch and the per-device mutes
+ * are restored into `SyncEngine` before the first view exists (`main/index.ts`),
+ * and a session that left mirroring off makes every assertion here fail with
+ * the followers standing still. This is the whole reason the two tests below
+ * were flaky.
+ */
+const userDataDir = ownProfile('sync')
+
 function launch(startUrl: string = SCROLL_URL): Promise<ElectronApplication> {
   return electron.launch({
-    args: [MAIN_ENTRY],
+    args: [MAIN_ENTRY, `--user-data-dir=${userDataDir}`],
     env: {
       ...(process.env as Record<string, string>),
       RESPO_START_URL: startUrl
     }
   })
+}
+
+/**
+ * Make `deviceId` the lead, and do not come back until main agrees.
+ *
+ * The lead is a *live election*, not a constant: main seeds it with the first
+ * view that registered, and from then on it is whatever the pointer last
+ * touched — a frame's `mouseenter` elects it, and the canvas losing the pointer
+ * clears it altogether (`Canvas.tsx`). A test that dispatches into one view
+ * while assuming that seed still stands is assuming something nothing in the
+ * test owns.
+ *
+ * So the election is made explicitly, through the same channel and the same
+ * validation the hover ends in, and *awaited*: `sync:set-lead` is an
+ * `ipcMain.handle`, so the resolved promise means `SyncEngine.setLead` has
+ * already run. No sleep, and nothing left to race.
+ */
+async function electLead(page: Page, deviceId: string): Promise<void> {
+  await page.waitForFunction(() => 'respo' in window)
+  await page.evaluate(async (id: string) => {
+    const respo = (window as unknown as { respo: { invoke: RespoInvoke } }).respo
+    await respo.invoke('sync:set-lead', id)
+  }, deviceId)
 }
 
 /**
@@ -133,9 +185,12 @@ async function waitForViews(app: ElectronApplication, url: string): Promise<numb
 test('scrolling the lead scrolls every follower to the same point in the document', async () => {
   const app = await launch()
   try {
-    await app.firstWindow()
+    const page = await app.firstWindow()
     const ids = await waitForViews(app, SCROLL_URL)
     const lead = ids[0] as number
+    // Ids are handed out in creation order, so `ids[0]` is the first device of
+    // the default suite. Say so out loud rather than inheriting the seed.
+    await electLead(page, FIRST_DEVICE_ID)
 
     // The device preload is input capture, not a bridge: a page must not be
     // able to see it or anything it uses (spec §7a).
@@ -227,19 +282,19 @@ test('scrolling the lead scrolls every follower to the same point in the documen
 test('a mirrored click lands in the same place at 50% canvas zoom', async () => {
   const suite = ['iphone-15-pro', 'pixel-8', 'ipad-mini', 'desktop-1440']
 
-  // Its own profile, seeded through the same channel the UI writes: the zoom
-  // this test leaves behind is remembered per origin by the session, and the
-  // default profile is a real user's.
-  const userDataDir = mkdtempSync(join(tmpdir(), 'respo-sync-'))
+  // A profile of its own even within this spec: the zoom this test leaves
+  // behind is remembered per origin by the session, and the other two tests
+  // here open the same fixtures at 100%.
+  const zoomProfile = mkdtempSync(join(tmpdir(), 'respo-sync-zoom-'))
   const seed = await electron.launch({
-    args: [MAIN_ENTRY, `--user-data-dir=${userDataDir}`],
+    args: [MAIN_ENTRY, `--user-data-dir=${zoomProfile}`],
     env: { ...(process.env as Record<string, string>), RESPO_START_URL: CLICK_URL }
   })
   try {
     const page = await seed.firstWindow()
     await page.waitForFunction(() => 'respo' in window)
     await page.evaluate(async (deviceIds: string[]) => {
-      const respo = (window as unknown as { respo: { invoke: SaveInvoke } }).respo
+      const respo = (window as unknown as { respo: { invoke: RespoInvoke } }).respo
       await respo.invoke('store:save', {
         suites: [{ id: 'default', name: 'Default', deviceIds }]
       })
@@ -250,7 +305,7 @@ test('a mirrored click lands in the same place at 50% canvas zoom', async () => 
   }
 
   const app = await electron.launch({
-    args: [MAIN_ENTRY, `--user-data-dir=${userDataDir}`],
+    args: [MAIN_ENTRY, `--user-data-dir=${zoomProfile}`],
     env: { ...(process.env as Record<string, string>), RESPO_START_URL: CLICK_URL }
   })
   try {
@@ -298,8 +353,11 @@ test('a mirrored click lands in the same place at 50% canvas zoom', async () => 
     // renderer still owns, since the page itself is a native view over the top.
     await leadFrame.hover({ position: { x: 4, y: 4 } })
     await expect(leadFrame).toHaveAttribute('data-lead', 'true')
-    // The election is coalesced onto an animation frame before it travels.
-    await page.waitForTimeout(250)
+    // The ring is the *renderer* agreeing; the election itself is coalesced onto
+    // an animation frame before it travels. Say the same thing again down the
+    // same channel and wait for main to answer, rather than sleeping for as
+    // long as a frame is expected to take.
+    await electLead(page, FIRST_DEVICE_ID)
 
     // Off-centre on purpose: a click mirrored at the wrong scale lands at a
     // visibly different fraction (or off the page entirely), and the middle of
@@ -341,16 +399,17 @@ test('a mirrored click lands in the same place at 50% canvas zoom', async () => 
     }
   } finally {
     await app.close()
-    rmSync(userDataDir, { recursive: true, force: true })
+    rmSync(zoomProfile, { recursive: true, force: true })
   }
 })
 
 test('clicking a link on the lead navigates every follower', async () => {
   const app = await launch()
   try {
-    await app.firstWindow()
+    const page = await app.firstWindow()
     const ids = await waitForViews(app, SCROLL_URL)
     const lead = ids[0] as number
+    await electLead(page, FIRST_DEVICE_ID)
 
     // (50, 50) is inside the fixture's link in every device viewport: it is
     // full width and 20vh tall, and the smallest device here is 852px high.
