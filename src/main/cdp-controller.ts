@@ -21,6 +21,41 @@ export interface CdpTarget {
   isDestroyed(): boolean
 }
 
+/** `Input.dispatchMouseEvent` parameters, in the target's own CSS pixels. */
+export type MouseInput = {
+  type: 'mousePressed' | 'mouseReleased' | 'mouseMoved'
+  x: number
+  y: number
+  button: 'left' | 'middle' | 'right' | 'none'
+  /** Bitmask of the buttons held *after* this event (CDP's `buttons`). */
+  buttons: number
+  clickCount: number
+}
+
+/** `Input.dispatchKeyEvent` parameters. */
+export type KeyInput = {
+  type: 'keyDown' | 'keyUp'
+  key: string
+  code: string
+  modifiers: number
+  /** Present only for a printable key — it is what actually inserts a glyph. */
+  text?: string
+  windowsVirtualKeyCode?: number
+}
+
+/**
+ * The input side of a CDP session, as `SyncEngine` needs it.
+ *
+ * Structural for the same reason `CdpDebugger` is: the mirroring logic is
+ * unit-tested against a recording double, not a browser.
+ */
+export interface SyncDispatcher {
+  dispatchMouse(target: CdpTarget, params: MouseInput): void
+  dispatchKey(target: CdpTarget, params: KeyInput): void
+  /** Scroll to a fraction of the document's own scrollable distance. */
+  scrollToRatio(target: CdpTarget, ratioX: number, ratioY: number): void
+}
+
 /** Chrome DevTools Protocol version. One attach per view, for its whole life. */
 const PROTOCOL_VERSION = '1.3'
 
@@ -141,6 +176,52 @@ export class CDPController {
     }
   }
 
+  /**
+   * Replay one mouse event on a view.
+   *
+   * Fire-and-forget: input mirroring runs at interaction rate, and awaiting
+   * every dispatch would serialize the followers behind the slowest of them.
+   */
+  dispatchMouse(target: CdpTarget, params: MouseInput): void {
+    if (!this.live(target)) return
+    void this.send(target, 'Input.dispatchMouseEvent', params)
+  }
+
+  /** Replay one key event on a view. Fire-and-forget, as above. */
+  dispatchKey(target: CdpTarget, params: KeyInput): void {
+    if (!this.live(target)) return
+    void this.send(target, 'Input.dispatchKeyEvent', params)
+  }
+
+  /**
+   * Put a view at the same *proportion* of its document as the lead.
+   *
+   * Absolute pixel offsets would be wrong: the same page is taller on a phone
+   * than on a desktop, so 800px down is a different place in the content. The
+   * ratio is what the two viewports actually have in common (spec §4.2).
+   *
+   * `Runtime.evaluate` rather than a synthesized wheel: a wheel would animate,
+   * land somewhere else, and then be corrected by the next frame's event.
+   */
+  scrollToRatio(target: CdpTarget, ratioX: number, ratioY: number): void {
+    if (!this.live(target)) return
+    // The ratios are finite and clamped before they get here; they are
+    // interpolated as plain number literals, so nothing page-controlled ever
+    // becomes part of this expression.
+    const expression =
+      `(()=>{const e=document.scrollingElement||document.documentElement;` +
+      `if(!e)return;` +
+      `const mx=Math.max(0,e.scrollWidth-e.clientWidth),my=Math.max(0,e.scrollHeight-e.clientHeight);` +
+      `window.scrollTo(${ratioX}*mx,${ratioY}*my);})()`
+
+    void this.send(target, 'Runtime.evaluate', {
+      expression,
+      returnByValue: false,
+      awaitPromise: false,
+      userGesture: false
+    })
+  }
+
   /** Detach on purpose (view going away). Never throws, never re-attaches. */
   detachSafe(target: CdpTarget): void {
     const session = this.sessions.get(target.id)
@@ -192,6 +273,16 @@ export class CDPController {
     // The emulation lives in the session that just died; put it back.
     const device = session.device
     if (device !== null) void this.applyDevice(session.target, device)
+  }
+
+  /**
+   * Whether a command is worth sending at all. Input mirroring runs at
+   * interaction rate, and a view torn down mid-gesture would otherwise turn
+   * every remaining event into a logged failure.
+   */
+  private live(target: CdpTarget): boolean {
+    if (target.isDestroyed()) return false
+    return this.sessions.get(target.id)?.attached ?? false
   }
 
   /** Best-effort CDP call: reports failure instead of propagating it. */

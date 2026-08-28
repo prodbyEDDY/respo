@@ -1,12 +1,16 @@
 import { useEffect, useMemo, useState } from 'react'
+import { DeviceManagerView } from '@renderer/components/device-manager/DeviceManagerView'
 import { Canvas } from '@renderer/components/previewer/Canvas'
 import { TopBar } from '@renderer/components/toolbar/TopBar'
 import { TooltipProvider } from '@renderer/components/ui/tooltip'
 import { ipcBridge } from '@renderer/lib/ipc'
 import { createLayoutTelemetry, type LayoutTelemetry } from '@renderer/lib/layout-telemetry'
+import { loadPersistedState } from '@renderer/lib/persistence'
 import { useDevices } from '@renderer/stores/devices'
 import { applyRotation, useLayout } from '@renderer/stores/layout'
 import { attachNavigationBridge, useNavigation } from '@renderer/stores/navigation'
+import { useSettings } from '@renderer/stores/settings'
+import { useSync } from '@renderer/stores/sync'
 
 /**
  * Main owns the start url (CLI/deep-link argument, or the default) and has
@@ -38,6 +42,38 @@ function useStartUrl(): string | null {
 }
 
 /**
+ * Pull the saved document out of main and install it in the stores.
+ *
+ * Returns `false` until that has happened, which is what keeps the first
+ * `views:sync-devices` from being spent on the default suite: creating five
+ * views only to tear them down a round trip later is visible, and expensive.
+ * Outside Electron there is nothing to load, so the gate opens immediately.
+ */
+function usePersistedState(): boolean {
+  const [hydrated, setHydrated] = useState(false)
+
+  useEffect(() => {
+    let live = true
+    void loadPersistedState().then((state) => {
+      if (!live) return
+      if (state !== null) {
+        useSettings.getState().hydrate(state.ui.theme)
+        useDevices.getState().hydrate(state)
+        useSync.getState().hydrate(state.sync)
+        useLayout.getState().hydrateRotation(state.rotated)
+      }
+      setHydrated(true)
+    })
+
+    return () => {
+      live = false
+    }
+  }, [])
+
+  return hydrated
+}
+
+/**
  * One instrument per window, not per mount: it must survive StrictMode's
  * double-invoke, and its reporting interval outlives any component.
  */
@@ -51,7 +87,9 @@ function devTelemetry(): LayoutTelemetry | null {
 function App(): React.JSX.Element {
   const active = useDevices((s) => s.active)
   const rotated = useLayout((s) => s.rotated)
+  const view = useLayout((s) => s.view)
   const startUrl = useStartUrl()
+  const hydrated = usePersistedState()
 
   // Rotation is expressed as a device spec with its sides swapped, so it flows
   // through the existing path: the frame gets the new box, and main re-runs
@@ -67,12 +105,19 @@ function App(): React.JSX.Element {
   // view manager reuses the views that stayed and loads the current url into
   // any device that just joined.
   useEffect(() => {
+    if (!hydrated) return
     const bridge = ipcBridge()
     if (bridge === null) return
 
     void bridge.invoke('views:sync-devices', [...devices]).catch((error: unknown) => {
       console.error('failed to sync device views', error)
     })
+  }, [devices, hydrated])
+
+  // A device that left the canvas must not keep a load state — or the address
+  // bar, if it was the view the bar was following.
+  useEffect(() => {
+    useNavigation.getState().pruneDevices(devices.map((d) => d.id))
   }, [devices])
 
   // Point every view at the start url. It arrives from main a round trip after
@@ -82,13 +127,35 @@ function App(): React.JSX.Element {
     useNavigation.getState().navigate(startUrl)
   }, [startUrl])
 
+  // Take the device views off the screen while another surface has the window.
+  //
+  // They are native views composited above everything the renderer draws, so
+  // nothing can cover them — but main hides any device the renderer does not
+  // report a rect for, and an empty canvas is exactly that statement. The views
+  // stay alive (and keep their pages) and come back when the canvas does.
+  useEffect(() => {
+    if (view === 'canvas') return
+    const bridge = ipcBridge()
+    if (bridge === null) return
+
+    void bridge
+      .invoke('views:set-layout', [], { x: 0, y: 0, width: 0, height: 0 })
+      .catch((error: unknown) => {
+        console.error('failed to hide device views', error)
+      })
+  }, [view])
+
   return (
     <TooltipProvider>
       <div className="flex h-full flex-col bg-background">
         <TopBar />
 
         <div className="min-h-0 flex-1">
-          <Canvas devices={devices} onLayoutRoundTrip={devTelemetry()?.record} />
+          {view === 'devices' ? (
+            <DeviceManagerView />
+          ) : (
+            <Canvas devices={devices} onLayoutRoundTrip={devTelemetry()?.record} />
+          )}
         </div>
       </div>
     </TooltipProvider>

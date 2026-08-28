@@ -242,6 +242,9 @@
 
   body {
     @apply bg-background text-foreground;
+    /* Stated outright rather than left to preflight's default: Inter is loaded
+       by `main.tsx` and this is the rule that actually selects it. */
+    font-family: var(--font-sans);
     margin: 0;
     overflow: hidden;
     user-select: none;

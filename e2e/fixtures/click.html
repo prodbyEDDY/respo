@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <!-- Without this a mobile-emulated view lays out at Chromium's legacy 980px
+         default instead of the device's own width, and the fractions below
+         would be measured against a viewport no device here actually has. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>click fixture</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+      }
+      /* No scrollbars in any viewport: a scrollbar would take pixels off the
+         width the fractions below are measured against. */
+      body {
+        overflow: hidden;
+        background: linear-gradient(135deg, #fff, #9ab);
+      }
+    </style>
+  </head>
+  <body>
+    <script>
+      /*
+        Where the last real click landed, as a fraction of this viewport.
+
+        A fraction rather than a pixel offset because that is exactly what the
+        mirror is supposed to preserve: every device here is a different size,
+        and the same proportion of each is the only thing they can agree on.
+
+        `isTrusted` is asserted by the e2e, not filtered here: an untrusted
+        event would mean the click was synthesized inside the page rather than
+        dispatched into it, which is the failure this fixture exists to catch.
+      */
+      window.__respoClick = null
+      window.addEventListener(
+        'mousedown',
+        (event) => {
+          window.__respoClick = {
+            x: event.clientX / window.innerWidth,
+            y: event.clientY / window.innerHeight,
+            width: window.innerWidth,
+            height: window.innerHeight,
+            trusted: event.isTrusted
+          }
+        },
+        true
+      )
+    </script>
+  </body>
+</html>

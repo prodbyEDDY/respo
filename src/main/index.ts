@@ -2,9 +2,28 @@ import { app, BrowserWindow, nativeTheme } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { normalizeUrl } from '@shared/ipc'
-import { registerHandler, sendMainEvent } from './ipc'
+import { defaultPersistedState } from '@shared/persistence-types'
+import { CDPController } from './cdp-controller'
+import { registerHandler, registerInputListener, sendMainEvent } from './ipc'
+import {
+  createBackupFileIO,
+  createElectronStoreBackend,
+  createPersistence,
+  exportBackup,
+  importBackup,
+  type Persistence
+} from './persistence'
 import { installDevicePermissionHandlers, openExternalSafe } from './security'
-import { validateDeviceSpecs, validateThemeSource } from './validate'
+import { SyncEngine } from './sync-engine'
+import {
+  validateBoolean,
+  validateDeviceId,
+  validateDeviceSpecs,
+  validateLeadDeviceId,
+  validatePersistedPatch,
+  validateSyncInputBatch,
+  validateThemeSource
+} from './validate'
 import { ViewManager } from './view-manager'
 import { createElectronViewBackend } from './view-backend'
 import { createLoadStateBatcher, type LoadStateBatcher } from './load-state-batcher'
@@ -16,6 +35,8 @@ let viewManager: ViewManager | null = null
 let loadStates: LoadStateBatcher | null = null
 let perf: PerfMonitor | null = null
 let stopSpike: (() => void) | null = null
+let persistence: Persistence | null = null
+let syncEngine: SyncEngine | null = null
 
 /** Until the address bar lands, every session opens here. */
 const DEFAULT_START_URL = 'https://example.com'
@@ -63,9 +84,26 @@ function createWindow(): void {
     sendMainEvent(mainWindow.webContents, { type: 'load-state', payload })
   })
 
+  // One CDP controller for the window's views, shared with the sync engine:
+  // mirroring rides the same debugger session emulation and screenshots use
+  // (CLAUDE.md §3), so there is never a second attach.
+  const cdp = new CDPController()
+  syncEngine = new SyncEngine(cdp)
+
+  // Restore the mirroring switches here rather than from the renderer: they
+  // have to be in place before the first view registers, and the renderer only
+  // finishes hydrating after that.
+  const savedSync = persistence?.load().sync
+  if (savedSync !== undefined) {
+    syncEngine.setGlobalEnabled(savedSync.enabled)
+    for (const deviceId of savedSync.disabledDeviceIds) syncEngine.setEnabled(deviceId, false)
+  }
+
   viewManager = new ViewManager(
     createElectronViewBackend(mainWindow, {
-      canvasLayer: process.env['RESPO_CANVAS_LAYER'] !== '0'
+      canvasLayer: process.env['RESPO_CANVAS_LAYER'] !== '0',
+      cdp,
+      sync: syncEngine
     }),
     { onLoadState: (payload) => loadStates?.report(payload) }
   )
@@ -75,6 +113,11 @@ function createWindow(): void {
   })
 
   mainWindow.on('closed', () => {
+    // The window is where every patch comes from, so its last one has to land
+    // now — `before-quit` is not guaranteed to run before the process goes.
+    persistence?.flush()
+    syncEngine?.dispose()
+    syncEngine = null
     viewManager?.destroy()
     viewManager = null
     loadStates?.cancel()
@@ -127,6 +170,25 @@ function registerIpcHandlers(): void {
     nativeTheme.themeSource = validateThemeSource(source)
   })
 
+  // Disk lives entirely on this side of the boundary: the renderer reads the
+  // document once at boot and posts patches (CLAUDE.md §7).
+  registerHandler('store:load', () => persistence?.load() ?? defaultPersistedState())
+
+  registerHandler('store:save', (_event, patch) => {
+    persistence?.save(validatePersistedPatch(patch))
+  })
+
+  // Import and export are the only paths to a file the *user* names, and both
+  // of them run here: the dialog, the validation and the read/write all live in
+  // main, and the renderer only ever sees a value (CLAUDE.md §7).
+  registerHandler('backup:export', (event, backup) =>
+    exportBackup(createBackupFileIO(BrowserWindow.fromWebContents(event.sender)), backup)
+  )
+
+  registerHandler('backup:import', (event) =>
+    importBackup(createBackupFileIO(BrowserWindow.fromWebContents(event.sender)))
+  )
+
   registerHandler('views:sync-devices', (_event, devices) => {
     // Validated before the null check: a malformed payload must reject whether
     // or not a window happens to be open.
@@ -158,6 +220,28 @@ function registerIpcHandlers(): void {
   registerHandler('nav:reload', () => {
     viewManager?.reload()
   })
+
+  // Mirroring controls. All three are user gestures — a hover, a click on a
+  // toggle — so they are ordinary invokes, not part of any stream. The renderer
+  // coalesces the hover election to one call per frame before it gets here.
+  registerHandler('sync:set-lead', (_event, deviceId) => {
+    syncEngine?.setLead(validateLeadDeviceId(deviceId))
+  })
+
+  registerHandler('sync:set-enabled', (_event, deviceId, enabled) => {
+    syncEngine?.setEnabled(validateDeviceId(deviceId), validateBoolean(enabled, 'sync:set-enabled'))
+  })
+
+  registerHandler('sync:set-global', (_event, enabled) => {
+    syncEngine?.setGlobalEnabled(validateBoolean(enabled, 'sync:set-global'))
+  })
+
+  // The one-way stream from the device views. Its sender is an untrusted page,
+  // so the batch is validated (and clamped) before the engine sees any of it;
+  // anything malformed is dropped rather than thrown back at the page.
+  registerInputListener((senderId, payload) => {
+    syncEngine?.handleInput(senderId, validateSyncInputBatch(payload))
+  })
 }
 
 // This method will be called when Electron has finished
@@ -175,6 +259,12 @@ app.whenReady().then(() => {
   })
 
   if (is.dev) perf = startPerfMonitor()
+
+  // Before the first handler can be called, and before the window asks.
+  persistence = createPersistence(createElectronStoreBackend())
+  // Restore the native chrome the user left the app on; the renderer applies
+  // the same value to the DOM once it has hydrated.
+  nativeTheme.themeSource = persistence.load().ui.theme
 
   // Before the first view exists, so no page can ask for anything first.
   installDevicePermissionHandlers()
@@ -200,6 +290,12 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  // Flush first: a debounced patch from the last second of the session must
+  // reach disk before anything else starts tearing down.
+  persistence?.dispose()
+  persistence = null
+  syncEngine?.dispose()
+  syncEngine = null
   viewManager?.destroy()
   viewManager = null
   loadStates?.cancel()

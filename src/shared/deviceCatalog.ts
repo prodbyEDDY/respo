@@ -1,4 +1,4 @@
-import type { DeviceSpec } from './types'
+import type { DeviceSpec, DeviceType } from './types'
 
 /**
  * The device catalog Respo emulates.
@@ -107,6 +107,19 @@ export const DEFAULT_ACTIVE_DEVICE_IDS: readonly string[] = [
   'macbook-1280',
   'desktop-1440'
 ]
+
+/**
+ * What a hand-built device of each kind reports by default.
+ *
+ * The starting point for a custom device, and what the editor swaps in when the
+ * user changes its type — a plausible, current string they can then edit rather
+ * than an empty field they have to research.
+ */
+export const DEFAULT_USER_AGENTS: Readonly<Record<DeviceType, string>> = {
+  phone: IPHONE_UA,
+  tablet: IPAD_UA,
+  desktop: WINDOWS_UA
+}
 
 /** Look one device up. `undefined` when the id is not in the catalog. */
 export function deviceById(id: string): DeviceSpec | undefined {

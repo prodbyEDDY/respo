@@ -3,6 +3,7 @@ import type { DeviceSpec } from '@shared/types'
 import { useViewRects } from '@renderer/hooks/useViewRects'
 import { createRafBatcher } from '@renderer/lib/raf-batch'
 import { useLayout } from '@renderer/stores/layout'
+import { useSync } from '@renderer/stores/sync'
 import { DeviceFrame } from './DeviceFrame'
 
 export type CanvasProps = {
@@ -22,6 +23,40 @@ function wheelPixels(event: WheelEvent, element: HTMLElement): number {
   if (event.deltaMode === WheelEvent.DOM_DELTA_LINE) return event.deltaY * 16
   if (event.deltaMode === WheelEvent.DOM_DELTA_PAGE) return event.deltaY * element.clientHeight
   return event.deltaY
+}
+
+/**
+ * The lead election, at the moment the canvas loses the pointer.
+ *
+ * This is the *important* half of the election, not a cleanup. A device page is
+ * a native view composited over the whole window: the moment the pointer
+ * crosses onto one, the document stops receiving mouse events entirely and
+ * Chromium fires `mouseleave` on the canvas. The frames' own `mouseenter` only
+ * ever sees the header and the gaps — a pointer entering a page from the side
+ * would never reach it.
+ *
+ * So the pointer's last known position decides:
+ *
+ * - still inside the canvas → it went *into* a device. The placeholder that
+ *   view is glued to is still in the DOM at exactly that point, so hit-testing
+ *   it names the device the user is now pointing at.
+ * - outside → the pointer really left. Nothing leads.
+ */
+function electLeadOnLeave(event: React.MouseEvent<HTMLDivElement>): void {
+  const box = event.currentTarget.getBoundingClientRect()
+  const { clientX: x, clientY: y } = event
+
+  if (x < box.left || x >= box.right || y < box.top || y >= box.bottom) {
+    useSync.getState().setLead(null)
+    return
+  }
+
+  const frame = document.elementFromPoint(x, y)?.closest('[data-device-id]')
+  const deviceId = frame?.getAttribute('data-device-id')
+  // No frame under the pointer: it left through something else that overlays
+  // the canvas. Leave the election where it is rather than guessing.
+  if (deviceId === null || deviceId === undefined || deviceId === '') return
+  useSync.getState().setLead(deviceId)
 }
 
 /**
@@ -84,6 +119,7 @@ export function Canvas({ devices, onLayoutRoundTrip }: CanvasProps): React.JSX.E
       ref={containerRef}
       data-testid="canvas"
       className="h-full w-full overflow-auto overscroll-contain bg-background"
+      onMouseLeave={electLeadOnLeave}
     >
       <div className="flex flex-wrap content-start items-start gap-6 p-6">
         {devices.map((device) => (

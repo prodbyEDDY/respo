@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import type { LoadStatePayload, MainEvent, RespoApi } from '@shared/ipc'
-import { attachNavigationBridge, useNavigation } from '../navigation'
+import {
+  attachNavigationBridge,
+  selectCanGoBack,
+  selectCanGoForward,
+  useNavigation
+} from '../navigation'
 
 type BridgeMock = {
   invoke: Mock<RespoApi['invoke']>
@@ -126,6 +131,87 @@ describe('navigation store', () => {
     detach()
     bridge.emit({ type: 'load-state', payload: [payload('a', { state: 'failed' })] })
     expect(useNavigation.getState().perDevice['a']?.state).toBe('ready')
+  })
+
+  describe('pruneDevices', () => {
+    it('forgets the load state of a device that left the canvas', () => {
+      useNavigation.getState().applyLoadStates([payload('a'), payload('b')])
+      useNavigation.getState().pruneDevices(['a'])
+
+      expect(Object.keys(useNavigation.getState().perDevice)).toEqual(['a'])
+    })
+
+    it('hands the address bar to a survivor when the leading view is removed', () => {
+      useNavigation.getState().applyLoadStates([payload('a'), payload('b'), payload('c')])
+      expect(useNavigation.getState().leadDeviceId).toBe('a')
+
+      useNavigation.getState().pruneDevices(['b', 'c'])
+      expect(useNavigation.getState().leadDeviceId).toBe('b')
+    })
+
+    it('re-elects in canvas order, not in the order states happened to arrive', () => {
+      useNavigation.getState().applyLoadStates([payload('a'), payload('c'), payload('b')])
+      useNavigation.getState().pruneDevices(['b', 'c'])
+
+      expect(useNavigation.getState().leadDeviceId).toBe('b')
+    })
+
+    it('leaves no lead when the last device goes', () => {
+      useNavigation.getState().applyLoadStates([payload('a')])
+      useNavigation.getState().pruneDevices([])
+
+      expect(useNavigation.getState().leadDeviceId).toBeNull()
+      expect(useNavigation.getState().perDevice).toEqual({})
+    })
+
+    it('keeps the lead when it is still on the canvas', () => {
+      useNavigation.getState().applyLoadStates([payload('a'), payload('b')])
+      useNavigation.getState().pruneDevices(['a', 'b'])
+
+      expect(useNavigation.getState().leadDeviceId).toBe('a')
+    })
+
+    it('changes nothing when nothing left — a device joining is not a prune', () => {
+      useNavigation.getState().applyLoadStates([payload('a')])
+      const before = useNavigation.getState().perDevice
+      useNavigation.getState().pruneDevices(['a', 'b'])
+
+      expect(useNavigation.getState().perDevice).toBe(before)
+    })
+  })
+
+  describe('history selectors', () => {
+    it('say no until a device has reported', () => {
+      expect(selectCanGoBack(useNavigation.getState())).toBe(false)
+      expect(selectCanGoForward(useNavigation.getState())).toBe(false)
+    })
+
+    it('are true when any one device could take the step', () => {
+      useNavigation
+        .getState()
+        .applyLoadStates([
+          payload('a', { canGoBack: false, canGoForward: false }),
+          payload('b', { canGoBack: true, canGoForward: false })
+        ])
+
+      expect(selectCanGoBack(useNavigation.getState())).toBe(true)
+      expect(selectCanGoForward(useNavigation.getState())).toBe(false)
+    })
+
+    it('follow the newest state of a device, not the first one', () => {
+      useNavigation.getState().applyLoadStates([payload('a', { canGoBack: true })])
+      expect(selectCanGoBack(useNavigation.getState())).toBe(true)
+
+      useNavigation.getState().applyLoadStates([payload('a', { canGoBack: false })])
+      expect(selectCanGoBack(useNavigation.getState())).toBe(false)
+    })
+
+    it('forget a device that left the canvas', () => {
+      useNavigation.getState().applyLoadStates([payload('a'), payload('b', { canGoForward: true })])
+      useNavigation.getState().pruneDevices(['a'])
+
+      expect(selectCanGoForward(useNavigation.getState())).toBe(false)
+    })
   })
 
   it('subscribes once no matter how many times it is attached (StrictMode)', () => {

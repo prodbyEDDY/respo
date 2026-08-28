@@ -1,17 +1,23 @@
 import { View, WebContentsView, type BaseWindow, type WebContents } from 'electron'
-import type { LoadState, LoadStatePayload } from '@shared/ipc'
+import { join } from 'path'
+import { SYNC_CAPTURE_CHANNEL, type LoadState, type LoadStatePayload } from '@shared/ipc'
 import type { DeviceSpec, Rect } from '@shared/types'
 import { CDPController } from './cdp-controller'
 import { DEVICE_PARTITION, openExternalSafe } from './security'
+import type { SyncRegistry } from './sync-engine'
 import type { ManagedView, ReportLoadState, ViewBackend } from './view-manager'
 
 /**
  * Web preferences for every device view (spec §7a).
  *
- * No preload and no privileged bridge: everything Respo does to a page goes
- * through CDP from main, so the page itself gets nothing.
+ * The one preload is `device-view`, and it is not a bridge: it exposes nothing
+ * to the page, it only listens for input and reports it to main so the other
+ * viewports can mirror it. Everything Respo *does* to a page still goes through
+ * CDP from main. The sandbox stays on — the preload touches nothing but
+ * `ipcRenderer` and the DOM.
  */
 const DEVICE_WEB_PREFERENCES = {
+  preload: join(__dirname, '../preload/device-view.js'),
   sandbox: true,
   contextIsolation: true,
   nodeIntegration: false,
@@ -38,6 +44,34 @@ function isPrimer(url: string): boolean {
 }
 
 /**
+ * What one view could do with its own history, right now.
+ *
+ * Read on demand rather than tracked: Chromium owns the entry list, and
+ * anything this module counted would drift the first time a page pushed state.
+ *
+ * "Back" deliberately does not mean `canGoBack()`. Every view is primed with
+ * `about:blank` before emulation can be applied, so the first real page always
+ * has a previous entry — and stepping onto it would blank the canvas. A
+ * navigation the user never made is not somewhere they can go back to.
+ *
+ * Exported for its unit test; production code reaches it through `create`.
+ */
+export function readHistory(wc: WebContents): { canGoBack: boolean; canGoForward: boolean } {
+  try {
+    const history = wc.navigationHistory
+    const index = history.getActiveIndex()
+    const previous = index <= 0 ? undefined : history.getAllEntries()[index - 1]
+    return {
+      canGoBack: previous !== undefined && !isPrimer(previous.url),
+      canGoForward: history.canGoForward()
+    }
+  } catch {
+    // A view already tearing down has no history to speak of.
+    return { canGoBack: false, canGoForward: false }
+  }
+}
+
+/**
  * Translate one view's `webContents` load events into `LoadStatePayload`s.
  *
  * Every event is per-view and unbatched here on purpose: the batcher upstream
@@ -54,7 +88,12 @@ export function watchLoadState(wc: WebContents, deviceId: string, report: Report
 
   const emit = (payload: Omit<LoadStatePayload, 'deviceId'>): void => {
     if (wc.isDestroyed()) return
-    report({ deviceId, ...payload, ...(title === undefined ? {} : { title }) })
+    report({
+      deviceId,
+      ...payload,
+      ...readHistory(wc),
+      ...(title === undefined ? {} : { title })
+    })
   }
 
   /**
@@ -98,6 +137,15 @@ export function watchLoadState(wc: WebContents, deviceId: string, report: Report
     })
   })
 
+  // A same-document navigation is announced before its entry is committed, so
+  // the history read above can be one step stale. This fires after it lands and
+  // costs nothing: the batcher keeps one payload per device per turn, so a
+  // correction and the event it corrects collapse into the same message.
+  wc.on('did-navigate-in-page', (_event, url, isMainFrame) => {
+    if (isMainFrame !== true || failedThisNavigation || isPrimer(url)) return
+    emit({ state: settledState(), url })
+  })
+
   wc.on('page-title-updated', (_event, next) => {
     const url = wc.getURL()
     if (failedThisNavigation || isPrimer(url)) return
@@ -115,6 +163,14 @@ export type ElectronViewBackendOptions = {
    * composite above the whole window, and nothing in CSS can mask them.
    */
   canvasLayer?: boolean
+  /**
+   * The CDP session owner. Passed in when something outside the backend — the
+   * sync engine — needs to talk to the same sessions; otherwise the backend
+   * makes its own.
+   */
+  cdp?: CDPController
+  /** Told about every view's lifetime, so input can be mirrored into it. */
+  sync?: SyncRegistry
 }
 
 /** One `WebContentsView` per device, positioned by `ViewManager`. */
@@ -127,7 +183,8 @@ export function createElectronViewBackend(
   const views = new Set<WebContentsView>()
   const layer = useLayer ? new View() : null
   const parent = layer ?? window.contentView
-  const cdp = new CDPController()
+  const cdp = options.cdp ?? new CDPController()
+  const sync = options.sync ?? null
   let disposed = false
 
   if (layer !== null) {
@@ -166,6 +223,27 @@ export function createElectronViewBackend(
       watchLoadState(wc, device.id, report)
       const primed = cdp.attach(wc).then(() => wc.loadURL(PRIMER_URL).catch(() => undefined))
 
+      // The engine addresses this view by its `webContents` id — the same id
+      // its preload's input messages arrive under — and scales normalized
+      // coordinates against the emulated viewport.
+      sync?.registerDevice({
+        deviceId: device.id,
+        target: wc,
+        width: device.width,
+        height: device.height,
+        setCapturing: (capturing) => {
+          if (wc.isDestroyed()) return
+          wc.send(SYNC_CAPTURE_CHANNEL, capturing)
+        }
+      })
+
+      // A preload is a document's script: the copy running in the page this
+      // view just committed has not been told anything yet, and starts from
+      // its own "report everything" default. Say it again now.
+      wc.on('dom-ready', () => {
+        sync?.refreshCapture(device.id)
+      })
+
       // `emulated` is the gate every navigation waits behind, so a page is
       // never fetched before its device profile is in place.
       let emulated = primed.then(() => cdp.applyDevice(wc, device))
@@ -182,9 +260,16 @@ export function createElectronViewBackend(
         setZoomFactor(zoom: number): void {
           if (wc.isDestroyed()) return
           wc.setZoomFactor(zoom)
+          // The engine dispatches mouse events into this view, and those
+          // coordinates are read in the zoomed widget's space rather than the
+          // page's own (see `SyncRegistry.setZoom`).
+          sync?.setZoom(device.id, zoom)
         },
         applyDevice(next: DeviceSpec): void {
           if (wc.isDestroyed()) return
+          // Rotation and edited metrics change what a normalized coordinate
+          // means here, so the engine has to hear about them too.
+          sync?.updateDevice(device.id, { width: next.width, height: next.height })
           emulated = emulated.then(() => cdp.applyDevice(wc, next))
         },
         loadUrl(url: string): void {
@@ -201,7 +286,9 @@ export function createElectronViewBackend(
           })
         },
         goBack(): void {
-          if (wc.isDestroyed() || !wc.navigationHistory.canGoBack()) return
+          // The same reading the toolbar's enable state is derived from: back
+          // never means back onto the `about:blank` the view was primed with.
+          if (wc.isDestroyed() || !readHistory(wc).canGoBack) return
           wc.navigationHistory.goBack()
         },
         goForward(): void {
@@ -217,6 +304,7 @@ export function createElectronViewBackend(
         },
         dispose(): void {
           views.delete(view)
+          sync?.unregisterDevice(device.id)
           cdp.detachSafe(wc)
           parent.removeChildView(view)
           if (!wc.isDestroyed()) wc.close()

@@ -1,6 +1,13 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { deviceById } from '@shared/deviceCatalog'
 import type { DeviceSpec } from '@shared/types'
+
+const { savePersistedState } = vi.hoisted(() => ({ savePersistedState: vi.fn() }))
+vi.mock('@renderer/lib/persistence', () => ({
+  savePersistedState,
+  loadPersistedState: vi.fn()
+}))
+
 import { useDevices } from '../devices'
 import { applyRotation, MAX_ZOOM, MIN_ZOOM, useLayout, ZOOM_STEPS } from '../layout'
 
@@ -82,6 +89,7 @@ describe('layout store — rotation', () => {
   beforeEach(() => {
     useLayout.setState({ zoom: 1, rotated: {} })
     useDevices.getState().setActive([IPHONE, IPAD, DESKTOP])
+    savePersistedState.mockClear()
   })
 
   it('rotates a touch device and rotates it back', () => {
@@ -120,6 +128,38 @@ describe('layout store — rotation', () => {
     useLayout.getState().rotateAll()
 
     expect(useLayout.getState().rotated).toEqual({ [IPHONE]: true, [IPAD]: true })
+  })
+
+  it('persists the landscape devices, so a session comes back turned', () => {
+    useLayout.getState().rotate(IPHONE)
+    expect(savePersistedState).toHaveBeenCalledWith({ rotated: { [IPHONE]: true } })
+
+    useLayout.getState().rotateAll()
+    expect(savePersistedState).toHaveBeenLastCalledWith({
+      rotated: { [IPHONE]: true, [IPAD]: true }
+    })
+  })
+
+  it('writes only the exceptions: a device turned back is simply absent', () => {
+    useLayout.getState().rotate(IPHONE)
+    useLayout.getState().rotate(IPHONE)
+
+    // The store keeps the `false` — the toggle reads it — but the document
+    // would otherwise grow one dead entry per rotation, forever.
+    expect(useLayout.getState().rotated[IPHONE]).toBe(false)
+    expect(savePersistedState).toHaveBeenLastCalledWith({ rotated: {} })
+  })
+
+  it('writes nothing when a rotation was refused', () => {
+    useLayout.getState().rotate(DESKTOP)
+    expect(savePersistedState).not.toHaveBeenCalled()
+  })
+
+  it('installs the restored orientations without writing them back', () => {
+    useLayout.getState().hydrateRotation({ [IPAD]: true })
+
+    expect(useLayout.getState().rotated).toEqual({ [IPAD]: true })
+    expect(savePersistedState).not.toHaveBeenCalled()
   })
 
   it('keeps the same rotated object when nothing could be rotated', () => {

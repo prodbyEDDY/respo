@@ -6,6 +6,8 @@
  * updates travel batched over the one `MAIN_EVENT_CHANNEL`.
  */
 
+import type { RespoBackupV1 } from './backup'
+import type { PersistedState } from './persistence-types'
 import type { DeviceSpec, Rect } from './types'
 
 /**
@@ -37,10 +39,94 @@ export type LoadStatePayload = {
   title?: string
   errorCode?: number
   errorDesc?: string
+  /**
+   * This view's own history, as of this event.
+   *
+   * Optional because they are a late addition and a payload without them is
+   * still a valid one — a renderer that has not heard from a device yet simply
+   * assumes it cannot go anywhere. Back and forward act on every view at once
+   * (there is one page across many viewports), so the toolbar enables a button
+   * when *any* device could take that step.
+   */
+  canGoBack?: boolean
+  canGoForward?: boolean
 }
 
 /** Batched main -> renderer notification. One message carries many devices. */
 export type MainEvent = { type: 'load-state'; payload: LoadStatePayload[] }
+
+/**
+ * One interaction captured in a device view, in device-independent terms.
+ *
+ * Everything is normalized at the source so a 393px phone and a 1920px desktop
+ * can be described by the same numbers: positions are fractions of the
+ * viewport, scroll is a fraction of the scrollable distance. Nothing about the
+ * *page* travels with it — no text, no urls, no element identity. These
+ * payloads originate in pages Respo does not control, so the less they can
+ * carry, the less there is to abuse.
+ */
+export type InputEventPayload =
+  | { kind: 'scroll'; ratioX: number; ratioY: number }
+  | {
+      kind: 'mouse'
+      type: 'down' | 'up'
+      xNorm: number
+      yNorm: number
+      button: 'left' | 'middle' | 'right'
+    }
+  | { kind: 'key'; type: 'down' | 'up'; key: string; code: string; modifiers: number }
+
+/**
+ * device view -> main input stream. One-way (`ipcRenderer.send`) and therefore
+ * outside the invoke map, like `MAIN_EVENT_CHANNEL` — but still declared here,
+ * because no channel exists outside this module (CLAUDE.md §6).
+ *
+ * A message is always a *batch*: the device preload coalesces to one send per
+ * animation frame (CLAUDE.md §4).
+ */
+export const SYNC_INPUT_CHANNEL = 'sync:input'
+
+/**
+ * The channel's literal type. The device-view preload has to restate the string
+ * rather than import it — a sandboxed preload cannot load a shared bundle chunk
+ * — so it annotates its own copy with this and a rename here fails the build
+ * there instead of silently muting input sync.
+ */
+export type SyncInputChannel = typeof SYNC_INPUT_CHANNEL
+
+/**
+ * main -> device view: "you are (not) the input source right now".
+ *
+ * Purely an optimisation, and a safe-by-default one. Main already drops input
+ * from anything that is not the lead — that is what stops a follower scrolled
+ * by CDP from echoing back — so a view that never hears this message keeps
+ * reporting and stays correct. Hearing it lets nine followers stop spending an
+ * IPC message per frame each on input main would only throw away.
+ *
+ * Sent once per lead/enablement change, never per event (CLAUDE.md §4).
+ */
+export const SYNC_CAPTURE_CHANNEL = 'sync:capture'
+
+/** The capture channel's literal type. Same restated-constant contract. */
+export type SyncCaptureChannel = typeof SYNC_CAPTURE_CHANNEL
+
+/**
+ * The answer to a backup round trip through a system dialog.
+ *
+ * `cancelled` is not an error and must never be reported as one: dismissing a
+ * file dialog is a decision, and telling the user it failed would be a lie.
+ */
+export type BackupExportResult =
+  | { ok: true; path: string }
+  | { ok: false; reason: 'cancelled' }
+  | { ok: false; reason: 'failed'; message: string }
+
+export type BackupImportResult =
+  | { ok: true; backup: RespoBackupV1; path: string }
+  | { ok: false; reason: 'cancelled' }
+  /** The file is not a backup this build can read. `message` says which part. */
+  | { ok: false; reason: 'invalid'; message: string }
+  | { ok: false; reason: 'failed'; message: string }
 
 /** renderer -> main request/response channels. Extended by later tasks. */
 export type IpcInvokeMap = {
@@ -66,6 +152,35 @@ export type IpcInvokeMap = {
   'nav:forward': { args: []; result: void }
   'nav:reload': { args: []; result: void }
   'theme:set-source': { args: [ThemeSource]; result: void }
+  /** Read the whole persisted document, already migrated and repaired by main. */
+  'store:load': { args: []; result: PersistedState }
+  /**
+   * Post a partial update. Main merges it onto the document it holds and writes
+   * behind a debounce — the renderer never touches disk (CLAUDE.md §7).
+   */
+  'store:save': { args: [Partial<PersistedState>]; result: void }
+  /**
+   * Elect the view whose interactions drive the others, or `null` for none.
+   *
+   * Called on hover, coalesced to one message per animation frame by the
+   * renderer — a pointer crossing five frames must not cost five round trips
+   * (CLAUDE.md §4).
+   */
+  'sync:set-lead': { args: [string | null]; result: void }
+  /** Take one device in or out of mirroring. */
+  'sync:set-enabled': { args: [string, boolean]; result: void }
+  /** The master switch: off means no view mirrors anything. */
+  'sync:set-global': { args: [boolean]; result: void }
+  /**
+   * Write the document's portable half to a file the user picks.
+   *
+   * The renderer hands over the *value* and main does the dialog, the
+   * validation and the write: the renderer never touches disk (CLAUDE.md §7),
+   * and a path it could name would be a path it could choose.
+   */
+  'backup:export': { args: [RespoBackupV1]; result: BackupExportResult }
+  /** Read a backup the user picks. Main validates it before it comes back. */
+  'backup:import': { args: []; result: BackupImportResult }
 }
 
 export type IpcChannel = keyof IpcInvokeMap
@@ -83,7 +198,14 @@ const CHANNEL_REGISTRY: Record<IpcChannel, true> = {
   'nav:back': true,
   'nav:forward': true,
   'nav:reload': true,
-  'theme:set-source': true
+  'theme:set-source': true,
+  'store:load': true,
+  'store:save': true,
+  'sync:set-lead': true,
+  'sync:set-enabled': true,
+  'sync:set-global': true,
+  'backup:export': true,
+  'backup:import': true
 }
 
 export const IPC_CHANNELS: readonly IpcChannel[] = Object.keys(CHANNEL_REGISTRY) as IpcChannel[]

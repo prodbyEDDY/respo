@@ -1,8 +1,19 @@
-import { ArrowPathIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline'
+import {
+  ArrowPathIcon,
+  ArrowPathRoundedSquareIcon,
+  ExclamationTriangleIcon,
+  LinkIcon,
+  LinkSlashIcon
+} from '@heroicons/react/24/outline'
+import { isRotatable } from '@shared/custom-devices'
 import type { LoadStatePayload } from '@shared/ipc'
 import type { DeviceSpec } from '@shared/types'
 import { Button } from '@renderer/components/ui/button'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
+import { cn } from '@renderer/lib/utils'
+import { useLayout } from '@renderer/stores/layout'
 import { useNavigation } from '@renderer/stores/navigation'
+import { useSync } from '@renderer/stores/sync'
 
 export type DeviceFrameProps = {
   device: DeviceSpec
@@ -60,6 +71,71 @@ function LoadError({ state }: { state: LoadStatePayload }): React.JSX.Element {
 }
 
 /**
+ * Take one device in or out of mirroring, from its own header.
+ *
+ * The switch is per-device and instant: main stops dispatching to a muted view
+ * on the very next event, and stops listening to it as a source.
+ */
+function MirrorToggle({ deviceId }: { deviceId: string }): React.JSX.Element {
+  const muted = useSync((s) => s.disabled[deviceId] === true)
+  const toggleDevice = useSync((s) => s.toggleDevice)
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          role="switch"
+          aria-checked={!muted}
+          aria-label="Mirror interactions on this device"
+          data-mirroring={muted ? 'off' : 'on'}
+          onClick={() => toggleDevice(deviceId)}
+          className={cn(muted ? 'text-status-warn' : 'text-muted-foreground hover:text-foreground')}
+        >
+          {muted ? <LinkSlashIcon /> : <LinkIcon />}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>
+        {muted ? 'Not mirroring — click to include this device' : 'Mirroring — click to exclude'}
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
+/**
+ * Turn one device on its side, from its own header.
+ *
+ * Only rendered for a device that has a side to be turned on: a desktop monitor
+ * has one orientation, and a control that would do nothing is worse than no
+ * control. The store swaps the spec's width and height, which is what makes
+ * main re-run the CDP emulation for this view alone.
+ */
+function RotateToggle({ deviceId }: { deviceId: string }): React.JSX.Element {
+  const landscape = useLayout((s) => s.rotated[deviceId] === true)
+  const rotate = useLayout((s) => s.rotate)
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          aria-label="Rotate this device"
+          aria-pressed={landscape}
+          data-orientation={landscape ? 'landscape' : 'portrait'}
+          onClick={() => rotate(deviceId)}
+          className={cn(landscape ? 'text-primary' : 'text-muted-foreground hover:text-foreground')}
+        >
+          <ArrowPathRoundedSquareIcon />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>{landscape ? 'Back to portrait' : 'Rotate to landscape'}</TooltipContent>
+    </Tooltip>
+  )
+}
+
+/**
  * Chrome around one device: a caption, and an empty rectangle standing in for
  * the page.
  *
@@ -72,18 +148,54 @@ function LoadError({ state }: { state: LoadStatePayload }): React.JSX.Element {
  */
 export function DeviceFrame({ device, zoom, viewportRef }: DeviceFrameProps): React.JSX.Element {
   const load = useNavigation((s) => s.perDevice[device.id])
+  // A muted device drives nothing, so it never wears the lead ring — including
+  // the moment it is muted while the pointer is still resting on it.
+  const isLead = useSync((s) => s.leadDeviceId === device.id && s.disabled[device.id] !== true)
+  const setLead = useSync((s) => s.setLead)
   const width = Math.round(device.width * zoom)
   const height = Math.round(device.height * zoom)
 
   return (
-    <section className="flex flex-col gap-1" aria-label={device.name}>
-      <header className="flex items-baseline gap-2 px-0.5">
+    <section
+      className="relative flex flex-col gap-1"
+      aria-label={device.name}
+      data-lead={isLead ? 'true' : undefined}
+      // Pointing at a device is what elects it: no click, no mode, no third
+      // control to learn. The store coalesces this to one message per frame,
+      // so sweeping the pointer across the canvas costs one round trip.
+      onMouseEnter={() => setLead(device.id)}
+    >
+      {/*
+        The lead marker.
+
+        It lives 4px outside the section rather than on the viewport itself:
+        main glues the `WebContentsView` to that element's border box, so a
+        border or ring drawn there would be composited over and never seen.
+        Opacity only, 150ms (DESIGN-SYSTEM.md motion budget).
+      */}
+      <span
+        aria-hidden="true"
+        className={cn(
+          'pointer-events-none absolute -inset-1 rounded-lg border border-primary',
+          'transition-opacity duration-150 ease-out',
+          isLead ? 'opacity-100' : 'opacity-0'
+        )}
+      />
+
+      <header className="flex items-center gap-2 px-0.5">
         <h2 className="text-caption font-medium text-foreground">{device.name}</h2>
         <p className="text-micro tabular-nums text-muted-foreground">
           {device.width} × {device.height}
           {zoom === 1 ? '' : ` · ${Math.round(zoom * 100)}%`}
         </p>
         {load?.state === 'loading' ? <Spinner /> : null}
+        {/*
+          Next to the caption rather than pushed to the far edge: a 1920px
+          frame would put a right-aligned control most of a screen away from
+          the name it belongs to.
+        */}
+        <MirrorToggle deviceId={device.id} />
+        {isRotatable(device) ? <RotateToggle deviceId={device.id} /> : null}
       </header>
 
       <div

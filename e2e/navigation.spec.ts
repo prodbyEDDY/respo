@@ -46,6 +46,11 @@ test('typing a url in the address bar loads it in every device view', async () =
     const address = window.getByLabel('Address')
     await expect(address).toHaveValue(PROBE_URL)
 
+    // Nowhere to go yet. The `about:blank` every view is primed with is not a
+    // page the user was ever on, so back must not offer to step onto it.
+    await expect(window.getByLabel('Back')).toBeDisabled()
+    await expect(window.getByLabel('Forward')).toBeDisabled()
+
     await address.click()
     // Focus selects the whole url, so typing replaces it — the assertion below
     // would fail if that behaviour regressed.
@@ -69,6 +74,20 @@ test('typing a url in the address bar loads it in every device view', async () =
     // The batched `load-state` event made the whole round trip: main watched
     // five `webContents`, coalesced their events, and the renderer applied them.
     await expect(window.locator('[data-load-state="ready"]')).toHaveCount(5)
+
+    // There is a real page behind this one now, and none in front.
+    await expect(window.getByLabel('Back')).toBeEnabled()
+    await expect(window.getByLabel('Forward')).toBeDisabled()
+
+    // A url that cannot be loaded says so, briefly, and changes nothing.
+    await address.click()
+    await address.fill('http://')
+    await address.press('Enter')
+    await expect(address).toHaveAttribute('data-invalid', 'true')
+    await expect(window.locator('[data-load-state="ready"]')).toHaveCount(5)
+
+    // And it clears itself rather than becoming a state to get out of.
+    await expect(address).not.toHaveAttribute('data-invalid', 'true', { timeout: 5_000 })
   } finally {
     await app.close()
   }
