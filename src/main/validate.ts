@@ -7,9 +7,15 @@
  * back at its caller instead of reaching `ViewManager` or `nativeTheme`.
  */
 
-import type { InputEventPayload, ThemeSource } from '@shared/ipc'
-import type { PersistedState, Suite, SyncSettings } from '@shared/persistence-types'
-import type { DeviceSpec } from '@shared/types'
+import type { DockPosition, InputEventPayload, ThemeSource } from '@shared/ipc'
+import {
+  clampDockSize,
+  type DevtoolsSettings,
+  type PersistedState,
+  type Suite,
+  type SyncSettings
+} from '@shared/persistence-types'
+import type { DeviceSpec, Rect } from '@shared/types'
 
 /** More device views than a canvas could ever show is a bug or an attack. */
 const MAX_DEVICES = 64
@@ -160,8 +166,22 @@ export function validatePersistedPatch(value: unknown): Partial<PersistedState> 
   }
   if (patch['sync'] !== undefined) out.sync = validateSyncSettings(patch['sync'])
   if (patch['rotated'] !== undefined) out.rotated = validateRotated(patch['rotated'])
+  if (patch['devtools'] !== undefined) out.devtools = validateDevtoolsSettings(patch['devtools'])
 
   return out
+}
+
+/** Validate the persisted DevTools panel shape. The size is clamped, not rejected. */
+function validateDevtoolsSettings(value: unknown): DevtoolsSettings {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    fail('store:save devtools must be an object')
+  }
+  const devtools = value as Record<string, unknown>
+  const size = devtools['size']
+  if (typeof size !== 'number' || !Number.isFinite(size)) {
+    fail('store:save devtools.size must be a finite number')
+  }
+  return { dock: validateDockPosition(devtools['dock']), size: clampDockSize(size) }
 }
 
 /** Validate the per-device orientation map: `{ [deviceId]: isLandscape }`. */
@@ -306,6 +326,58 @@ export function validateSyncInputBatch(value: unknown): InputEventPayload[] {
   }
   return out
 }
+
+/** Validate a `devtools:set-dock` payload (and the persisted mirror of it). */
+export function validateDockPosition(value: unknown): DockPosition {
+  if (value !== 'bottom' && value !== 'right' && value !== 'undocked') {
+    fail("devtools:set-dock expects 'bottom', 'right' or 'undocked'")
+  }
+  return value
+}
+
+/**
+ * Validate a `devtools:close` payload: a device id, or `null` for "the dock".
+ *
+ * Not checked against the live device set — the manager ignores an id it never
+ * opened, and closing a panel that is already gone is a race, not an attack.
+ */
+export function validateOptionalDeviceId(value: unknown): string | null {
+  if (value === null) return null
+  if (!isFilledString(value) || value.length > MAX_NAME_LENGTH) {
+    fail('devtools:close expects a device id or null')
+  }
+  return value
+}
+
+/**
+ * Validate a `devtools:set-bounds` rect.
+ *
+ * A rect straight out of `getBoundingClientRect`: fractional, possibly negative
+ * while the panel animates in, and never larger than a display. It is rounded
+ * here rather than in main's hot path — `setBounds` takes integers, and a
+ * fractional one would leave a hairline of window showing through the panel.
+ */
+export function validateBounds(value: unknown): Rect {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    fail('devtools:set-bounds expects a rect')
+  }
+  const rect = value as Record<string, unknown>
+  const out: Record<'x' | 'y' | 'width' | 'height', number> = { x: 0, y: 0, width: 0, height: 0 }
+
+  for (const key of ['x', 'y', 'width', 'height'] as const) {
+    const side = rect[key]
+    if (typeof side !== 'number' || !Number.isFinite(side) || Math.abs(side) > MAX_BOUNDS) {
+      fail(`devtools:set-bounds ${key} must be a finite number within ±${MAX_BOUNDS}`)
+    }
+    out[key] = Math.round(side)
+  }
+  // A negative extent is not a small panel, it is a malformed one.
+  if (out.width < 0 || out.height < 0) fail('devtools:set-bounds extents must not be negative')
+  return out
+}
+
+/** Far outside any display arrangement, far short of an overflow. */
+const MAX_BOUNDS = 100_000
 
 /** Validate a `theme:set-source` payload. Throws on anything else. */
 export function validateThemeSource(value: unknown): ThemeSource {

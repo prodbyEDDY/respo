@@ -1,6 +1,8 @@
 import {
   ArrowPathRoundedSquareIcon,
   ArrowsPointingOutIcon,
+  ArrowTopRightOnSquareIcon,
+  Bars2Icon,
   ComputerDesktopIcon,
   EllipsisVerticalIcon,
   LinkIcon,
@@ -10,8 +12,10 @@ import {
   MoonIcon,
   PlusIcon,
   RectangleGroupIcon,
-  SunIcon
+  SunIcon,
+  ViewColumnsIcon
 } from '@heroicons/react/24/outline'
+import type { DockPosition } from '@shared/ipc'
 import { SuiteSelector } from '@renderer/components/device-manager/SuiteSelector'
 import { Button } from '@renderer/components/ui/button'
 import {
@@ -26,6 +30,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
 import { cn } from '@renderer/lib/utils'
 import { useLayout } from '@renderer/stores/layout'
+import { usePanels } from '@renderer/stores/panels'
 import { useSettings } from '@renderer/stores/settings'
 import { useSync } from '@renderer/stores/sync'
 import { AddressBar } from './AddressBar'
@@ -133,6 +138,39 @@ function ThemeToggle(): React.JSX.Element {
  * than as three more buttons in the bar: ctrl+wheel on the canvas is the
  * gesture people actually use.
  */
+/**
+ * Where DevTools opens, as a menu.
+ *
+ * The dock's own header carries the same three choices, but it only exists
+ * while something is docked — and a panel the user just moved into its own
+ * window has no header to bring it back from. This is that way back, one level
+ * off the main flow because it is a preference, not a step in any task.
+ */
+function DevtoolsDockItems(): React.JSX.Element {
+  const dock = usePanels((s) => s.dock)
+  const setDock = usePanels((s) => s.setDock)
+
+  const item = (value: DockPosition, label: string, icon: React.ReactNode): React.JSX.Element => (
+    <DropdownMenuItem
+      onSelect={() => setDock(value)}
+      className={cn(dock === value && 'text-primary')}
+    >
+      {icon}
+      {label}
+      {dock === value ? <DropdownMenuShortcut>on</DropdownMenuShortcut> : null}
+    </DropdownMenuItem>
+  )
+
+  return (
+    <>
+      <DropdownMenuLabel>DevTools</DropdownMenuLabel>
+      {item('bottom', 'Dock to bottom', <Bars2Icon />)}
+      {item('right', 'Dock to right', <ViewColumnsIcon />)}
+      {item('undocked', 'Separate window', <ArrowTopRightOnSquareIcon />)}
+    </>
+  )
+}
+
 function OverflowMenu(): React.JSX.Element {
   const zoom = useLayout((s) => s.zoom)
   const zoomIn = useLayout((s) => s.zoomIn)
@@ -162,6 +200,8 @@ function OverflowMenu(): React.JSX.Element {
           Reset zoom
           <DropdownMenuShortcut>{Math.round(zoom * 100)}%</DropdownMenuShortcut>
         </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DevtoolsDockItems />
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={() => setTheme('system')}>
           <ComputerDesktopIcon />

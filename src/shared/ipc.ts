@@ -30,6 +30,34 @@ export type ViewRect = {
 /** Mirrors Electron's `nativeTheme.themeSource`. */
 export type ThemeSource = 'light' | 'dark' | 'system'
 
+/**
+ * Where a device's DevTools opens.
+ *
+ * `bottom` and `right` are the *docked* modes: main hosts the DevTools frontend
+ * in a `WebContentsView` of its own and the renderer reserves the strip it sits
+ * in, so the canvas simply gets smaller and every frame re-measures. `undocked`
+ * is Electron's own detached window — many of those may be open at once, while
+ * there is only ever one dock.
+ */
+export type DockPosition = 'bottom' | 'right' | 'undocked'
+
+/**
+ * Everything the renderer needs to draw the DevTools chrome.
+ *
+ * Main is the authority: it is the side that knows a detached window was closed
+ * from its own title bar, or that a device left the canvas with its panel open.
+ * The renderer never guesses — every mutation answers with this, and main pushes
+ * it whenever something changes without being asked.
+ */
+export type DevtoolsStatePayload = {
+  /** The device filling the dock, or `null` when the dock is closed. */
+  dockedDeviceId: string | null
+  /** Where a panel opens. Persisted; survives a restart. */
+  dock: DockPosition
+  /** Devices with a detached DevTools window open, in the order they opened. */
+  detachedDeviceIds: string[]
+}
+
 export type LoadState = 'loading' | 'ready' | 'failed'
 
 export type LoadStatePayload = {
@@ -52,8 +80,16 @@ export type LoadStatePayload = {
   canGoForward?: boolean
 }
 
-/** Batched main -> renderer notification. One message carries many devices. */
-export type MainEvent = { type: 'load-state'; payload: LoadStatePayload[] }
+/**
+ * Batched main -> renderer notification. One `load-state` message carries many
+ * devices; the DevTools and inspect messages carry one whole state each and are
+ * only sent when something main knows about — and the renderer does not —
+ * actually changed.
+ */
+export type MainEvent =
+  | { type: 'load-state'; payload: LoadStatePayload[] }
+  | { type: 'devtools-state'; payload: DevtoolsStatePayload }
+  | { type: 'inspect-mode'; payload: { active: boolean } }
 
 /**
  * One interaction captured in a device view, in device-independent terms.
@@ -181,6 +217,26 @@ export type IpcInvokeMap = {
   'backup:export': { args: [RespoBackupV1]; result: BackupExportResult }
   /** Read a backup the user picks. Main validates it before it comes back. */
   'backup:import': { args: []; result: BackupImportResult }
+  /**
+   * Open DevTools for one device, in whatever mode `dock` currently names.
+   *
+   * Opening the dock for a second device retargets it: the DevTools frontend is
+   * a `WebContentsView` main owns, and there is exactly one of it.
+   */
+  'devtools:open': { args: [string]; result: DevtoolsStatePayload }
+  /** Close one device's DevTools, or (`null`) whatever is in the dock. */
+  'devtools:close': { args: [string | null]; result: DevtoolsStatePayload }
+  /**
+   * Where the docked panel goes, in window CSS pixels — the strip the renderer
+   * reserved, measured the same way device frames are.
+   *
+   * Sent at most once per animation frame: dragging the dock's resize handle
+   * moves this rect continuously, and a message per pointer event is exactly
+   * what CLAUDE.md §4 forbids.
+   */
+  'devtools:set-bounds': { args: [Rect]; result: void }
+  /** Move the panel between the two docked edges and a window of its own. */
+  'devtools:set-dock': { args: [DockPosition]; result: DevtoolsStatePayload }
 }
 
 export type IpcChannel = keyof IpcInvokeMap
@@ -205,7 +261,11 @@ const CHANNEL_REGISTRY: Record<IpcChannel, true> = {
   'sync:set-enabled': true,
   'sync:set-global': true,
   'backup:export': true,
-  'backup:import': true
+  'backup:import': true,
+  'devtools:open': true,
+  'devtools:close': true,
+  'devtools:set-bounds': true,
+  'devtools:set-dock': true
 }
 
 export const IPC_CHANNELS: readonly IpcChannel[] = Object.keys(CHANNEL_REGISTRY) as IpcChannel[]

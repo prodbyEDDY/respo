@@ -1,9 +1,10 @@
 import { app, BrowserWindow, nativeTheme } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
-import { normalizeUrl } from '@shared/ipc'
+import { normalizeUrl, type DevtoolsStatePayload } from '@shared/ipc'
 import { defaultPersistedState } from '@shared/persistence-types'
 import { CDPController } from './cdp-controller'
+import { DevtoolsManager } from './devtools-manager'
 import { registerHandler, registerInputListener, sendMainEvent } from './ipc'
 import {
   createBackupFileIO,
@@ -17,15 +18,18 @@ import { installDevicePermissionHandlers, openExternalSafe } from './security'
 import { SyncEngine } from './sync-engine'
 import {
   validateBoolean,
+  validateBounds,
   validateDeviceId,
   validateDeviceSpecs,
+  validateDockPosition,
   validateLeadDeviceId,
+  validateOptionalDeviceId,
   validatePersistedPatch,
   validateSyncInputBatch,
   validateThemeSource
 } from './validate'
 import { ViewManager } from './view-manager'
-import { createElectronViewBackend } from './view-backend'
+import { createDevtoolsPanelFactory, createElectronViewBackend } from './view-backend'
 import { createLoadStateBatcher, type LoadStateBatcher } from './load-state-batcher'
 import { startPerfMonitor, type PerfMonitor } from './perf'
 import { runScrollSpike } from './spike'
@@ -37,6 +41,15 @@ let perf: PerfMonitor | null = null
 let stopSpike: (() => void) | null = null
 let persistence: Persistence | null = null
 let syncEngine: SyncEngine | null = null
+let devtools: DevtoolsManager | null = null
+/**
+ * Device names, by id, as the renderer last reported them.
+ *
+ * Main has no device catalog of its own — `views:sync-devices` is the whole
+ * truth about what exists — and a DevTools window titled `iphone-15` instead of
+ * `iPhone 15` is a worse window.
+ */
+const deviceNames = new Map<string, string>()
 
 /** Until the address bar lands, every session opens here. */
 const DEFAULT_START_URL = 'https://example.com'
@@ -99,11 +112,24 @@ function createWindow(): void {
     for (const deviceId of savedSync.disabledDeviceIds) syncEngine.setEnabled(deviceId, false)
   }
 
+  // DevTools is per device, not per app: the manager holds a panel for each one
+  // that has it open, and the single dock they take turns in. The dock edge is
+  // restored here so the first panel opens where the user left the last one.
+  devtools = new DevtoolsManager({
+    createPanel: createDevtoolsPanelFactory(mainWindow),
+    dock: persistence?.load().devtools.dock ?? 'bottom',
+    deviceName: (deviceId) => deviceNames.get(deviceId),
+    onState: (state) => {
+      sendMainEvent(mainWindow.webContents, { type: 'devtools-state', payload: state })
+    }
+  })
+
   viewManager = new ViewManager(
     createElectronViewBackend(mainWindow, {
       canvasLayer: process.env['RESPO_CANVAS_LAYER'] !== '0',
       cdp,
-      sync: syncEngine
+      sync: syncEngine,
+      devtools
     }),
     { onLoadState: (payload) => loadStates?.report(payload) }
   )
@@ -118,6 +144,11 @@ function createWindow(): void {
     persistence?.flush()
     syncEngine?.dispose()
     syncEngine = null
+    // Before the views: a DevTools window outliving the canvas it belongs to
+    // would keep the app alive with nothing to debug.
+    devtools?.dispose()
+    devtools = null
+    deviceNames.clear()
     viewManager?.destroy()
     viewManager = null
     loadStates?.cancel()
@@ -158,6 +189,18 @@ function createWindow(): void {
 }
 
 /**
+ * What the DevTools channels answer with before a window exists. Nothing is
+ * open, and the persisted edge is the honest thing to report.
+ */
+function emptyDevtoolsState(): DevtoolsStatePayload {
+  return {
+    dockedDeviceId: null,
+    dock: persistence?.load().devtools.dock ?? 'bottom',
+    detachedDeviceIds: []
+  }
+}
+
+/**
  * Every handler is attached through `registerHandler`, so `@shared/ipc` stays
  * the only place a channel can be introduced.
  */
@@ -194,6 +237,13 @@ function registerIpcHandlers(): void {
     // or not a window happens to be open.
     const specs = validateDeviceSpecs(devices)
     viewManager?.syncDevices(specs)
+
+    deviceNames.clear()
+    for (const spec of specs) deviceNames.set(spec.id, spec.name)
+    // A device that left the canvas takes its DevTools with it. The backend
+    // already unregistered the views it disposed; this catches a manager that
+    // is holding a panel for a device no layout will ever mention again.
+    devtools?.retain(new Set(specs.map((spec) => spec.id)))
   })
 
   // The hot path: one call per animation frame, applied synchronously so every
@@ -234,6 +284,32 @@ function registerIpcHandlers(): void {
 
   registerHandler('sync:set-global', (_event, enabled) => {
     syncEngine?.setGlobalEnabled(validateBoolean(enabled, 'sync:set-global'))
+  })
+
+  // DevTools. All four are user gestures except `set-bounds`, which is the
+  // resize drag already coalesced to one call per animation frame by the
+  // renderer (CLAUDE.md §4). The three that change what is open answer with the
+  // whole state, so the renderer never has to guess what its click did.
+  registerHandler(
+    'devtools:open',
+    (_event, deviceId) => devtools?.openFor(validateDeviceId(deviceId)) ?? emptyDevtoolsState()
+  )
+
+  registerHandler(
+    'devtools:close',
+    (_event, deviceId) =>
+      devtools?.close(validateOptionalDeviceId(deviceId)) ?? emptyDevtoolsState()
+  )
+
+  registerHandler('devtools:set-bounds', (_event, bounds) => {
+    devtools?.setBounds(validateBounds(bounds))
+  })
+
+  registerHandler('devtools:set-dock', (_event, dock) => {
+    const next = validateDockPosition(dock)
+    // Persisted by the renderer, which owns the whole `devtools` slice of the
+    // document — main only reads it back at the next boot.
+    return devtools?.setDock(next) ?? emptyDevtoolsState()
   })
 
   // The one-way stream from the device views. Its sender is an untrusted page,
@@ -296,6 +372,8 @@ app.on('before-quit', () => {
   persistence = null
   syncEngine?.dispose()
   syncEngine = null
+  devtools?.dispose()
+  devtools = null
   viewManager?.destroy()
   viewManager = null
   loadStates?.cancel()

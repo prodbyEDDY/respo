@@ -1,6 +1,7 @@
 import {
   ArrowPathIcon,
   ArrowPathRoundedSquareIcon,
+  CodeBracketIcon,
   ExclamationTriangleIcon,
   LinkIcon,
   LinkSlashIcon
@@ -13,6 +14,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui
 import { cn } from '@renderer/lib/utils'
 import { useLayout } from '@renderer/stores/layout'
 import { useNavigation } from '@renderer/stores/navigation'
+import { selectIsOpen, usePanels } from '@renderer/stores/panels'
 import { useSync } from '@renderer/stores/sync'
 
 export type DeviceFrameProps = {
@@ -136,6 +138,37 @@ function RotateToggle({ deviceId }: { deviceId: string }): React.JSX.Element {
 }
 
 /**
+ * Open this device's own DevTools, from its own header.
+ *
+ * Per device, not per app: Respo has as many pages open as there are frames,
+ * and "the" DevTools would have to mean one of them. A second click closes it
+ * again, so the control says what state it is in and how to leave it.
+ */
+function DevtoolsToggle({ deviceId }: { deviceId: string }): React.JSX.Element {
+  const open = usePanels((s) => selectIsOpen(s, deviceId))
+  const toggle = usePanels((s) => s.toggle)
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          aria-label="Open DevTools for this device"
+          aria-pressed={open}
+          data-devtools={open ? 'open' : 'closed'}
+          onClick={() => toggle(deviceId)}
+          className={cn(open ? 'text-primary' : 'text-muted-foreground hover:text-foreground')}
+        >
+          <CodeBracketIcon />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>{open ? 'Close DevTools' : 'Open DevTools'}</TooltipContent>
+    </Tooltip>
+  )
+}
+
+/**
  * Chrome around one device: a caption, and an empty rectangle standing in for
  * the page.
  *
@@ -196,6 +229,7 @@ export function DeviceFrame({ device, zoom, viewportRef }: DeviceFrameProps): Re
         */}
         <MirrorToggle deviceId={device.id} />
         {isRotatable(device) ? <RotateToggle deviceId={device.id} /> : null}
+        <DevtoolsToggle deviceId={device.id} />
       </header>
 
       <div

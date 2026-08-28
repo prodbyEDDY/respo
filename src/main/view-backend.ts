@@ -1,8 +1,9 @@
-import { View, WebContentsView, type BaseWindow, type WebContents } from 'electron'
+import { BrowserWindow, View, WebContentsView, type BaseWindow, type WebContents } from 'electron'
 import { join } from 'path'
 import { SYNC_CAPTURE_CHANNEL, type LoadState, type LoadStatePayload } from '@shared/ipc'
 import type { DeviceSpec, Rect } from '@shared/types'
 import { CDPController } from './cdp-controller'
+import type { CreateDevtoolsPanel, DevtoolsPanel, DevtoolsRegistry } from './devtools-manager'
 import { DEVICE_PARTITION, openExternalSafe } from './security'
 import type { SyncRegistry } from './sync-engine'
 import type { ManagedView, ReportLoadState, ViewBackend } from './view-manager'
@@ -171,6 +172,79 @@ export type ElectronViewBackendOptions = {
   cdp?: CDPController
   /** Told about every view's lifetime, so input can be mirrored into it. */
   sync?: SyncRegistry
+  /** Told about every view's lifetime, so DevTools can be opened on it. */
+  devtools?: DevtoolsRegistry
+}
+
+/** Default size of a DevTools window, when the panel gets one of its own. */
+const DEVTOOLS_WINDOW_SIZE = { width: 1000, height: 720 }
+
+/**
+ * Build the surfaces `DevtoolsManager` shows a DevTools frontend in.
+ *
+ * The manager owns *when*; this owns *where*. Both shapes are plain Electron
+ * surfaces Respo created, which is what lets the manager treat them
+ * identically — Electron is never asked to make a DevTools window of its own,
+ * so it never has one to position, size or close behind our back.
+ */
+export function createDevtoolsPanelFactory(window: BaseWindow): CreateDevtoolsPanel {
+  return ({ mode, title }): DevtoolsPanel => {
+    if (mode === 'window') {
+      const host = new BrowserWindow({ ...DEVTOOLS_WINDOW_SIZE, title, autoHideMenuBar: true })
+      // The frontend renames its own document; the window keeps the device name
+      // instead, because that is what tells five of these apart on a taskbar.
+      host.on('page-title-updated', (event) => {
+        event.preventDefault()
+      })
+
+      const listeners: (() => void)[] = []
+      host.on('closed', () => {
+        for (const listener of listeners) listener()
+      })
+
+      return {
+        frontend: host.webContents,
+        setBounds(): void {
+          // A window is placed by the user, not by the canvas.
+        },
+        onClosed(listener): void {
+          listeners.push(listener)
+        },
+        destroy(): void {
+          if (!host.isDestroyed()) host.destroy()
+        }
+      }
+    }
+
+    // No `webPreferences`: this is Chromium's own DevTools frontend, and the
+    // device-view hardening (sandbox, shared partition, device preload) would
+    // be applied to entirely the wrong document.
+    const view = new WebContentsView()
+    view.setBounds({ x: 0, y: 0, width: 0, height: 0 })
+    // Added after the canvas layer, so it composites above it — though the
+    // renderer reserves the strip, so the two never actually overlap.
+    window.contentView.addChildView(view)
+
+    return {
+      frontend: view.webContents,
+      setBounds(bounds: Rect): void {
+        if (view.webContents.isDestroyed()) return
+        view.setBounds({
+          x: Math.round(bounds.x),
+          y: Math.round(bounds.y),
+          width: Math.round(bounds.width),
+          height: Math.round(bounds.height)
+        })
+      },
+      onClosed(): void {
+        // The dock is closed through the manager, never around it.
+      },
+      destroy(): void {
+        window.contentView.removeChildView(view)
+        if (!view.webContents.isDestroyed()) view.webContents.close()
+      }
+    }
+  }
 }
 
 /** One `WebContentsView` per device, positioned by `ViewManager`. */
@@ -185,6 +259,7 @@ export function createElectronViewBackend(
   const parent = layer ?? window.contentView
   const cdp = options.cdp ?? new CDPController()
   const sync = options.sync ?? null
+  const devtools = options.devtools ?? null
   let disposed = false
 
   if (layer !== null) {
@@ -236,6 +311,10 @@ export function createElectronViewBackend(
           wc.send(SYNC_CAPTURE_CHANNEL, capturing)
         }
       })
+
+      // DevTools is opened on this page from main, so the manager needs the
+      // same handle the sync engine took above.
+      devtools?.registerDevice(device.id, wc)
 
       // A preload is a document's script: the copy running in the page this
       // view just committed has not been told anything yet, and starts from
@@ -305,6 +384,9 @@ export function createElectronViewBackend(
         dispose(): void {
           views.delete(view)
           sync?.unregisterDevice(device.id)
+          // Before the `webContents` goes: the manager still has to close a
+          // panel that was open on it, and destroy the frontend behind it.
+          devtools?.unregisterDevice(device.id)
           cdp.detachSafe(wc)
           parent.removeChildView(view)
           if (!wc.isDestroyed()) wc.close()

@@ -9,7 +9,7 @@
 
 import { slugify } from './custom-devices'
 import { DEFAULT_ACTIVE_DEVICE_IDS } from './deviceCatalog'
-import type { ThemeSource } from './ipc'
+import type { DockPosition, ThemeSource } from './ipc'
 import type { DeviceSpec } from './types'
 
 /** Bumped whenever a stored document stops being readable by this code. */
@@ -38,6 +38,36 @@ export type SyncSettings = {
   disabledDeviceIds: string[]
 }
 
+/**
+ * Where the user left the DevTools panel.
+ *
+ * Not *whether* it was open: a session that ended with DevTools on a device
+ * should not reopen it — restoring a debugging tool nobody asked for costs a
+ * frame's worth of canvas and a renderer process at every launch. Only the
+ * shape of the panel is worth remembering.
+ */
+export type DevtoolsSettings = {
+  dock: DockPosition
+  /**
+   * Thickness of the docked strip in window CSS pixels — its height at the
+   * bottom, its width on the right. One number for both edges: the panel is
+   * never docked to two of them at once, and carrying a second would only make
+   * the first switch feel like it forgot something.
+   */
+  size: number
+}
+
+/** Bounds on the dock strip, shared by the renderer's drag and main's repair. */
+export const MIN_DOCK_SIZE = 160
+export const MAX_DOCK_SIZE = 2000
+export const DEFAULT_DOCK_SIZE = 320
+
+/** Clamp a dock thickness into the range the panel is usable in. */
+export function clampDockSize(size: number): number {
+  if (!Number.isFinite(size)) return DEFAULT_DOCK_SIZE
+  return Math.min(MAX_DOCK_SIZE, Math.max(MIN_DOCK_SIZE, Math.round(size)))
+}
+
 export type PersistedState = {
   schemaVersion: number
   customDevices: DeviceSpec[]
@@ -51,6 +81,8 @@ export type PersistedState = {
    * as `SyncSettings.disabledDeviceIds`.
    */
   rotated: Record<string, boolean>
+  /** How the DevTools panel is shaped. See `DevtoolsSettings`. */
+  devtools: DevtoolsSettings
 }
 
 export const DEFAULT_SUITE_ID = 'default'
@@ -97,7 +129,10 @@ export function defaultPersistedState(): PersistedState {
     // Mirroring is the product: it is on out of the box, with nothing muted.
     sync: { enabled: true, disabledDeviceIds: [] },
     // Every device starts the way it is held.
-    rotated: {}
+    rotated: {},
+    // Bottom is where a browser puts DevTools, and it is the edge that costs a
+    // canvas of side-by-side viewports the least width.
+    devtools: { dock: 'bottom', size: DEFAULT_DOCK_SIZE }
   }
 }
 
@@ -122,6 +157,7 @@ export function mergePersistedState(
     ui: { ...base.ui, ...(patch.ui ?? {}) },
     sync: cloneSync(patch.sync ?? base.sync),
     rotated: { ...(patch.rotated ?? base.rotated) },
+    devtools: { ...(patch.devtools ?? base.devtools) },
     schemaVersion: SCHEMA_VERSION
   }
   return next
@@ -177,7 +213,8 @@ export function migratePersistedState(raw: unknown): MigrationResult {
       activeSuiteId: active,
       ui: { theme: sanitizeTheme((doc['ui'] as Record<string, unknown> | undefined)?.['theme']) },
       sync: sanitizeSync(doc['sync']),
-      rotated: sanitizeRotated(doc['rotated'])
+      rotated: sanitizeRotated(doc['rotated']),
+      devtools: sanitizeDevtools(doc['devtools'])
     },
     backup: null
   }
@@ -281,6 +318,27 @@ function sanitizeRotated(value: unknown): Record<string, boolean> {
     out[id] = true
   }
   return out
+}
+
+/**
+ * Repair the DevTools panel shape.
+ *
+ * Absent on every document written before this build, so "missing" has to mean
+ * the defaults rather than a reset — a field, not a document (see
+ * `migratePersistedState`). A junk size is clamped rather than dropped: the
+ * user's edge preference is worth keeping even when the number next to it is
+ * not.
+ */
+function sanitizeDevtools(value: unknown): DevtoolsSettings {
+  const defaults: DevtoolsSettings = { dock: 'bottom', size: DEFAULT_DOCK_SIZE }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return defaults
+
+  const devtools = value as Record<string, unknown>
+  const dock = devtools['dock']
+  return {
+    dock: dock === 'bottom' || dock === 'right' || dock === 'undocked' ? dock : defaults.dock,
+    size: typeof devtools['size'] === 'number' ? clampDockSize(devtools['size']) : defaults.size
+  }
 }
 
 /** Drop unusable suites; inside a usable one, drop only the junk ids. */
