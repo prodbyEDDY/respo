@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { isRotatable } from '@shared/custom-devices'
 import type { DeviceSpec } from '@shared/types'
+import { savePersistedState } from '@renderer/lib/persistence'
 import { useDevices } from './devices'
 
 /**
@@ -45,6 +46,8 @@ export interface LayoutState {
   rotate: (deviceId: string) => void
   /** Flip every active touch device to the same orientation, in one click. */
   rotateAll: () => void
+  /** Install the orientations main restored at boot. Writes nothing back. */
+  hydrateRotation: (rotated: Record<string, boolean>) => void
 }
 
 function clamp(zoom: number): number {
@@ -98,7 +101,9 @@ export const useLayout = create<LayoutState>((set, get) => ({
   rotate: (deviceId) => {
     if (!canRotate(deviceId)) return
     const { rotated } = get()
-    set({ rotated: { ...rotated, [deviceId]: rotated[deviceId] !== true } })
+    const next = { ...rotated, [deviceId]: rotated[deviceId] !== true }
+    set({ rotated: next })
+    persistRotation(next)
   },
 
   rotateAll: () => {
@@ -118,8 +123,26 @@ export const useLayout = create<LayoutState>((set, get) => ({
     const updated = { ...rotated }
     for (const id of targets) updated[id] = next
     set({ rotated: updated })
-  }
+    persistRotation(updated)
+  },
+
+  hydrateRotation: (rotated) => set({ rotated: { ...rotated } })
 }))
+
+/**
+ * Write the orientations, keeping only the landscape ones.
+ *
+ * `rotated` holds a `false` for every device turned back, because the toggle
+ * reads it — but the document only needs the exceptions, and a map that grew by
+ * one dead entry per rotation would be persisted forever.
+ */
+function persistRotation(rotated: Record<string, boolean>): void {
+  const landscape: Record<string, boolean> = {}
+  for (const [id, value] of Object.entries(rotated)) {
+    if (value) landscape[id] = true
+  }
+  savePersistedState({ rotated: landscape })
+}
 
 /**
  * Project the rotation state onto a device list.

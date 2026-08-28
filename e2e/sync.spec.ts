@@ -1,22 +1,28 @@
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test'
-import { resolve } from 'node:path'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { PROBE_URL } from './probe'
+
+/** The one channel the zoom spec writes, as the page sees it. */
+type SaveInvoke = (channel: 'store:save', patch: unknown) => Promise<void>
 
 const ROOT = resolve(__dirname, '..')
 const MAIN_ENTRY = resolve(ROOT, 'out', 'main', 'index.js')
 
 const SCROLL_URL = pathToFileURL(resolve(__dirname, 'fixtures', 'scroll.html')).href
+const CLICK_URL = pathToFileURL(resolve(__dirname, 'fixtures', 'click.html')).href
 
 /** The five default devices each get one view. */
 const DEVICE_COUNT = 5
 
-function launch(): Promise<ElectronApplication> {
+function launch(startUrl: string = SCROLL_URL): Promise<ElectronApplication> {
   return electron.launch({
     args: [MAIN_ENTRY],
     env: {
       ...(process.env as Record<string, string>),
-      RESPO_START_URL: SCROLL_URL
+      RESPO_START_URL: startUrl
     }
   })
 }
@@ -76,6 +82,38 @@ function dispatch(app: ElectronApplication, wcId: number, params: object): Promi
     },
     { id: wcId, params }
   )
+}
+
+/** What each view's page says about the last click it received. */
+type ClickReport = {
+  x: number
+  y: number
+  width: number
+  height: number
+  trusted: boolean
+} | null
+
+function clicks(app: ElectronApplication, url: string): Promise<ClickReport[]> {
+  return app.evaluate(({ webContents }, target: string) => {
+    return Promise.all(
+      webContents
+        .getAllWebContents()
+        .filter((wc) => !wc.isDestroyed() && wc.getURL() === target)
+        .sort((a, b) => a.id - b.id)
+        .map((wc) => wc.executeJavaScript('window.__respoClick') as Promise<ClickReport>)
+    )
+  }, url)
+}
+
+/** The zoom factor main has applied to each device view, in view order. */
+function zoomFactors(app: ElectronApplication, url: string): Promise<number[]> {
+  return app.evaluate(({ webContents }, target: string) => {
+    return webContents
+      .getAllWebContents()
+      .filter((wc) => !wc.isDestroyed() && wc.getURL() === target)
+      .sort((a, b) => a.id - b.id)
+      .map((wc) => wc.getZoomFactor())
+  }, url)
 }
 
 async function waitForViews(app: ElectronApplication, url: string): Promise<number[]> {
@@ -159,6 +197,148 @@ test('scrolling the lead scrolls every follower to the same point in the documen
       .toBe(true)
   } finally {
     await app.close()
+  }
+})
+
+/**
+ * The mirror has to survive canvas zoom.
+ *
+ * A zoomed canvas is two transforms stacked: the frame in the DOM is drawn at
+ * `device × zoom`, and main hands the logical viewport back to the page with
+ * `setZoomFactor(zoom)` so the media queries still see the device. The engine
+ * turns a normalized coordinate into the follower's *device* pixels — and
+ * `Input.dispatchMouseEvent` does not read device pixels: Chromium multiplies
+ * the coordinate it is handed by the widget's zoom, so at 50% the click landed
+ * at half the fraction it was made at until the engine divided it back out.
+ *
+ * The lead's own page is the ruler: it reports where the dispatched click
+ * actually landed as a fraction of its viewport, and every follower has to
+ * agree with it. That keeps the test honest about the mirror regardless of how
+ * the coordinate that started it was interpreted on the way in.
+ *
+ * The suite is three touch devices, seeded rather than the default five: a
+ * *desktop*-emulated view's CSS viewport is currently scaled by the canvas zoom
+ * (a `macbook-1280` frame lays out at 2560px at 50%), which is a defect in the
+ * emulation rather than in the mirror and would be measured here as one.
+ */
+test('a mirrored click lands in the same place at 50% canvas zoom', async () => {
+  const suite = ['iphone-15-pro', 'pixel-8', 'ipad-mini']
+
+  // Its own profile, seeded through the same channel the UI writes: the zoom
+  // this test leaves behind is remembered per origin by the session, and the
+  // default profile is a real user's.
+  const userDataDir = mkdtempSync(join(tmpdir(), 'respo-sync-'))
+  const seed = await electron.launch({
+    args: [MAIN_ENTRY, `--user-data-dir=${userDataDir}`],
+    env: { ...(process.env as Record<string, string>), RESPO_START_URL: CLICK_URL }
+  })
+  try {
+    const page = await seed.firstWindow()
+    await page.waitForFunction(() => 'respo' in window)
+    await page.evaluate(async (deviceIds: string[]) => {
+      const respo = (window as unknown as { respo: { invoke: SaveInvoke } }).respo
+      await respo.invoke('store:save', {
+        suites: [{ id: 'default', name: 'Default', deviceIds }]
+      })
+    }, suite)
+  } finally {
+    // Closing the window is what flushes the debounced write.
+    await seed.close()
+  }
+
+  const app = await electron.launch({
+    args: [MAIN_ENTRY, `--user-data-dir=${userDataDir}`],
+    env: { ...(process.env as Record<string, string>), RESPO_START_URL: CLICK_URL }
+  })
+  try {
+    const page = await app.firstWindow()
+    let ids: number[] = []
+    await expect
+      .poll(
+        async () => {
+          ids = await viewIds(app, CLICK_URL)
+          return ids.length
+        },
+        { timeout: 45_000, message: 'the seeded suite never loaded the fixture' }
+      )
+      .toBe(suite.length)
+    const lead = ids[0] as number
+
+    // 1 → 0.9 → 0.75 → 0.67 → 0.5, down the ladder the menu steps through.
+    const zoomOut = page.getByRole('menuitem', { name: 'Zoom out' })
+    for (let i = 0; i < 4; i += 1) {
+      // The trigger toggles, so the open is retried as a unit: a click that
+      // lands before the window is interactive would otherwise leave the loop
+      // waiting on a menu that was never opened.
+      await expect(async () => {
+        await page.getByLabel('More options').click()
+        await expect(zoomOut).toBeVisible({ timeout: 2_000 })
+      }).toPass({ timeout: 20_000 })
+
+      await zoomOut.click()
+      await expect(zoomOut).toBeHidden()
+    }
+
+    // The zoom is only really applied once main has told every view about it.
+    await expect
+      .poll(async () => (await zoomFactors(app, CLICK_URL)).map((z) => Math.round(z * 100)), {
+        timeout: 20_000,
+        message: 'main never applied the canvas zoom to the views'
+      })
+      .toEqual(suite.map(() => 50))
+
+    // Clicking through the menu moved the pointer across the canvas, and
+    // pointing at a device is what elects it. Put the lead back on the first
+    // view — the one the click below is dispatched into.
+    const leadFrame = page.locator('section[aria-label="iPhone 15 Pro"]')
+    // The top-left corner is the frame's caption: the only part of it the
+    // renderer still owns, since the page itself is a native view over the top.
+    await leadFrame.hover({ position: { x: 4, y: 4 } })
+    await expect(leadFrame).toHaveAttribute('data-lead', 'true')
+    // The election is coalesced onto an animation frame before it travels.
+    await page.waitForTimeout(250)
+
+    // Off-centre on purpose: a click mirrored at the wrong scale lands at a
+    // visibly different fraction (or off the page entirely), and the middle of
+    // the viewport is the one point where every scale agrees.
+    const at = { x: 80, y: 140, button: 'left', clickCount: 1 }
+    await dispatch(app, lead, { ...at, type: 'mouseMoved', button: 'none', clickCount: 0 })
+    await dispatch(app, lead, { ...at, type: 'mousePressed', buttons: 1 })
+    await dispatch(app, lead, { ...at, type: 'mouseReleased', buttons: 0 })
+
+    let reports: ClickReport[] = []
+    await expect
+      .poll(
+        async () => {
+          reports = await clicks(app, CLICK_URL)
+          return reports.filter((report) => report !== null).length
+        },
+        { timeout: 20_000, message: 'the click never reached every view' }
+      )
+      .toBe(suite.length)
+
+    const leadClick = reports[0]
+    if (leadClick === null || leadClick === undefined) throw new Error('the lead recorded no click')
+
+    // Trusted: it arrived through CDP as real input, not from a script.
+    expect(leadClick.trusted).toBe(true)
+    // The emulated viewport is the device's own, whatever the canvas is doing.
+    expect(leadClick.width).toBe(393)
+    // And the click really is off-centre, so agreeing about it means something.
+    expect(leadClick.x).toBeGreaterThan(0.05)
+    expect(leadClick.x).toBeLessThan(0.45)
+
+    for (const report of reports) {
+      if (report === null) throw new Error('a view recorded no click')
+      expect(report.trusted).toBe(true)
+      // One percent of a viewport: rounding to whole device pixels is the only
+      // difference a correct mirror can produce.
+      expect(Math.abs(report.x - leadClick.x)).toBeLessThan(0.01)
+      expect(Math.abs(report.y - leadClick.y)).toBeLessThan(0.01)
+    }
+  } finally {
+    await app.close()
+    rmSync(userDataDir, { recursive: true, force: true })
   }
 })
 

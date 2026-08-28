@@ -202,6 +202,8 @@ export type BackupMergeResult = {
   suites: Suite[]
   devicesAdded: number
   devicesReplaced: number
+  /** Devices dropped because the document was already at its cap. */
+  devicesSkipped: number
   suitesAdded: number
   suitesReplaced: number
   /** Suites dropped because nothing in them resolved, or the caps were full. */
@@ -236,6 +238,7 @@ export function mergeBackup(current: BackupSource, incoming: RespoBackupV1): Bac
 
   let devicesAdded = 0
   let devicesReplaced = 0
+  let devicesSkipped = 0
 
   for (const device of incoming.customDevices) {
     const existingIndex = byName.get(nameKey(device.name))
@@ -248,7 +251,12 @@ export function mergeBackup(current: BackupSource, incoming: RespoBackupV1): Bac
       continue
     }
 
-    if (customDevices.length >= MAX_DEVICES) continue
+    // Counted, not silent: the suites that named this device will come out
+    // shorter, and the user is owed the reason.
+    if (customDevices.length >= MAX_DEVICES) {
+      devicesSkipped += 1
+      continue
+    }
 
     // Keep the file's own id when it is free and namespaced — a backup restored
     // onto a clean document should come back exactly as it left.
@@ -324,6 +332,7 @@ export function mergeBackup(current: BackupSource, incoming: RespoBackupV1): Bac
     suites,
     devicesAdded,
     devicesReplaced,
+    devicesSkipped,
     suitesAdded,
     suitesReplaced,
     suitesSkipped

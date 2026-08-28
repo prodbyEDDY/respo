@@ -75,6 +75,13 @@ test('a suite decides which devices are on the canvas, and in what order', async
     await expect(page.getByLabel('Suite name')).toBeHidden()
     await expect(page.getByTestId('device-manager')).toBeVisible()
 
+    // And to the field that has focus: Escape in the address bar drops what was
+    // typed there, and takes the library with it if nobody is looking.
+    await page.getByLabel('Address').click()
+    await page.keyboard.type('nonsense')
+    await page.keyboard.press('Escape')
+    await expect(page.getByTestId('device-manager')).toBeVisible()
+
     // Reorder by dragging the first chip past the second.
     const first = page.locator(`[data-suite-device-id="${before[0]}"]`)
     const second = page.locator(`[data-suite-device-id="${before[1]}"]`)

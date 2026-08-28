@@ -1,9 +1,22 @@
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test'
-import { resolve } from 'node:path'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { PROBE_URL } from './probe'
 
 const ROOT = resolve(__dirname, '..')
 const MAIN_ENTRY = resolve(ROOT, 'out', 'main', 'index.js')
+
+/**
+ * A throwaway profile: this spec rotates every device and zooms the canvas, and
+ * both of those are now part of the saved document. On the shared profile it
+ * would hand the next spec a canvas of landscape frames.
+ */
+const userDataDir = mkdtempSync(join(tmpdir(), 'respo-zoom-'))
+
+test.afterAll(() => {
+  rmSync(userDataDir, { recursive: true, force: true })
+})
 
 type ViewState = {
   /** `webContents.setZoomFactor`, i.e. what the canvas zoom asked for. */
@@ -67,7 +80,7 @@ function iphone(states: ViewState[]): ViewState {
  */
 test('canvas zoom scales the frame without touching the emulated viewport', async () => {
   const app = await electron.launch({
-    args: [MAIN_ENTRY],
+    args: [MAIN_ENTRY, `--user-data-dir=${userDataDir}`],
     env: {
       ...(process.env as Record<string, string>),
       RESPO_START_URL: PROBE_URL

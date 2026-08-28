@@ -27,6 +27,13 @@ export type SyncDeviceRegistration = {
   width: number
   height: number
   /**
+   * The canvas zoom this view is displayed at, if it is already known.
+   *
+   * `1` until `ViewManager` reports a layout, which it does before a view is
+   * ever visible. See `setZoom` for why a coordinate depends on it at all.
+   */
+  zoom?: number
+  /**
    * Tell this view's preload whether it is currently the input source.
    *
    * Optional, and only ever an optimisation: `handleInput` drops everything
@@ -44,6 +51,15 @@ export type SyncDeviceRegistration = {
 export interface SyncRegistry {
   registerDevice(registration: SyncDeviceRegistration): void
   updateDevice(deviceId: string, size: { width: number; height: number }): void
+  /**
+   * Tell the engine what zoom factor a view is being shown at.
+   *
+   * `Input.dispatchMouseEvent` coordinates are *not* page CSS pixels: Chromium
+   * divides the position it is given by the widget's zoom on the way in, so at
+   * 50% canvas zoom a coordinate of 80 arrives in the page as 40. Proven by
+   * `e2e/sync.spec.ts`, and the reason a mirrored click needs this.
+   */
+  setZoom(deviceId: string, zoom: number): void
   unregisterDevice(deviceId: string): void
   /**
    * Re-tell one view whether it is the source.
@@ -110,6 +126,15 @@ const VIRTUAL_KEY_CODES: Record<string, number> = {
   Delete: 46
 }
 
+/**
+ * A usable zoom factor. Anything else would divide a coordinate into nonsense,
+ * and the widest ladder the canvas offers is 25%–500% (`main/layout`).
+ */
+function normalizeZoom(zoom: number): number {
+  if (!Number.isFinite(zoom) || zoom <= 0) return 1
+  return zoom
+}
+
 function clamp01(value: number): number {
   if (!Number.isFinite(value)) return 0
   if (value < 0) return 0
@@ -118,6 +143,8 @@ function clamp01(value: number): number {
 }
 
 type Entry = SyncDeviceRegistration & {
+  /** Never `undefined` once the entry exists: absent means "not zoomed". */
+  zoom: number
   enabled: boolean
   /**
    * Last capture flag actually delivered, so an unchanged state costs nothing.
@@ -172,6 +199,9 @@ export class SyncEngine implements SyncRegistry {
 
     const entry: Entry = {
       ...registration,
+      // A re-registration is the same view coming back (a device that left the
+      // suite and returned): the canvas it returns to is still zoomed.
+      zoom: normalizeZoom(registration.zoom ?? previous?.zoom ?? 1),
       enabled: !this.disabled.has(registration.deviceId),
       capturing: null
     }
@@ -180,8 +210,9 @@ export class SyncEngine implements SyncRegistry {
 
     // Something has to lead before the user has hovered anything, or a session
     // opens with mirroring silently inert. The hover election in the UI
-    // overrides this the moment the pointer touches a frame.
-    this.leadDeviceId ??= entry.deviceId
+    // overrides this the moment the pointer touches a frame — and a muted view
+    // is no more a candidate here than it is there.
+    if (this.leadDeviceId === null && entry.enabled) this.leadDeviceId = entry.deviceId
     this.publishCapture()
   }
 
@@ -192,6 +223,13 @@ export class SyncEngine implements SyncRegistry {
     entry.height = size.height
   }
 
+  /** Remember the zoom a view is shown at. See `SyncRegistry.setZoom`. */
+  setZoom(deviceId: string, zoom: number): void {
+    const entry = this.byDeviceId.get(deviceId)
+    if (entry === undefined) return
+    entry.zoom = normalizeZoom(zoom)
+  }
+
   unregisterDevice(deviceId: string): void {
     const entry = this.byDeviceId.get(deviceId)
     if (entry === undefined) return
@@ -199,9 +237,14 @@ export class SyncEngine implements SyncRegistry {
     this.byWcId.delete(entry.target.id)
     this.pendingScroll.delete(deviceId)
     // Losing the lead must not leave the canvas with no source at all: hand it
-    // to whoever is still here.
+    // to whoever is still here and still mirroring.
     if (this.leadDeviceId === deviceId) {
-      this.leadDeviceId = this.byDeviceId.keys().next().value ?? null
+      this.leadDeviceId = null
+      for (const candidate of this.byDeviceId.values()) {
+        if (!candidate.enabled) continue
+        this.leadDeviceId = candidate.deviceId
+        break
+      }
     }
     this.publishCapture()
   }
@@ -217,10 +260,21 @@ export class SyncEngine implements SyncRegistry {
     this.publishCapture()
   }
 
-  /** The one view whose interactions drive the others. `null` disables sync. */
+  /**
+   * The one view whose interactions drive the others. `null` disables sync.
+   *
+   * A muted device is not a candidate: it drives nothing, so electing one would
+   * be indistinguishable from switching mirroring off — with a ring drawn on
+   * the device that appeared to be in charge.
+   */
   setLead(deviceId: string | null): void {
+    if (deviceId !== null && this.disabled.has(deviceId)) return
     if (this.leadDeviceId === deviceId) return
     this.leadDeviceId = deviceId
+    // Whatever the outgoing lead had queued belongs to the gesture that just
+    // ended. Applying it a frame after the election would scroll the followers
+    // on behalf of a device that is no longer driving them.
+    this.clearPending()
     this.publishCapture()
   }
 
@@ -328,8 +382,12 @@ export class SyncEngine implements SyncRegistry {
     const pressed = event.type === 'down'
 
     for (const entry of this.followers(source)) {
-      const x = Math.round(xNorm * entry.width)
-      const y = Math.round(yNorm * entry.height)
+      // The fraction is turned into the follower's own device pixels, then out
+      // of page space into the space `Input.dispatchMouseEvent` actually reads:
+      // Chromium multiplies the coordinate it is handed by the widget's zoom,
+      // so a canvas at 50% needs twice the number to land in the same place.
+      const x = Math.round((xNorm * entry.width) / entry.zoom)
+      const y = Math.round((yNorm * entry.height) / entry.zoom)
 
       if (pressed) {
         // Hover state first: menus, tooltips and delegated handlers all key off

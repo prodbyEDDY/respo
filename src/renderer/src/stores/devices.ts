@@ -15,6 +15,7 @@ import {
 } from '@shared/persistence-types'
 import type { DeviceSpec } from '@shared/types'
 import { savePersistedState } from '@renderer/lib/persistence'
+import { useSync } from './sync'
 
 /** Ceiling shared with main's `store:save` validator. */
 const MAX_CUSTOM_DEVICES = 64
@@ -22,6 +23,17 @@ const MAX_CUSTOM_DEVICES = 64
 const MAX_SUITES = 64
 /** A suite name is a label; the field is capped so it stays one. */
 export const MAX_SUITE_NAME_LENGTH = 60
+
+/**
+ * How many devices one suite may hold.
+ *
+ * Deliberately far below the 64 main's validator tolerates: that number is a
+ * guard against junk, this one is the canvas. Every device in the active suite
+ * is a live `WebContentsView` with its own renderer process, and the budgets in
+ * spec §8 are written for a canvas of that order — a suite of 65 would be
+ * refused by `views:sync-devices` with nothing on screen to say why.
+ */
+export const MAX_SUITE_DEVICES = 20
 
 /**
  * What a new suite starts with.
@@ -36,14 +48,24 @@ export const NEW_SUITE_DEVICE_ID = 'iphone-15-pro'
  * Why a device mutation was refused.
  *
  * - `unknown-device`: nothing answers to that id.
- * - `last-in-suite`: removing it would leave the active suite with no devices,
- *   and a canvas with nothing on it is not a state the user asked for.
+ * - `last-in-suite`: removing it would leave *some* suite with no devices, and
+ *   a canvas with nothing on it is not a state the user asked for — including
+ *   the one they would find on switching to that suite later.
  * - `too-many`: the document's own cap on custom devices.
  */
 export type DeviceMutationError = 'unknown-device' | 'last-in-suite' | 'too-many'
 
 export type DeviceMutationResult =
   { ok: true; device: DeviceSpec } | { ok: false; reason: DeviceMutationError }
+
+/**
+ * Adding a device also tries to put it on the canvas, and that half can fail on
+ * its own: the suite may already be full. `joinedSuite` is how the UI knows
+ * whether to say so.
+ */
+export type DeviceAddResult =
+  | { ok: true; device: DeviceSpec; joinedSuite: boolean }
+  | { ok: false; reason: DeviceMutationError }
 
 /**
  * Why a suite mutation was refused.
@@ -95,13 +117,19 @@ export interface DevicesState {
    * Add a user-defined device and put it on the canvas.
    *
    * Joining the active suite is the point: a device the user just described and
-   * then has to go and find is a second step for no reason. (Suite membership
-   * gets its own UI in the next task; this is the sensible default until then.)
+   * then has to go and find is a second step for no reason. A full suite is the
+   * one case where it cannot happen — the device is still added, and the result
+   * says it did not join so the library can.
    */
-  addCustom: (input: CustomDeviceInput) => DeviceMutationResult
+  addCustom: (input: CustomDeviceInput) => DeviceAddResult
   /** Rewrite one user-defined device in place, keeping its id and placement. */
   updateCustom: (id: string, input: CustomDeviceInput) => DeviceMutationResult
-  /** Delete a user-defined device and drop it from every suite. */
+  /**
+   * Delete a user-defined device and drop it from every suite.
+   *
+   * Refused while any suite holds nothing else: the device is gone from all of
+   * them at once, and a suite the user switches to later must not be empty.
+   */
   removeCustom: (id: string) => DeviceMutationResult
 
   /** Add a suite holding one device and switch to it. Names must be distinct. */
@@ -114,8 +142,16 @@ export interface DevicesState {
    * device that was just added to appear.
    */
   toggleDeviceInSuite: (deviceId: string) => SuiteMutationResult
-  /** Move a device within the active suite. Canvas order *is* suite order. */
-  reorderSuiteDevices: (from: number, to: number) => void
+  /**
+   * Move one device to another's place in the active suite. Canvas order *is*
+   * suite order.
+   *
+   * Addressed by id rather than by index on purpose: the canvas is the *resolved*
+   * suite, and an id nothing answers to is skipped on the way there — so the
+   * two lists share positions only while every id resolves, and a drag keyed on
+   * a canvas index would move the wrong device the moment one did not.
+   */
+  reorderSuiteDevices: (fromId: string, toId: string) => void
 
   /**
    * Fold an imported backup into the document. Merges by name, deletes nothing,
@@ -162,6 +198,18 @@ function nameKey(name: string): string {
 /** Rewrite one suite in a list, leaving the others by identity. */
 function withSuite(suites: readonly Suite[], id: string, deviceIds: string[]): Suite[] {
   return suites.map((suite) => (suite.id === id ? { ...suite, deviceIds } : suite))
+}
+
+/**
+ * The suites that would be left with nothing if `deviceId` were deleted.
+ *
+ * Exported because the delete dialog has to say *which* suite is in the way
+ * before the user commits to a button that is going to refuse.
+ */
+export function suitesEmptiedBy(suites: readonly Suite[], deviceId: string): Suite[] {
+  return suites.filter(
+    (suite) => suite.deviceIds.includes(deviceId) && suite.deviceIds.every((id) => id === deviceId)
+  )
 }
 
 const initial = defaultPersistedState()
@@ -219,9 +267,16 @@ export const useDevices = create<DevicesState>((set, get) => ({
     const device: DeviceSpec = { ...input, id: makeCustomDeviceId(input.name, taken) }
 
     const nextCustom = [...customDevices, device]
-    const nextSuites = suites.map((suite) =>
-      suite.id === activeSuiteId ? { ...suite, deviceIds: [...suite.deviceIds, device.id] } : suite
-    )
+    // The library takes the device either way; only the canvas has a ceiling.
+    const joinedSuite =
+      (suiteById(suites, activeSuiteId)?.deviceIds.length ?? 0) < MAX_SUITE_DEVICES
+    const nextSuites = joinedSuite
+      ? suites.map((suite) =>
+          suite.id === activeSuiteId
+            ? { ...suite, deviceIds: [...suite.deviceIds, device.id] }
+            : suite
+        )
+      : suites
 
     set({
       customDevices: nextCustom,
@@ -229,8 +284,12 @@ export const useDevices = create<DevicesState>((set, get) => ({
       suites: nextSuites,
       active: resolveDevices(suiteById(nextSuites, activeSuiteId)?.deviceIds ?? [], nextCustom)
     })
-    savePersistedState({ customDevices: nextCustom, suites: nextSuites })
-    return { ok: true, device }
+    savePersistedState(
+      joinedSuite
+        ? { customDevices: nextCustom, suites: nextSuites }
+        : { customDevices: nextCustom }
+    )
+    return { ok: true, device, joinedSuite }
   },
 
   updateCustom: (id, input) => {
@@ -256,12 +315,11 @@ export const useDevices = create<DevicesState>((set, get) => ({
     const device = customDevices.find((d) => d.id === id)
     if (device === undefined) return { ok: false, reason: 'unknown-device' }
 
-    // A suite has to keep at least one device: the canvas is the product, and
-    // an empty one is a dead end the user cannot see their way out of.
-    const activeSuite = suiteById(suites, activeSuiteId)
-    if (activeSuite !== undefined && activeSuite.deviceIds.filter((x) => x !== id).length === 0) {
-      return { ok: false, reason: 'last-in-suite' }
-    }
+    // Every suite has to keep at least one device: the canvas is the product,
+    // and an empty one is a dead end the user cannot see their way out of. The
+    // check covers *all* suites because the delete does — guarding only the
+    // active one leaves the dead end waiting behind the next suite switch.
+    if (suitesEmptiedBy(suites, id).length > 0) return { ok: false, reason: 'last-in-suite' }
 
     const nextCustom = customDevices.filter((d) => d.id !== id)
     // Out of every suite, not just the active one: the device is gone, and a
@@ -279,6 +337,9 @@ export const useDevices = create<DevicesState>((set, get) => ({
       active: resolveDevices(suiteById(nextSuites, activeSuiteId)?.deviceIds ?? [], nextCustom)
     })
     savePersistedState({ customDevices: nextCustom, suites: nextSuites })
+    // The id goes with the device. Ids are slugs of the name, so leaving a mute
+    // behind would silence the *next* "My phone" the user makes.
+    useSync.getState().forgetDevice(id)
     return { ok: true, device }
   },
 
@@ -343,6 +404,11 @@ export const useDevices = create<DevicesState>((set, get) => ({
     // A suite has to keep at least one device — the same rule that stops the
     // last custom device from being deleted out from under the canvas.
     if (present && suite.deviceIds.length <= 1) return { ok: false, reason: 'last-in-suite' }
+    // And at most `MAX_SUITE_DEVICES`, so the canvas the user builds here is one
+    // main will actually accept.
+    if (!present && suite.deviceIds.length >= MAX_SUITE_DEVICES) {
+      return { ok: false, reason: 'too-many' }
+    }
 
     const deviceIds = present
       ? suite.deviceIds.filter((id) => id !== deviceId)
@@ -354,15 +420,17 @@ export const useDevices = create<DevicesState>((set, get) => ({
     return { ok: true, suite: { ...suite, deviceIds } }
   },
 
-  reorderSuiteDevices: (from, to) => {
+  reorderSuiteDevices: (fromId, toId) => {
     const { suites, activeSuiteId, customDevices } = get()
     const suite = suiteById(suites, activeSuiteId)
     if (suite === undefined) return
 
     const deviceIds = [...suite.deviceIds]
-    if (!Number.isInteger(from) || !Number.isInteger(to)) return
-    if (from < 0 || from >= deviceIds.length) return
-    if (to < 0 || to >= deviceIds.length || to === from) return
+    // Resolved here, against the list actually being rewritten: the caller
+    // knows which chip was dragged onto which, and nothing more.
+    const from = deviceIds.indexOf(fromId)
+    const to = deviceIds.indexOf(toId)
+    if (from === -1 || to === -1 || from === to) return
 
     const [moved] = deviceIds.splice(from, 1)
     deviceIds.splice(to, 0, moved as string)
@@ -414,5 +482,9 @@ export const useDevices = create<DevicesState>((set, get) => ({
       suites: fresh.suites,
       activeSuiteId: fresh.activeSuiteId
     })
+    // "Reset everything" includes the switches: every muted id named a device
+    // that no longer exists, and one of them would come back with the next
+    // device to be given the same name.
+    useSync.getState().resetSwitches()
   }
 }))

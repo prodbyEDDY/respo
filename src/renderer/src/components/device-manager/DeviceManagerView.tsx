@@ -14,7 +14,7 @@ import {
 } from '@renderer/components/ui/dialog'
 import { Input } from '@renderer/components/ui/input'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
-import { useDevices } from '@renderer/stores/devices'
+import { MAX_SUITE_DEVICES, suitesEmptiedBy, useDevices } from '@renderer/stores/devices'
 import { useLayout } from '@renderer/stores/layout'
 import { DeviceCard } from './DeviceCard'
 import { DeviceEditDialog } from './DeviceEditDialog'
@@ -49,6 +49,21 @@ function Grid({ children }: { children: React.ReactNode }): React.JSX.Element {
   return <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">{children}</ul>
 }
 
+/** “Mobile”, or “Mobile” and “Tablet” — suites, as a sentence names them. */
+function namesOf(suites: readonly { name: string }[]): string {
+  const quoted = suites.map((suite) => `“${suite.name}”`)
+  if (quoted.length <= 1) return quoted[0] ?? 'That suite'
+  return `${quoted.slice(0, -1).join(', ')} and ${quoted.at(-1) as string}`
+}
+
+/** Whether a key event came from somewhere the user is writing. */
+function isEditing(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  if (target.isContentEditable) return true
+  const tag = target.tagName
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
+}
+
 /**
  * The full-screen device library.
  *
@@ -61,6 +76,8 @@ export function DeviceManagerView(): React.JSX.Element {
   const customDevices = useDevices((s) => s.customDevices)
   const allDevices = useDevices((s) => s.allDevices)
   const active = useDevices((s) => s.active)
+  const suites = useDevices((s) => s.suites)
+  const activeSuiteId = useDevices((s) => s.activeSuiteId)
   const setView = useLayout((s) => s.setView)
 
   const [query, setQuery] = useState('')
@@ -69,7 +86,15 @@ export function DeviceManagerView(): React.JSX.Element {
   const [pendingDelete, setPendingDelete] = useState<DeviceSpec | null>(null)
   const [deleteError, setDeleteError] = useState<string | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
-  const [suiteError, setSuiteError] = useState<string | null>(null)
+  /**
+   * The one-line answer under the suites panel, and the state it was an answer
+   * *about*.
+   *
+   * Kept together so the notice can expire without an effect: the moment the
+   * active suite or its membership changes, what this says has been acted on
+   * (or overtaken) and it stops being rendered.
+   */
+  const [suiteNotice, setSuiteNotice] = useState<{ text: string; about: string } | null>(null)
 
   const close = (): void => setView('canvas')
 
@@ -84,6 +109,10 @@ export function DeviceManagerView(): React.JSX.Element {
       // in `blocked`, but the suites panel owns three more, and one Escape must
       // never dismiss two surfaces at once.
       if (document.querySelector('[data-slot="dialog-content"]') !== null) return
+      // The same rule for a field that is being typed in — the address bar is
+      // still in the toolbar above this view, and Escape there means "drop what
+      // I typed", not "close the library behind me".
+      if (isEditing(event.target)) return
       setView('canvas')
     }
     window.addEventListener('keydown', onKeyDown)
@@ -93,6 +122,21 @@ export function DeviceManagerView(): React.JSX.Element {
   }, [blocked, setView])
 
   const inSuite = useMemo(() => new Set(active.map((d) => d.id)), [active])
+  // What the status line below is *about*: the suite, and what is in it.
+  const membership = useMemo(
+    () => activeSuiteId + ':' + active.map((d) => d.id).join(' '),
+    [activeSuiteId, active]
+  )
+  const suiteError = suiteNotice?.about === membership ? suiteNotice.text : null
+  const setSuiteError = (text: string | null): void => {
+    setSuiteNotice(text === null ? null : { text, about: membership })
+  }
+
+  /** The suites that hold nothing but the device waiting to be deleted. */
+  const blockingSuites = useMemo(
+    () => (pendingDelete === null ? [] : suitesEmptiedBy(suites, pendingDelete.id)),
+    [pendingDelete, suites]
+  )
 
   const custom = useMemo(
     () => customDevices.filter((d) => matchesQuery(d, query)),
@@ -102,16 +146,21 @@ export function DeviceManagerView(): React.JSX.Element {
   const nothingFound = custom.length === 0 && catalog.length === 0
 
   /**
-   * Membership, from the card. The only way this is refused is the suite's last
-   * device, which is worth a sentence — everything else just happens.
+   * Membership, from the card. Two ways it is refused — the suite's last device
+   * and the suite's ceiling — and both are worth a sentence, because neither is
+   * visible on the button that was just clicked.
    */
   const toggleSuite = (device: DeviceSpec): void => {
     const result = useDevices.getState().toggleDeviceInSuite(device.id)
+    if (result.ok) {
+      setSuiteError(null)
+      return
+    }
     setSuiteError(
-      result.ok
-        ? null
-        : result.reason === 'last-in-suite'
-          ? 'A suite keeps at least one device. Add another one before removing this.'
+      result.reason === 'last-in-suite'
+        ? 'A suite keeps at least one device. Add another one before removing this.'
+        : result.reason === 'too-many'
+          ? `A suite holds at most ${MAX_SUITE_DEVICES} devices. Take one out to make room.`
           : 'That device is no longer there.'
     )
   }
@@ -125,16 +174,26 @@ export function DeviceManagerView(): React.JSX.Element {
   const submit = (input: CustomDeviceInput): boolean => {
     const store = useDevices.getState()
     const result = editing === null ? store.addCustom(input) : store.updateCustom(editing.id, input)
-    if (result.ok) return true
+    if (!result.ok) {
+      // A valid form can still be refused by the store: the document has a cap,
+      // and the device being edited may have been deleted in another window.
+      setFormError(
+        result.reason === 'too-many'
+          ? 'You have reached the maximum number of custom devices.'
+          : 'That device no longer exists.'
+      )
+      return false
+    }
 
-    // A valid form can still be refused by the store: the document has a cap,
-    // and the device being edited may have been deleted in another window.
-    setFormError(
-      result.reason === 'too-many'
-        ? 'You have reached the maximum number of custom devices.'
-        : 'That device no longer exists.'
-    )
-    return false
+    // The device is in the library either way; the canvas is the part that can
+    // be full, and a device that quietly did not appear needs explaining.
+    if ('joinedSuite' in result && !result.joinedSuite) {
+      setSuiteError(
+        `“${result.device.name}” was added to your devices. This suite already holds ` +
+          `${MAX_SUITE_DEVICES}, so it is not on the canvas — take one out to make room.`
+      )
+    }
+    return true
   }
 
   const confirmDelete = (): void => {
@@ -147,7 +206,7 @@ export function DeviceManagerView(): React.JSX.Element {
     }
     setDeleteError(
       result.reason === 'last-in-suite'
-        ? 'This is the only device left in the current suite. Add another one first.'
+        ? `${namesOf(blockingSuites)} would be left with no devices. Add another one there first.`
         : 'That device no longer exists.'
     )
   }
@@ -269,7 +328,11 @@ export function DeviceManagerView(): React.JSX.Element {
           <DialogHeader>
             <DialogTitle>Delete {pendingDelete?.name}?</DialogTitle>
             <DialogDescription>
-              It is removed from every suite that uses it. This cannot be undone.
+              {blockingSuites.length === 0
+                ? 'It is removed from every suite that uses it. This cannot be undone.'
+                : `${namesOf(blockingSuites)} ${blockingSuites.length === 1 ? 'holds' : 'hold'} ` +
+                  'nothing else, and a suite cannot be empty. Add another device there, then ' +
+                  'delete this one.'}
             </DialogDescription>
           </DialogHeader>
           {deleteError === null ? null : (
@@ -279,7 +342,11 @@ export function DeviceManagerView(): React.JSX.Element {
             <Button variant="ghost" onClick={() => setPendingDelete(null)}>
               Cancel
             </Button>
-            <Button variant="destructive" onClick={confirmDelete}>
+            <Button
+              variant="destructive"
+              disabled={blockingSuites.length > 0}
+              onClick={confirmDelete}
+            >
               Delete
             </Button>
           </DialogFooter>

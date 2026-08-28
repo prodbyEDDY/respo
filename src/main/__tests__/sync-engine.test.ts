@@ -125,6 +125,60 @@ describe('SyncEngine', () => {
       expect(onTablet?.params).toMatchObject({ x: 800, y: 0 })
     })
 
+    /**
+     * `Input.dispatchMouseEvent` coordinates are read in the zoomed widget's
+     * space, not the page's: Chromium multiplies what it is handed by the
+     * view's zoom factor, so at 50% canvas zoom a coordinate of 80 arrives in
+     * the page as 40. `e2e/sync.spec.ts` is the proof; this is the arithmetic.
+     */
+    it('scales through the zoom the follower is displayed at', () => {
+      h.engine.setZoom('tablet', 0.5)
+      h.engine.handleInput(1, [mouseDown(0.5, 0.25)])
+
+      const onTablet = h.mouse.find((c) => c.id === 2 && c.params.type === 'mousePressed')
+      // 0.5 × 800 device pixels, doubled to survive the halving on the way in.
+      expect(onTablet?.params).toMatchObject({ x: 800, y: 500 })
+
+      // The unzoomed follower is untouched by its neighbour's zoom.
+      const onDesktop = h.mouse.find((c) => c.id === 3 && c.params.type === 'mousePressed')
+      expect(onDesktop?.params).toMatchObject({ x: 960, y: 270 })
+    })
+
+    it('takes the zoom a view registers with, and ignores a nonsensical one', () => {
+      h.engine.registerDevice({
+        deviceId: 'zoomed',
+        target: fakeTarget(8),
+        width: 400,
+        height: 800,
+        zoom: 2
+      })
+      h.engine.setZoom('desktop', 0)
+      h.engine.handleInput(1, [mouseDown(0.5, 0.5)])
+
+      expect(
+        h.mouse.find((c) => c.id === 8 && c.params.type === 'mousePressed')?.params
+      ).toMatchObject({ x: 100, y: 200 })
+      // A zero (or a NaN) is not a scale; the coordinate stays as it was.
+      expect(
+        h.mouse.find((c) => c.id === 3 && c.params.type === 'mousePressed')?.params
+      ).toMatchObject({ x: 960, y: 540 })
+    })
+
+    it('keeps the zoom when the same device registers a new view', () => {
+      h.engine.setZoom('tablet', 0.5)
+      h.engine.registerDevice({
+        deviceId: 'tablet',
+        target: fakeTarget(2),
+        width: 800,
+        height: 1000
+      })
+
+      h.engine.handleInput(1, [mouseDown(0.5, 0.5)])
+      expect(
+        h.mouse.find((c) => c.id === 2 && c.params.type === 'mousePressed')?.params
+      ).toMatchObject({ x: 800, y: 1000 })
+    })
+
     it('follows a device that was resized', () => {
       h.engine.updateDevice('tablet', { width: 1000, height: 500 })
       h.engine.handleInput(1, [mouseDown(0.5, 0.5)])
@@ -204,6 +258,42 @@ describe('SyncEngine', () => {
       expect(h.mouse).toHaveLength(0)
       // Losing the lead device must not leave the canvas with no source.
       expect(h.engine.lead()).toBe('tablet')
+    })
+
+    it('refuses to elect a muted device: it would drive nothing', () => {
+      h.engine.setEnabled('desktop', false)
+      h.engine.setLead('desktop')
+
+      // The election is ignored, so the canvas keeps the source it had.
+      expect(h.engine.lead()).toBe('phone')
+      h.engine.handleInput(1, [mouseDown(0.5, 0.5)])
+      expect(h.mouse.some((c) => c.id === 2)).toBe(true)
+    })
+
+    it('elects it again once it is un-muted', () => {
+      h.engine.setEnabled('desktop', false)
+      h.engine.setLead('desktop')
+      h.engine.setEnabled('desktop', true)
+      h.engine.setLead('desktop')
+      expect(h.engine.lead()).toBe('desktop')
+    })
+
+    it('a muted device does not become the opening lead either', () => {
+      const engine = new SyncEngine({
+        dispatchMouse: () => undefined,
+        dispatchKey: () => undefined,
+        scrollToRatio: () => undefined
+      })
+      engine.setEnabled('a', false)
+      engine.registerDevice({ deviceId: 'a', target: fakeTarget(1), width: 100, height: 100 })
+      engine.registerDevice({ deviceId: 'b', target: fakeTarget(2), width: 100, height: 100 })
+      expect(engine.lead()).toBe('b')
+    })
+
+    it('hands a removed lead to a device that is still mirroring', () => {
+      h.engine.setEnabled('tablet', false)
+      h.engine.unregisterDevice('phone')
+      expect(h.engine.lead()).toBe('desktop')
     })
 
     it('the first device registered leads until the UI elects another', () => {
@@ -323,6 +413,17 @@ describe('SyncEngine', () => {
       h.engine.unregisterDevice('tablet')
       h.runFrame()
       expect(h.scrolls.map((c) => c.id)).toEqual([3])
+    })
+
+    it('a lead election drops what the outgoing lead had queued', () => {
+      // The pointer left mid-gesture. Applying that scroll a frame later would
+      // move the followers on behalf of a device that no longer drives them —
+      // and, worse, on behalf of one the new lead is now scrolling itself.
+      h.engine.handleInput(1, [scroll(0.5)])
+      h.engine.setLead('tablet')
+      h.runFrame()
+
+      expect(h.scrolls).toHaveLength(0)
     })
 
     it('does not reorder a scroll ahead of the click that followed it', () => {

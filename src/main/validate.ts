@@ -15,8 +15,12 @@ import type { DeviceSpec } from '@shared/types'
 const MAX_DEVICES = 64
 /** Same order of magnitude: a document with more suites than this is junk. */
 const MAX_SUITES = 64
-/** A suite name is a label, not a payload. */
+/** A name — of a suite, of a device — is a label, not a payload. */
 const MAX_NAME_LENGTH = 200
+/** Longer than any user agent Chromium ships, short of a payload. */
+const MAX_USER_AGENT_LENGTH = 512
+/** Rotation is one flag per device the user ever turned; junk past this is junk. */
+const MAX_ROTATED = 256
 /** Well past the largest real display, still far short of an allocation bomb. */
 const MAX_DIMENSION = 10_000
 const MAX_DPR = 10
@@ -34,18 +38,33 @@ function isBounded(value: unknown, max: number): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= max
 }
 
-/** Validate a `views:sync-devices` payload. Throws on anything malformed. */
+/**
+ * Validate a `views:sync-devices` payload. Throws on anything malformed.
+ *
+ * The returned array is *rebuilt* rather than the caller's own: the payload
+ * comes from the renderer and one branch of this ends up on disk, so a device
+ * carrying twenty extra keys must not be able to store them there — and a later
+ * mutation of the sender's object must not be able to reach what main kept.
+ */
 export function validateDeviceSpecs(value: unknown): DeviceSpec[] {
   if (!Array.isArray(value)) fail('views:sync-devices expects an array of devices')
   if (value.length > MAX_DEVICES) fail(`views:sync-devices accepts at most ${MAX_DEVICES} devices`)
 
-  for (const entry of value) {
+  return value.map((entry) => {
     if (typeof entry !== 'object' || entry === null) fail('device must be an object')
     const device = entry as Partial<Record<keyof DeviceSpec, unknown>>
 
-    if (!isFilledString(device.id)) fail('device.id must be a non-empty string')
-    if (!isFilledString(device.name)) fail('device.name must be a non-empty string')
-    if (!isFilledString(device.userAgent)) fail('device.userAgent must be a non-empty string')
+    if (!isFilledString(device.id) || device.id.length > MAX_NAME_LENGTH) {
+      fail(`device.id must be a non-empty string of at most ${MAX_NAME_LENGTH} characters`)
+    }
+    if (!isFilledString(device.name) || device.name.length > MAX_NAME_LENGTH) {
+      fail(`device.name must be a non-empty string of at most ${MAX_NAME_LENGTH} characters`)
+    }
+    if (!isFilledString(device.userAgent) || device.userAgent.length > MAX_USER_AGENT_LENGTH) {
+      fail(
+        `device.userAgent must be a non-empty string of at most ${MAX_USER_AGENT_LENGTH} characters`
+      )
+    }
     if (!isBounded(device.width, MAX_DIMENSION)) {
       fail(`device.width must be in (0, ${MAX_DIMENSION}]`)
     }
@@ -56,20 +75,27 @@ export function validateDeviceSpecs(value: unknown): DeviceSpec[] {
     if (typeof device.touch !== 'boolean') fail('device.touch must be a boolean')
 
     // Optional on a catalog device, present on a user-defined one.
-    if (
-      device.type !== undefined &&
-      device.type !== 'phone' &&
-      device.type !== 'tablet' &&
-      device.type !== 'desktop'
-    ) {
+    const type = device.type
+    if (type !== undefined && type !== 'phone' && type !== 'tablet' && type !== 'desktop') {
       fail("device.type must be 'phone', 'tablet' or 'desktop'")
     }
-    if (device.rotatable !== undefined && typeof device.rotatable !== 'boolean') {
+    const rotatable = device.rotatable
+    if (rotatable !== undefined && typeof rotatable !== 'boolean') {
       fail('device.rotatable must be a boolean')
     }
-  }
 
-  return value as DeviceSpec[]
+    return {
+      id: device.id,
+      name: device.name,
+      width: device.width,
+      height: device.height,
+      dpr: device.dpr,
+      userAgent: device.userAgent,
+      touch: device.touch,
+      ...(type === undefined ? {} : { type }),
+      ...(rotatable === undefined ? {} : { rotatable })
+    }
+  })
 }
 
 function validateSuites(value: unknown): Suite[] {
@@ -133,7 +159,29 @@ export function validatePersistedPatch(value: unknown): Partial<PersistedState> 
     out.ui = { theme: validateThemeSource((ui as Record<string, unknown>)['theme']) }
   }
   if (patch['sync'] !== undefined) out.sync = validateSyncSettings(patch['sync'])
+  if (patch['rotated'] !== undefined) out.rotated = validateRotated(patch['rotated'])
 
+  return out
+}
+
+/** Validate the per-device orientation map: `{ [deviceId]: isLandscape }`. */
+function validateRotated(value: unknown): Record<string, boolean> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    fail('store:save rotated must be an object')
+  }
+  const entries = Object.entries(value as Record<string, unknown>)
+  if (entries.length > MAX_ROTATED) {
+    fail(`store:save rotated accepts at most ${MAX_ROTATED} devices`)
+  }
+
+  const out: Record<string, boolean> = {}
+  for (const [id, landscape] of entries) {
+    if (id.length === 0 || id.length > MAX_NAME_LENGTH) {
+      fail('store:save rotated keys must be device ids')
+    }
+    if (typeof landscape !== 'boolean') fail('store:save rotated values must be booleans')
+    out[id] = landscape
+  }
   return out
 }
 

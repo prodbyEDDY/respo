@@ -303,6 +303,33 @@ describe('mergeBackup', () => {
     expect(merged.devicesAdded).toBe(0)
   })
 
+  it('counts what the caps turned away, so the import can say so', () => {
+    const current: BackupSource = {
+      customDevices: Array.from({ length: 64 }, (_, i) =>
+        device({ id: `custom-have-${i}`, name: `Have ${i}` })
+      ),
+      suites: []
+    }
+    const backup: RespoBackupV1 = {
+      version: 1,
+      customDevices: [
+        device({ id: 'custom-new-a', name: 'New A' }),
+        device({ id: 'custom-new-b', name: 'New B' })
+      ],
+      // The suite named only the devices that did not fit, so it goes too.
+      suites: [{ id: 'a', name: 'New ones', deviceIds: ['custom-new-a', 'custom-new-b'] }]
+    }
+    const merged = mergeBackup(current, backup)
+
+    expect(merged.devicesAdded).toBe(0)
+    expect(merged.devicesSkipped).toBe(2)
+    expect(merged.suitesSkipped).toBe(1)
+  })
+
+  it('skips nothing when everything fits', () => {
+    expect(mergeBackup(CLEAN, serializeBackup(source())).devicesSkipped).toBe(0)
+  })
+
   it('leaves the inputs untouched', () => {
     const current = source()
     const backup = serializeBackup(source({ suites: [] }))

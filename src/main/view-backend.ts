@@ -260,6 +260,10 @@ export function createElectronViewBackend(
         setZoomFactor(zoom: number): void {
           if (wc.isDestroyed()) return
           wc.setZoomFactor(zoom)
+          // The engine dispatches mouse events into this view, and those
+          // coordinates are read in the zoomed widget's space rather than the
+          // page's own (see `SyncRegistry.setZoom`).
+          sync?.setZoom(device.id, zoom)
         },
         applyDevice(next: DeviceSpec): void {
           if (wc.isDestroyed()) return

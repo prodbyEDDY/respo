@@ -60,6 +60,7 @@ function usePersistedState(): boolean {
         useSettings.getState().hydrate(state.ui.theme)
         useDevices.getState().hydrate(state)
         useSync.getState().hydrate(state.sync)
+        useLayout.getState().hydrateRotation(state.rotated)
       }
       setHydrated(true)
     })

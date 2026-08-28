@@ -189,3 +189,48 @@ describe('sync switches', () => {
     expect(backup).toBeNull()
   })
 })
+
+describe('device orientation', () => {
+  it('a fresh install holds every device the way it is made', () => {
+    expect(defaultPersistedState().rotated).toEqual({})
+  })
+
+  it('a patch replaces the whole map, without aliasing it', () => {
+    const rotated = { 'iphone-15-pro': true }
+    const next = mergePersistedState(defaultPersistedState(), { rotated })
+    rotated['ipad-mini' as keyof typeof rotated] = true
+
+    expect(next.rotated).toEqual({ 'iphone-15-pro': true })
+  })
+
+  it('a patch that says nothing about rotation leaves it alone', () => {
+    const base = defaultPersistedState()
+    base.rotated = { 'ipad-mini': true }
+    expect(mergePersistedState(base, { activeSuiteId: 'x' }).rotated).toEqual({ 'ipad-mini': true })
+  })
+
+  it('a document written before rotation was persisted reads as all-portrait', () => {
+    const stored: Record<string, unknown> = { ...defaultPersistedState() }
+    delete stored['rotated']
+    expect(migratePersistedState(stored).state.rotated).toEqual({})
+  })
+
+  it('keeps only the landscape exceptions, and drops the junk around them', () => {
+    const stored: Record<string, unknown> = {
+      ...defaultPersistedState(),
+      rotated: { 'ipad-mini': true, 'pixel-8': false, 'iphone-se': 'yes', '': true }
+    }
+    const { state, backup } = migratePersistedState(stored)
+
+    expect(state.rotated).toEqual({ 'ipad-mini': true })
+    expect(backup).toBeNull()
+  })
+
+  it('a rotated map that is not a map costs the orientations and nothing else', () => {
+    const stored: Record<string, unknown> = { ...defaultPersistedState(), rotated: 'landscape' }
+    const { state } = migratePersistedState(stored)
+
+    expect(state.rotated).toEqual({})
+    expect(state.suites).toEqual(defaultPersistedState().suites)
+  })
+})

@@ -10,6 +10,7 @@ import {
   emptyDraft,
   MAX_DPR,
   MAX_DIMENSION,
+  MAX_NAME_LENGTH,
   MIN_DPR,
   MIN_DIMENSION,
   validateDraft,
@@ -147,7 +148,9 @@ function DeviceForm({
             id="device-name"
             value={draft.name}
             autoFocus
-            maxLength={80}
+            // The same ceiling the validator uses: a field that lets you type
+            // past it only to refuse on submit is a trap.
+            maxLength={MAX_NAME_LENGTH}
             placeholder="My phone"
             aria-invalid={errors.name !== undefined}
             onChange={(e) => field('name', e.target.value)}

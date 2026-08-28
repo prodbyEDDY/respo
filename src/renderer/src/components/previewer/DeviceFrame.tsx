@@ -148,7 +148,9 @@ function RotateToggle({ deviceId }: { deviceId: string }): React.JSX.Element {
  */
 export function DeviceFrame({ device, zoom, viewportRef }: DeviceFrameProps): React.JSX.Element {
   const load = useNavigation((s) => s.perDevice[device.id])
-  const isLead = useSync((s) => s.leadDeviceId === device.id)
+  // A muted device drives nothing, so it never wears the lead ring — including
+  // the moment it is muted while the pointer is still resting on it.
+  const isLead = useSync((s) => s.leadDeviceId === device.id && s.disabled[device.id] !== true)
   const setLead = useSync((s) => s.setLead)
   const width = Math.round(device.width * zoom)
   const height = Math.round(device.height * zoom)

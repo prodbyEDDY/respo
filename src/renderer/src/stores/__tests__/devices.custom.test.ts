@@ -9,7 +9,8 @@ vi.mock('@renderer/lib/persistence', () => ({
   loadPersistedState: vi.fn()
 }))
 
-import { useDevices } from '../devices'
+import { MAX_SUITE_DEVICES, suitesEmptiedBy, useDevices } from '../devices'
+import { useSync } from '../sync'
 
 function input(over: Partial<CustomDeviceInput> = {}): CustomDeviceInput {
   return {
@@ -27,6 +28,7 @@ function input(over: Partial<CustomDeviceInput> = {}): CustomDeviceInput {
 
 function reset(): void {
   useDevices.getState().hydrate(defaultPersistedState())
+  useSync.setState({ globalEnabled: true, disabled: {}, leadDeviceId: null })
   savePersistedState.mockClear()
 }
 
@@ -85,6 +87,29 @@ describe('devices store — custom devices', () => {
       if (!first.ok || !second.ok) return
       expect(second.device.id).not.toBe(first.device.id)
       expect(useDevices.getState().customDevices).toHaveLength(2)
+    })
+
+    it('reports having joined the suite', () => {
+      const result = useDevices.getState().addCustom(input())
+      expect(result.ok && result.joinedSuite).toBe(true)
+    })
+
+    it('still adds the device when the suite is full, and says it did not join', () => {
+      const ids = DEVICE_CATALOG.slice(0, MAX_SUITE_DEVICES).map((d) => d.id)
+      const state = defaultPersistedState()
+      state.suites = [{ id: DEFAULT_SUITE_ID, name: 'Default', deviceIds: ids }]
+      useDevices.getState().hydrate(state)
+      savePersistedState.mockClear()
+
+      const result = useDevices.getState().addCustom(input({ name: 'Kiosk' }))
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+
+      // The library takes it; the canvas is what is full.
+      expect(result.joinedSuite).toBe(false)
+      expect(useDevices.getState().customDevices).toHaveLength(1)
+      expect(useDevices.getState().active.map((d) => d.id)).toEqual(ids)
+      expect(savePersistedState.mock.calls[0]?.[0]).not.toHaveProperty('suites')
     })
 
     it('refuses past the document’s cap rather than writing something main rejects', () => {
@@ -204,7 +229,12 @@ describe('devices store — custom devices', () => {
       expect(savePersistedState).not.toHaveBeenCalled()
     })
 
-    it('allows the deletion when the active suite does not use the device', () => {
+    /**
+     * The delete takes the device out of *every* suite, so the guard has to
+     * cover every suite too: a suite left empty is a dead-end canvas waiting
+     * behind the next suite switch, and nothing on screen said it would happen.
+     */
+    it('refuses when a suite the user is not looking at would be emptied', () => {
       const added = useDevices.getState().addCustom(input())
       if (!added.ok) throw new Error('add refused')
 
@@ -215,9 +245,68 @@ describe('devices store — custom devices', () => {
         { id: 'other', name: 'Other', deviceIds: [added.device.id] }
       ]
       useDevices.getState().hydrate(state)
+      savePersistedState.mockClear()
+
+      expect(useDevices.getState().removeCustom(added.device.id)).toEqual({
+        ok: false,
+        reason: 'last-in-suite'
+      })
+      expect(useDevices.getState().customDevices).toHaveLength(1)
+      expect(useDevices.getState().suites[1]?.deviceIds).toEqual([added.device.id])
+      expect(savePersistedState).not.toHaveBeenCalled()
+    })
+
+    it('allows the deletion once every suite keeps something else', () => {
+      const added = useDevices.getState().addCustom(input())
+      if (!added.ok) throw new Error('add refused')
+
+      const state = defaultPersistedState()
+      state.customDevices = [added.device]
+      state.suites = [
+        { id: DEFAULT_SUITE_ID, name: 'Default', deviceIds: ['pixel-8'] },
+        { id: 'other', name: 'Other', deviceIds: [added.device.id, 'ipad-mini'] }
+      ]
+      useDevices.getState().hydrate(state)
 
       expect(useDevices.getState().removeCustom(added.device.id).ok).toBe(true)
-      expect(useDevices.getState().suites[1]?.deviceIds).toEqual([])
+      expect(useDevices.getState().suites[1]?.deviceIds).toEqual(['ipad-mini'])
+    })
+
+    it('names the suites in the way, so the dialog can say which', () => {
+      const suites = [
+        { id: DEFAULT_SUITE_ID, name: 'Default', deviceIds: ['pixel-8', 'custom-mine'] },
+        { id: 'other', name: 'Other', deviceIds: ['custom-mine'] }
+      ]
+      expect(suitesEmptiedBy(suites, 'custom-mine').map((s) => s.name)).toEqual(['Other'])
+      expect(suitesEmptiedBy(suites, 'pixel-8')).toEqual([])
+    })
+
+    it('un-mutes the deleted id, so the next device of that name is not born silent', () => {
+      const added = useDevices.getState().addCustom(input())
+      if (!added.ok) throw new Error('add refused')
+
+      // The user mutes it, then deletes it. Ids are slugs of the name, so a
+      // second "My phone" would resolve to the same id.
+      useSync.getState().toggleDevice(added.device.id)
+      expect(useSync.getState().disabled[added.device.id]).toBe(true)
+
+      expect(useDevices.getState().removeCustom(added.device.id).ok).toBe(true)
+      expect(useSync.getState().disabled).toEqual({})
+
+      const again = useDevices.getState().addCustom(input())
+      expect(again.ok && again.device.id).toBe(added.device.id)
+      expect(useSync.getState().disabled[added.device.id]).toBeUndefined()
+    })
+
+    it('leaves the other mutes alone', () => {
+      const added = useDevices.getState().addCustom(input())
+      if (!added.ok) throw new Error('add refused')
+
+      useSync.getState().toggleDevice('pixel-8')
+      useSync.getState().toggleDevice(added.device.id)
+
+      useDevices.getState().removeCustom(added.device.id)
+      expect(useSync.getState().disabled).toEqual({ 'pixel-8': true })
     })
 
     it('refuses an id nothing answers to, and a catalog one', () => {

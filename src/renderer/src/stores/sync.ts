@@ -25,9 +25,23 @@ export interface SyncState {
   toggleGlobal: () => void
   toggleDevice: (deviceId: string) => void
   /**
+   * Drop a device that no longer exists from the switches.
+   *
+   * Ids are slugs of the name, so a deleted "My Phone" and the next one the
+   * user makes are the same id — without this the new device would arrive
+   * silently muted by a decision taken about a device that is gone.
+   */
+  forgetDevice: (deviceId: string) => void
+  /** Back to the factory switches: mirroring on, nothing muted. */
+  resetSwitches: () => void
+  /**
    * Elect (or clear) the lead. Safe to call on every `mouseenter`: the IPC is
    * coalesced to one call per animation frame and unchanged values cost
    * nothing (CLAUDE.md §4).
+   *
+   * A muted device is never elected: it drives nothing, so making it the lead
+   * would quietly stop the canvas mirroring for as long as the pointer rested
+   * on it.
    */
   setLead: (deviceId: string | null) => void
   /** Install the switches main restored at boot. Writes nothing back. */
@@ -98,9 +112,44 @@ export const useSync = create<SyncState>((set, get) => ({
     savePersistedState({
       sync: { enabled: get().globalEnabled, disabledDeviceIds: disabledIds(next) }
     })
+    // Muting the device the pointer is resting on must not leave it leading a
+    // canvas it no longer drives.
+    if (nextDisabled && get().leadDeviceId === deviceId) get().setLead(null)
+  },
+
+  forgetDevice: (deviceId) => {
+    const { disabled } = get()
+    if (disabled[deviceId] !== true) return
+
+    const next = { ...disabled }
+    delete next[deviceId]
+
+    set({ disabled: next })
+    // Main keeps its own set, and it outlives the view: telling it the device
+    // mirrors again is what stops the id from being remembered there too.
+    invoke((bridge) => bridge.invoke('sync:set-enabled', deviceId, true))
+    savePersistedState({
+      sync: { enabled: get().globalEnabled, disabledDeviceIds: disabledIds(next) }
+    })
+  },
+
+  resetSwitches: () => {
+    const { globalEnabled, disabled } = get()
+    const muted = disabledIds(disabled)
+    if (globalEnabled && muted.length === 0) return
+
+    set({ globalEnabled: true, disabled: {} })
+    if (!globalEnabled) invoke((bridge) => bridge.invoke('sync:set-global', true))
+    for (const deviceId of muted) {
+      invoke((bridge) => bridge.invoke('sync:set-enabled', deviceId, true))
+    }
+    savePersistedState({ sync: { enabled: true, disabledDeviceIds: [] } })
   },
 
   setLead: (deviceId) => {
+    // Muted devices are not candidates: `handleInput` drops everything they
+    // report, so electing one is the same as electing nothing.
+    if (deviceId !== null && get().disabled[deviceId] === true) return
     pendingLead = deviceId
     // The ring follows the pointer immediately — it is a local repaint, not a
     // round trip. Only the message to main waits for the frame.

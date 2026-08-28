@@ -9,7 +9,9 @@ vi.mock('@renderer/lib/persistence', () => ({
   loadPersistedState: vi.fn()
 }))
 
-import { NEW_SUITE_DEVICE_ID, useDevices } from '../devices'
+import { DEVICE_CATALOG } from '@shared/deviceCatalog'
+import { MAX_SUITE_DEVICES, NEW_SUITE_DEVICE_ID, useDevices } from '../devices'
+import { useSync } from '../sync'
 
 function input(over: Partial<CustomDeviceInput> = {}): CustomDeviceInput {
   return {
@@ -27,6 +29,7 @@ function input(over: Partial<CustomDeviceInput> = {}): CustomDeviceInput {
 
 function reset(): void {
   useDevices.getState().hydrate(defaultPersistedState())
+  useSync.setState({ globalEnabled: true, disabled: {}, leadDeviceId: null })
   savePersistedState.mockClear()
 }
 
@@ -203,6 +206,29 @@ describe('devices store — suites', () => {
       expect(savePersistedState).not.toHaveBeenCalled()
     })
 
+    it('refuses to grow the suite past its cap', () => {
+      // A full suite, from the catalog. The cap is the canvas's, not the
+      // document's: main throws at 64, and reaching 65 through this UI would
+      // mean a `views:sync-devices` rejected with nothing on screen to say so.
+      const ids = DEVICE_CATALOG.slice(0, MAX_SUITE_DEVICES).map((d) => d.id)
+      const state = defaultPersistedState()
+      state.suites = [{ id: DEFAULT_SUITE_ID, name: 'Default', deviceIds: ids }]
+      useDevices.getState().hydrate(state)
+      savePersistedState.mockClear()
+
+      const extra = DEVICE_CATALOG[MAX_SUITE_DEVICES]?.id as string
+      expect(useDevices.getState().toggleDeviceInSuite(extra)).toEqual({
+        ok: false,
+        reason: 'too-many'
+      })
+      expect(activeIds()).toHaveLength(MAX_SUITE_DEVICES)
+      expect(savePersistedState).not.toHaveBeenCalled()
+
+      // Taking one out is still allowed — that is the way back under the cap.
+      expect(useDevices.getState().toggleDeviceInSuite(ids[0] as string).ok).toBe(true)
+      expect(useDevices.getState().toggleDeviceInSuite(extra).ok).toBe(true)
+    })
+
     it('only touches the active suite', () => {
       const state = defaultPersistedState()
       state.suites.push({ id: 'other', name: 'Other', deviceIds: ['ipad-mini'] })
@@ -214,9 +240,14 @@ describe('devices store — suites', () => {
   })
 
   describe('reorderSuiteDevices', () => {
+    /** Ids, in suite order. `move(a, b)` drops a onto b's place. */
+    function move(from: string, to: string): void {
+      useDevices.getState().reorderSuiteDevices(from, to)
+    }
+
     it('moves a device, and the canvas order follows', () => {
       const before = activeIds()
-      useDevices.getState().reorderSuiteDevices(0, 2)
+      move(before[0] as string, before[2] as string)
 
       const expected = [before[1], before[2], before[0], before[3], before[4]]
       expect(activeSuite().deviceIds).toEqual(expected)
@@ -225,25 +256,59 @@ describe('devices store — suites', () => {
 
     it('moves a device backwards too', () => {
       const before = activeIds()
-      useDevices.getState().reorderSuiteDevices(3, 0)
+      move(before[3] as string, before[0] as string)
       expect(activeIds()[0]).toBe(before[3])
     })
 
     it('persists the new order', () => {
-      useDevices.getState().reorderSuiteDevices(0, 1)
+      const before = activeIds()
+      move(before[0] as string, before[1] as string)
       expect(savePersistedState).toHaveBeenCalledTimes(1)
       expect(savePersistedState.mock.calls[0]?.[0].suites[0].deviceIds).toEqual(activeIds())
     })
 
-    it('ignores indices that are not positions in the suite', () => {
+    it('ignores ids that are not in the suite, and a no-op move', () => {
       const before = activeIds()
-      useDevices.getState().reorderSuiteDevices(0, 0)
-      useDevices.getState().reorderSuiteDevices(-1, 2)
-      useDevices.getState().reorderSuiteDevices(0, 99)
-      useDevices.getState().reorderSuiteDevices(1.5, 2)
+      move(before[0] as string, before[0] as string)
+      move('ghost', before[2] as string)
+      move(before[0] as string, 'ghost')
 
       expect(activeIds()).toEqual(before)
       expect(savePersistedState).not.toHaveBeenCalled()
+    })
+
+    /**
+     * The reason the signature is ids: a suite may name a device nothing
+     * resolves to (a document written by a build that had it, a catalog entry
+     * that went away). The canvas skips it, so canvas index 1 is suite index 2
+     * — and a drag keyed on the canvas would move the device beside the one the
+     * user picked up.
+     */
+    it('moves the right device when the suite names one that does not resolve', () => {
+      const state = defaultPersistedState()
+      state.suites = [
+        {
+          id: DEFAULT_SUITE_ID,
+          name: 'Default',
+          deviceIds: ['iphone-15-pro', 'gone-in-this-build', 'pixel-8', 'ipad-mini']
+        }
+      ]
+      useDevices.getState().hydrate(state)
+      savePersistedState.mockClear()
+
+      // On the canvas this is "move the first chip past the second".
+      expect(activeIds()).toEqual(['iphone-15-pro', 'pixel-8', 'ipad-mini'])
+      move('iphone-15-pro', 'pixel-8')
+
+      expect(activeIds()).toEqual(['pixel-8', 'iphone-15-pro', 'ipad-mini'])
+      // And the unresolvable id keeps its place rather than being shuffled or
+      // dropped: it is the user's document, not ours.
+      expect(activeSuite().deviceIds).toEqual([
+        'gone-in-this-build',
+        'pixel-8',
+        'iphone-15-pro',
+        'ipad-mini'
+      ])
     })
   })
 
@@ -323,6 +388,21 @@ describe('devices store — suites', () => {
   })
 
   describe('reset', () => {
+    it('clears the mirroring switches too: every muted id named a dead device', () => {
+      const added = useDevices.getState().addCustom(input({ name: 'Kiosk' }))
+      if (!added.ok) throw new Error('add refused')
+      useSync.getState().toggleDevice(added.device.id)
+      useSync.getState().toggleGlobal()
+
+      useDevices.getState().reset()
+
+      expect(useSync.getState().disabled).toEqual({})
+      expect(useSync.getState().globalEnabled).toBe(true)
+      expect(savePersistedState).toHaveBeenLastCalledWith({
+        sync: { enabled: true, disabledDeviceIds: [] }
+      })
+    })
+
     it('goes back to the default suite with no devices of your own', () => {
       useDevices.getState().addCustom(input())
       useDevices.getState().createSuite('Second')

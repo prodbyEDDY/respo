@@ -45,6 +45,12 @@ export type PersistedState = {
   activeSuiteId: string
   ui: { theme: ThemeSource }
   sync: SyncSettings
+  /**
+   * Which devices the user turned on their side, by id. An absent id is
+   * portrait, which is why only the exceptions are written — the same reasoning
+   * as `SyncSettings.disabledDeviceIds`.
+   */
+  rotated: Record<string, boolean>
 }
 
 export const DEFAULT_SUITE_ID = 'default'
@@ -69,6 +75,8 @@ export function makeSuiteId(name: string, taken: ReadonlySet<string>): string {
 /** Guard rails for anything read back off disk. Same spirit as `main/validate`. */
 const MAX_DEVICES = 64
 const MAX_SUITES = 64
+/** One orientation flag per device the user ever turned, catalog included. */
+const MAX_ROTATED = 256
 const MAX_DIMENSION = 10_000
 const MAX_DPR = 10
 
@@ -87,7 +95,9 @@ export function defaultPersistedState(): PersistedState {
     activeSuiteId: DEFAULT_SUITE_ID,
     ui: { theme: 'system' },
     // Mirroring is the product: it is on out of the box, with nothing muted.
-    sync: { enabled: true, disabledDeviceIds: [] }
+    sync: { enabled: true, disabledDeviceIds: [] },
+    // Every device starts the way it is held.
+    rotated: {}
   }
 }
 
@@ -111,6 +121,7 @@ export function mergePersistedState(
     ...(patch.activeSuiteId === undefined ? {} : { activeSuiteId: patch.activeSuiteId }),
     ui: { ...base.ui, ...(patch.ui ?? {}) },
     sync: cloneSync(patch.sync ?? base.sync),
+    rotated: { ...(patch.rotated ?? base.rotated) },
     schemaVersion: SCHEMA_VERSION
   }
   return next
@@ -165,7 +176,8 @@ export function migratePersistedState(raw: unknown): MigrationResult {
       suites: resolvedSuites,
       activeSuiteId: active,
       ui: { theme: sanitizeTheme((doc['ui'] as Record<string, unknown> | undefined)?.['theme']) },
-      sync: sanitizeSync(doc['sync'])
+      sync: sanitizeSync(doc['sync']),
+      rotated: sanitizeRotated(doc['rotated'])
     },
     backup: null
   }
@@ -250,6 +262,25 @@ function sanitizeSync(value: unknown): SyncSettings {
     enabled: typeof sync['enabled'] === 'boolean' ? sync['enabled'] : true,
     disabledDeviceIds: [...seen]
   }
+}
+
+/**
+ * Repair the orientation map.
+ *
+ * A field, not a document: junk here costs the user their landscape frames and
+ * nothing else, so it is dropped entry by entry. Only `true` survives — a
+ * `false` is the default said out loud, and keeping it would grow the map by
+ * one entry for every device ever turned back.
+ */
+function sanitizeRotated(value: unknown): Record<string, boolean> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return {}
+
+  const out: Record<string, boolean> = {}
+  for (const [id, landscape] of Object.entries(value).slice(0, MAX_ROTATED)) {
+    if (id.length === 0 || landscape !== true) continue
+    out[id] = true
+  }
+  return out
 }
 
 /** Drop unusable suites; inside a usable one, drop only the junk ids. */

@@ -126,6 +126,58 @@ describe('sync store — per-device mirroring', () => {
   })
 })
 
+describe('sync store — forgetting a device', () => {
+  it('drops the mute, tells main, and persists what is left', () => {
+    useSync.getState().toggleDevice('custom-my-phone')
+    useSync.getState().toggleDevice('pixel-8')
+    calls.length = 0
+    savePersistedState.mockClear()
+
+    useSync.getState().forgetDevice('custom-my-phone')
+
+    expect(useSync.getState().disabled).toEqual({ 'pixel-8': true })
+    // Main keeps its own set, and it outlives the view.
+    expect(channelCalls('sync:set-enabled')).toEqual([['custom-my-phone', true]])
+    expect(savePersistedState).toHaveBeenCalledWith({
+      sync: { enabled: true, disabledDeviceIds: ['pixel-8'] }
+    })
+  })
+
+  it('costs nothing for a device that was never muted', () => {
+    useSync.getState().forgetDevice('pixel-8')
+    expect(calls).toEqual([])
+    expect(savePersistedState).not.toHaveBeenCalled()
+  })
+})
+
+describe('sync store — resetting the switches', () => {
+  it('turns mirroring back on and forgets every mute, in main too', () => {
+    useSync.getState().toggleGlobal()
+    useSync.getState().toggleDevice('pixel-8')
+    useSync.getState().toggleDevice('ipad-mini')
+    calls.length = 0
+    savePersistedState.mockClear()
+
+    useSync.getState().resetSwitches()
+
+    expect(useSync.getState()).toMatchObject({ globalEnabled: true, disabled: {} })
+    expect(channelCalls('sync:set-global')).toEqual([[true]])
+    expect(channelCalls('sync:set-enabled')).toEqual([
+      ['pixel-8', true],
+      ['ipad-mini', true]
+    ])
+    expect(savePersistedState).toHaveBeenCalledWith({
+      sync: { enabled: true, disabledDeviceIds: [] }
+    })
+  })
+
+  it('writes nothing when the switches are already at their defaults', () => {
+    useSync.getState().resetSwitches()
+    expect(calls).toEqual([])
+    expect(savePersistedState).not.toHaveBeenCalled()
+  })
+})
+
 describe('sync store — lead election', () => {
   it('shows the ring immediately, without waiting for a round trip', () => {
     useSync.getState().setLead('pixel-8')
@@ -164,6 +216,38 @@ describe('sync store — lead election', () => {
     runFrame()
 
     expect(useSync.getState().leadDeviceId).toBeNull()
+    expect(channelCalls('sync:set-lead')).toEqual([[null]])
+  })
+
+  it('a muted device is never elected: it would drive nothing', () => {
+    useSync.getState().setLead('iphone-15-pro')
+    runFrame()
+    useSync.getState().toggleDevice('pixel-8')
+    calls.length = 0
+
+    useSync.getState().setLead('pixel-8')
+    runFrame()
+
+    // The lead stays where it was, and main is told nothing new.
+    expect(useSync.getState().leadDeviceId).toBe('iphone-15-pro')
+    expect(channelCalls('sync:set-lead')).toEqual([])
+  })
+
+  it('muting the device the pointer is on gives up the lead', () => {
+    useSync.getState().setLead('pixel-8')
+    runFrame()
+
+    useSync.getState().toggleDevice('pixel-8')
+    runFrame()
+
+    expect(useSync.getState().leadDeviceId).toBeNull()
+    expect(channelCalls('sync:set-lead')).toEqual([['pixel-8'], [null]])
+  })
+
+  it('still lets the pointer leave the canvas', () => {
+    useSync.getState().toggleDevice('pixel-8')
+    useSync.getState().setLead(null)
+    runFrame()
     expect(channelCalls('sync:set-lead')).toEqual([[null]])
   })
 

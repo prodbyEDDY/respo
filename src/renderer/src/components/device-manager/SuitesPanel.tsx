@@ -175,10 +175,9 @@ export function SuitesPanel(): React.JSX.Element {
   const onDragEnd = (event: DragEndEvent): void => {
     const { active: dragged, over } = event
     if (over === null || dragged.id === over.id) return
-    const from = ids.indexOf(String(dragged.id))
-    const to = ids.indexOf(String(over.id))
-    if (from === -1 || to === -1) return
-    useDevices.getState().reorderSuiteDevices(from, to)
+    // Ids, not positions: the chips are the *resolved* suite, and the store is
+    // the only place that knows where those ids sit in the suite itself.
+    useDevices.getState().reorderSuiteDevices(String(dragged.id), String(over.id))
   }
 
   const create = (): void => {
@@ -231,11 +230,23 @@ export function SuitesPanel(): React.JSX.Element {
       const merged = useDevices.getState().importBackup(result.backup)
       const devices = merged.devicesAdded + merged.devicesReplaced
       const imported = merged.suitesAdded + merged.suitesReplaced
+      // What the file *did not* bring is the half a user would otherwise go
+      // looking for: a document at its cap drops the rest in silence.
+      const skipped = [
+        merged.devicesSkipped === 0
+          ? null
+          : `${merged.devicesSkipped} ${merged.devicesSkipped === 1 ? 'device' : 'devices'}`,
+        merged.suitesSkipped === 0
+          ? null
+          : `${merged.suitesSkipped} ${merged.suitesSkipped === 1 ? 'suite' : 'suites'}`
+      ].filter((part): part is string => part !== null)
+
       say(
         'ok',
         `Imported ${devices} ${devices === 1 ? 'device' : 'devices'} and ${imported} ${
           imported === 1 ? 'suite' : 'suites'
-        }.`
+        }.` +
+          (skipped.length === 0 ? '' : ` ${skipped.join(' and ')} did not fit and were skipped.`)
       )
     })
   }

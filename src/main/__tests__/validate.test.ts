@@ -28,9 +28,44 @@ describe('validateDeviceSpecs', () => {
     expect(validateDeviceSpecs([])).toEqual([])
   })
 
-  it('accepts a well-formed list and returns it', () => {
+  it('accepts a well-formed list and returns its devices', () => {
     const devices = [device(), device({ id: 'pixel', touch: false, dpr: 0.5 })]
-    expect(validateDeviceSpecs(devices)).toBe(devices)
+    expect(validateDeviceSpecs(devices)).toEqual(devices)
+  })
+
+  it('rebuilds each device rather than handing the payload back', () => {
+    const devices = [device({ type: 'phone', rotatable: true })]
+    const validated = validateDeviceSpecs(devices)
+
+    // Not the caller's objects: the renderer keeps mutating them, and one
+    // branch of this ends up on disk.
+    expect(validated[0]).not.toBe(devices[0])
+    expect(validated[0]).toEqual(devices[0])
+  })
+
+  it('drops keys that are not part of a device, so they never reach disk', () => {
+    const extra = { ...(device() as object), note: 'x'.repeat(500), __proto__hack: 1 }
+    const validated = validateDeviceSpecs([extra])
+    expect(Object.keys(validated[0] as object).sort()).toEqual([
+      'dpr',
+      'height',
+      'id',
+      'name',
+      'touch',
+      'userAgent',
+      'width'
+    ])
+  })
+
+  it('caps the strings a device carries', () => {
+    expect(() => validateDeviceSpecs([device({ id: 'x'.repeat(201) })])).toThrow(/at most 200/i)
+    expect(() => validateDeviceSpecs([device({ name: 'x'.repeat(201) })])).toThrow(/at most 200/i)
+    expect(() => validateDeviceSpecs([device({ userAgent: 'x'.repeat(513) })])).toThrow(
+      /at most 512/i
+    )
+
+    // And accepts what is merely long: real user agents are.
+    expect(() => validateDeviceSpecs([device({ userAgent: 'x'.repeat(512) })])).not.toThrow()
   })
 
   it.each([
@@ -100,6 +135,26 @@ describe('validatePersistedPatch', () => {
     ['a non-object ui', { ui: 'dark' }]
   ])('rejects %s', (_label, payload) => {
     expect(() => validatePersistedPatch(payload)).toThrow(/invalid ipc payload/i)
+  })
+
+  it('carries the orientation map through, keys and booleans only', () => {
+    const patch = validatePersistedPatch({ rotated: { 'iphone-15': true, 'pixel-8': false } })
+    expect(patch).toEqual({ rotated: { 'iphone-15': true, 'pixel-8': false } })
+  })
+
+  it.each([
+    ['a rotated map that is not an object', { rotated: [] }],
+    ['a rotated value that is not a boolean', { rotated: { 'iphone-15': 'yes' } }],
+    ['a rotated key that is not an id', { rotated: { ['x'.repeat(201)]: true } }]
+  ])('rejects %s', (_label, payload) => {
+    expect(() => validatePersistedPatch(payload)).toThrow(/invalid ipc payload/i)
+  })
+
+  it('rejects an orientation map past its cap', () => {
+    const rotated = Object.fromEntries(
+      Array.from({ length: 257 }, (_v, i) => [`d${i}`, true] as const)
+    )
+    expect(() => validatePersistedPatch({ rotated })).toThrow(/at most 256/i)
   })
 
   it('rejects more suites than the cap', () => {
