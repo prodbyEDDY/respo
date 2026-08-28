@@ -166,6 +166,17 @@ export class ViewManager {
       if (entry === undefined) continue
       seen.add(placement.deviceId)
 
+      // Zoom before the culling check, unlike bounds: it is not only how big
+      // the frame is painted, it is half of the device emulation. A desktop
+      // view's metrics override is divided by the zoom (see `metricsOf` in
+      // `cdp-controller`), and a scrolled-away view is still a live page — one
+      // that "screenshot every device" captures, and one whose viewport must
+      // not depend on whether it happened to be on screen.
+      if (entry.zoom !== placement.zoom) {
+        entry.zoom = placement.zoom
+        entry.view.setZoomFactor(placement.zoom)
+      }
+
       if (!placement.visible) {
         // Offscreen: hide and leave the stale bounds alone. Chromium stops
         // producing frames for a hidden view (spec §8, virtualization).
@@ -176,10 +187,6 @@ export class ViewManager {
       if (!sameRect(entry.bounds, placement.bounds)) {
         entry.bounds = placement.bounds
         entry.view.setBounds(placement.bounds)
-      }
-      if (entry.zoom !== placement.zoom) {
-        entry.zoom = placement.zoom
-        entry.view.setZoomFactor(placement.zoom)
       }
       entry.wantVisible = true
       this.applyVisibility(entry)

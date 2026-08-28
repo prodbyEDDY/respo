@@ -249,6 +249,23 @@ describe('ViewManager.applyLayout', () => {
 
     expect(backend.views.get('a')?.setZoomFactor.mock.calls).toEqual([[0.5], [1]])
   })
+
+  /**
+   * The zoom is not only how big a frame is painted: a desktop view's CDP
+   * metrics override is divided by it, so a view that misses a zoom change is
+   * left emulating the wrong viewport — and it is still a live page that
+   * "screenshot every device" will photograph. Bounds may go stale off screen;
+   * the zoom may not.
+   */
+  it('still tells a culled view about a zoom change', () => {
+    manager.applyLayout([rect('a', { zoom: 0.5 })], CANVAS)
+    // Scrolled far off the canvas: hidden, and not worth a `setBounds`.
+    manager.applyLayout([rect('a', { zoom: 1, x: 9000 })], CANVAS)
+
+    const view = backend.views.get('a')
+    expect(view?.setZoomFactor.mock.calls).toEqual([[0.5], [1]])
+    expect(view?.setVisible.mock.calls.at(-1)).toEqual([false])
+  })
 })
 
 describe('ViewManager.navigateAll', () => {

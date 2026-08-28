@@ -1,4 +1,10 @@
-import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test'
+import {
+  test,
+  expect,
+  _electron as electron,
+  type ElectronApplication,
+  type Page
+} from '@playwright/test'
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -13,6 +19,8 @@ const DOCUMENT_HEIGHT = 4000
 
 /** The first frame on the default canvas, and the viewport it emulates. */
 const PHONE = { prefix: 'iphone-15-pro-393x852-', width: 393, height: 852 }
+/** The last frame on it, and the one whose viewport the canvas zoom used to move. */
+const DESKTOP = { prefix: 'desktop-1440-1440x900-', width: 1440, height: 900 }
 
 const userDataDir = mkdtempSync(join(tmpdir(), 'respo-e2e-shots-'))
 const shotsDir = mkdtempSync(join(tmpdir(), 'respo-shots-'))
@@ -74,6 +82,37 @@ declare global {
     /** Every `shot-state` payload this window has been sent, in order. */
     __shotEvents?: ShotEvent[]
   }
+}
+
+/**
+ * Screenshot one device's viewport and answer with the file main wrote.
+ *
+ * The path comes from the `shot-state` event rather than from guessing at the
+ * folder: two shots of one device in the same second differ only by a collision
+ * suffix, and which of those sorts last is not something a test should have an
+ * opinion about.
+ */
+async function captureOne(page: Page, deviceId: string): Promise<string> {
+  await page.evaluate(async (id: string) => {
+    const respo = (window as unknown as { respo: RespoBridge }).respo
+    window.__shotEvents = []
+    await respo.invoke('shot:device', id, { fullPage: false })
+  }, deviceId)
+
+  let path = ''
+  await expect
+    .poll(
+      async () => {
+        const events = await page.evaluate(() => window.__shotEvents ?? [])
+        const done = events.find((event) => event.state === 'done')
+        path = done?.path ?? ''
+        return events.find((event) => event.state === 'done' || event.state === 'failed')?.state
+      },
+      { message: `the ${deviceId} screenshot never finished` }
+    )
+    .toBe('done')
+
+  return path
 }
 
 function launch(): Promise<ElectronApplication> {
@@ -150,22 +189,31 @@ test('screenshots: full page, every device, and a batch that fails as a batch', 
 
     /* ── The same device, viewport only ───────────────────────────────────── */
 
-    await page.evaluate(() =>
-      (window as unknown as { respo: RespoBridge }).respo.invoke('shot:device', 'iphone-15-pro', {
-        fullPage: false
-      })
-    )
-    await expect.poll(() => shots().length).toBe(6)
-
-    const viewportShot = shots()
-      .filter((name) => name.startsWith(PHONE.prefix))
-      .sort()
-      .at(-1) as string
-    const visible = pngSize(join(shotsDir, viewportShot))
+    const visible = pngSize(await captureOne(page, 'iphone-15-pro'))
     // The emulated viewport at 1×, and nothing below it. The collision suffix
-    // is what kept it from overwriting the full-page shot of the same second.
+    // is what kept it from overwriting the full-page shot of the same second —
+    // there are two files for this device now, and both are whole.
     expect(visible.width).toBe(PHONE.width)
     expect(visible.height).toBe(PHONE.height)
+    expect(shots().filter((name) => name.startsWith(PHONE.prefix))).toHaveLength(2)
+
+    /* ── A desktop device, on a zoomed-out canvas ─────────────────────────── */
+
+    // The canvas zoom is a *painting* scale, and a screenshot must not inherit
+    // it: a 1440px monitor shot at 50% zoom is still a 1440px picture. This is
+    // the desktop emulation fix seen from the file it produces.
+    for (let i = 0; i < 4; i += 1) {
+      await page.getByRole('button', { name: 'More options' }).click()
+      await page.getByRole('menuitem', { name: 'Zoom out' }).click()
+    }
+
+    expect(pngSize(await captureOne(page, 'desktop-1440'))).toEqual({
+      width: DESKTOP.width,
+      height: DESKTOP.height
+    })
+
+    await page.getByRole('button', { name: 'More options' }).click()
+    await page.getByRole('menuitem', { name: 'Reset zoom' }).click()
 
     /* ── A whole batch that cannot be written ─────────────────────────────── */
 
@@ -213,5 +261,115 @@ test('screenshots: full page, every device, and a batch that fails as a batch', 
     await expect.poll(() => shots().filter((name) => name.endsWith('.png')).length).toBe(7)
   } finally {
     await app.close()
+  }
+})
+
+/**
+ * The same pipeline, driven the way a person drives it.
+ *
+ * Everything above went through the IPC channels; this goes through the
+ * controls, in both themes, and then closes the app to prove the settings are
+ * a document rather than a session.
+ */
+test('the screenshot UI works in both themes, and its settings outlive the app', async () => {
+  const uiDir = mkdtempSync(join(tmpdir(), 'respo-shots-ui-'))
+  const uiProfile = mkdtempSync(join(tmpdir(), 'respo-e2e-shots-ui-'))
+  const files = (extension: string): string[] =>
+    readdirSync(uiDir).filter((name) => name.endsWith(extension))
+
+  const start = (): Promise<ElectronApplication> =>
+    electron.launch({
+      args: [MAIN_ENTRY, `--user-data-dir=${uiProfile}`],
+      env: { ...(process.env as Record<string, string>), RESPO_START_URL: TALL_URL }
+    })
+
+  // Seed the folder into the document and restart, rather than posting it into
+  // a running session: picking a folder is a native dialog no test can drive,
+  // and the settings the renderer *hydrates with* are the ones it writes back.
+  const seed = await start()
+  try {
+    const page = await seed.firstWindow()
+    await page.waitForFunction(() => 'respo' in window)
+    await page.evaluate(async (directory: string) => {
+      const respo = (window as unknown as { respo: RespoBridge }).respo
+      await respo.invoke('store:save', { screenshots: { directory, format: 'png', dpr: 1 } })
+    }, uiDir)
+  } finally {
+    // Closing the window is what flushes the debounced write.
+    await seed.close()
+  }
+
+  const app = await start()
+  try {
+    const page = await app.firstWindow()
+    await expect(page.locator('[data-load-state="ready"]')).toHaveCount(5)
+    await page.waitForFunction(() => 'respo' in window)
+
+    /* ── Settings, from the overflow menu ─────────────────────────────────── */
+
+    await page.getByRole('button', { name: 'More options' }).click()
+    await page.getByRole('menuitem', { name: 'Settings…' }).click()
+
+    const dialog = page.getByRole('dialog')
+    await expect(dialog).toBeVisible()
+    // The folder shown is the one main will really write to.
+    await expect(dialog.getByText(uiDir, { exact: true })).toBeVisible()
+
+    await dialog.getByRole('radio', { name: 'JPEG' }).click()
+    await dialog.getByRole('button', { name: 'Done' }).click()
+    await expect(dialog).toBeHidden()
+
+    /* ── One device, from its own header ──────────────────────────────────── */
+
+    await page.getByRole('button', { name: 'Screenshot this device' }).first().click()
+    await expect
+      .poll(() => files('.jpg').length, { message: 'the camera button saved nothing' })
+      .toBe(1)
+    // The format the dialog chose reached the file, so the setting is live.
+    expect(files('.png')).toHaveLength(0)
+
+    // The result is reported where the renderer owns the pixels — over the
+    // canvas it would be behind a device view.
+    await expect(page.getByRole('status')).toContainText('Saved')
+
+    // The shutter is drawn outside the frame for the same reason (a native view
+    // covers the inside of it). Its resting state is all a test can assert
+    // without racing a 150ms flash.
+    await expect(page.locator('[data-shutter]')).toHaveCount(5)
+
+    /* ── Every device, in the dark theme ──────────────────────────────────── */
+
+    await page.getByRole('button', { name: 'Switch to dark theme' }).click()
+    await expect(page.locator('html')).toHaveClass(/dark/)
+
+    await page.getByRole('button', { name: 'Screenshot every device' }).click()
+    await expect
+      .poll(() => files('.jpg').length, { message: 'the dark theme lost the screenshots' })
+      .toBe(6)
+    await expect(page.getByRole('status')).toContainText('Saved 5 screenshots')
+  } finally {
+    await app.close()
+  }
+
+  /* ── And again, from a cold start ───────────────────────────────────────── */
+
+  const second = await start()
+  try {
+    const page = await second.firstWindow()
+    await page.waitForFunction(() => 'respo' in window)
+
+    await page.getByRole('button', { name: 'More options' }).click()
+    await page.getByRole('menuitem', { name: 'Settings…' }).click()
+
+    const dialog = page.getByRole('dialog')
+    await expect(dialog.getByRole('radio', { name: 'JPEG' })).toHaveAttribute(
+      'aria-checked',
+      'true'
+    )
+    await expect(dialog.getByText(uiDir, { exact: true })).toBeVisible()
+  } finally {
+    await second.close()
+    rmSync(uiDir, { recursive: true, force: true })
+    rmSync(uiProfile, { recursive: true, force: true })
   }
 })

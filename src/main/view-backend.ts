@@ -10,7 +10,7 @@ import {
 import { join } from 'path'
 import { SYNC_CAPTURE_CHANNEL, type LoadState, type LoadStatePayload } from '@shared/ipc'
 import type { DeviceSpec, Rect } from '@shared/types'
-import { CDPController } from './cdp-controller'
+import { CDPController, isMobileDevice } from './cdp-controller'
 import type {
   CreateDevtoolsPanel,
   DevtoolsCommands,
@@ -361,6 +361,9 @@ export function createElectronViewBackend(
         target: wc,
         width: device.width,
         height: device.height,
+        // How a dispatched coordinate is read depends on which emulation this
+        // view is under — see `SyncDeviceRegistration.mobile`.
+        mobile: isMobileDevice(device),
         setCapturing: (capturing) => {
           if (wc.isDestroyed()) return
           wc.send(SYNC_CAPTURE_CHANNEL, capturing)
@@ -432,6 +435,11 @@ export function createElectronViewBackend(
         setZoomFactor(zoom: number): void {
           if (wc.isDestroyed()) return
           wc.setZoomFactor(zoom)
+          // Page zoom is half of the emulation for a desktop device: the
+          // metrics override is in widget pixels, so it has to be divided by
+          // the zoom for the page to keep laying out at the device's own width
+          // (see `metricsOf` in `cdp-controller`).
+          cdp.setZoom(wc, zoom)
           // The engine dispatches mouse events into this view, and those
           // coordinates are read in the zoomed widget's space rather than the
           // page's own (see `SyncRegistry.setZoom`).

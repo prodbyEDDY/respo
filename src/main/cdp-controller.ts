@@ -81,6 +81,12 @@ type Session = {
   target: CdpTarget
   /** Last device applied, replayed after a re-attach. */
   device: DeviceSpec | null
+  /**
+   * The canvas zoom this view is painted at. `1` until a layout says otherwise.
+   *
+   * Part of the emulation, not a detail of the layout: see `metricsOf`.
+   */
+  zoom: number
   attached: boolean
   reattaches: number
   /** Set by `detachSafe`, so our own detach is not mistaken for an eviction. */
@@ -146,25 +152,58 @@ export function isMobileDevice(spec: DeviceSpec): boolean {
   return /iPhone|iPad|iPod|Android/.test(spec.userAgent)
 }
 
+/** A finite, strictly positive number — a usable extent. */
+function isPositive(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+}
+
+/** A usable zoom factor; anything else would scale a viewport into nonsense. */
+function normalizeZoom(zoom: number): number {
+  if (!Number.isFinite(zoom) || zoom <= 0) return 1
+  return zoom
+}
+
 /**
- * One device's `Emulation.setDeviceMetricsOverride` parameters.
+ * One device's `Emulation.setDeviceMetricsOverride` parameters, at a zoom.
  *
- * Shared by `applyDevice` and by the screenshot path, which briefly overrides
- * the density and has to put *exactly* this back afterwards — a restore that
- * reconstructed the parameters separately would be a place for the two to
- * drift.
+ * Shared by `applyDevice`, by the zoom path and by the screenshot path, which
+ * briefly overrides the density and has to put *exactly* this back afterwards —
+ * a restore that reconstructed the parameters separately would be a place for
+ * the two to drift.
+ *
+ * ## Why the zoom is in here at all
+ *
+ * The override's size is in *widget* pixels, and page zoom sits between those
+ * and the CSS pixels a page lays out in: a page under a `width: 1440` override
+ * at 50% zoom reports `innerWidth === 2880`. Chromium's *mobile* emulation
+ * swallows the embedder's zoom level outright, which is why a phone frame has
+ * always been zoom-proof here — but a desktop frame was not, and a canvas
+ * zoomed out to fit more devices was silently showing every desktop viewport at
+ * twice its width, with every media query resolving as a screen nobody owns.
+ *
+ * So a non-mobile override is pre-divided by the zoom, and the two cancel: the
+ * page lays out at exactly the device's own width at any canvas zoom
+ * (`e2e/zoom.spec.ts`). The rounding is worth a word — an odd zoom rung leaves
+ * the emulated width within a pixel of the device's, which is a pixel of
+ * rounding, not a different viewport.
  */
-function metricsOf(spec: DeviceSpec): {
+function metricsOf(
+  spec: DeviceSpec,
+  zoom = 1
+): {
   width: number
   height: number
   deviceScaleFactor: number
   mobile: boolean
 } {
+  const mobile = isMobileDevice(spec)
+  const scale = mobile ? 1 : normalizeZoom(zoom)
+
   return {
-    width: Math.round(spec.width),
-    height: Math.round(spec.height),
+    width: Math.round(spec.width * scale),
+    height: Math.round(spec.height * scale),
     deviceScaleFactor: spec.dpr,
-    mobile: isMobileDevice(spec)
+    mobile
   }
 }
 
@@ -203,6 +242,7 @@ export class CDPController {
     const session: Session = {
       target,
       device: null,
+      zoom: 1,
       attached: false,
       reattaches: 0,
       closing: false,
@@ -237,7 +277,11 @@ export class CDPController {
     if (session !== undefined) session.device = spec
     if (target.isDestroyed() || !(session?.attached ?? false)) return
 
-    await this.send(target, 'Emulation.setDeviceMetricsOverride', metricsOf(spec))
+    await this.send(
+      target,
+      'Emulation.setDeviceMetricsOverride',
+      metricsOf(spec, session?.zoom ?? 1)
+    )
 
     await this.send(target, 'Emulation.setTouchEmulationEnabled', {
       enabled: spec.touch,
@@ -251,6 +295,32 @@ export class CDPController {
     if (!(await this.send(target, 'Network.setUserAgentOverride', ua))) {
       await this.send(target, 'Emulation.setUserAgentOverride', ua)
     }
+  }
+
+  /**
+   * Tell the controller what zoom factor a view is painted at.
+   *
+   * Called from the layout path, once per view per change — never per frame,
+   * because `ViewManager` only reports a zoom that actually moved. For a mobile
+   * device it is bookkeeping (Chromium ignores page zoom under mobile
+   * emulation); for a desktop one it re-states the metrics override, which is
+   * what keeps the page's own viewport the device's own. See `metricsOf`.
+   */
+  setZoom(target: CdpTarget, zoom: number): void {
+    const session = this.sessions.get(target.id)
+    if (session === undefined) return
+
+    const next = normalizeZoom(zoom)
+    if (session.zoom === next) return
+    session.zoom = next
+
+    const device = session.device
+    // Nothing to re-state before the device profile has been applied — the
+    // `applyDevice` that follows will use the zoom stored above.
+    if (device === null || isMobileDevice(device)) return
+    if (!this.live(target)) return
+
+    void this.send(target, 'Emulation.setDeviceMetricsOverride', metricsOf(device, next))
   }
 
   /**
@@ -436,7 +506,9 @@ export class CDPController {
   async capture(target: CdpTarget, options: CaptureOptions): Promise<Buffer | null> {
     if (!this.live(target)) return null
 
-    const spec = this.sessions.get(target.id)?.device ?? null
+    const session = this.sessions.get(target.id)
+    const spec = session?.device ?? null
+    const zoom = session?.zoom ?? 1
     // Nothing to override when the device is already at 1×, and nothing to
     // restore when we never learned what this view emulates.
     const override = options.dpr === 1 && spec !== null && spec.dpr !== 1
@@ -444,15 +516,17 @@ export class CDPController {
     try {
       if (override && spec !== null) {
         await this.send(target, 'Emulation.setDeviceMetricsOverride', {
-          ...metricsOf(spec),
+          ...metricsOf(spec, zoom),
           deviceScaleFactor: 1
         })
       }
 
+      const clip = await this.captureClip(target, spec, options.fullPage)
       const answer = await this.request<{ data?: unknown }>(target, 'Page.captureScreenshot', {
         format: options.format,
         captureBeyondViewport: options.fullPage,
         fromSurface: true,
+        ...(clip === null ? {} : { clip }),
         ...(options.format === 'jpeg' ? { quality: JPEG_QUALITY } : {})
       })
 
@@ -463,9 +537,74 @@ export class CDPController {
       // Restored after a full-page capture too: it is the call that resized the
       // frame, and re-stating an unchanged override is a no-op in Chromium.
       if ((override || options.fullPage) && spec !== null && this.live(target)) {
-        await this.send(target, 'Emulation.setDeviceMetricsOverride', metricsOf(spec))
+        await this.send(target, 'Emulation.setDeviceMetricsOverride', metricsOf(spec, zoom))
       }
     }
+  }
+
+  /**
+   * The region to capture, in the page's *own* CSS pixels.
+   *
+   * Without a clip, `Page.captureScreenshot` renders the emulated widget — and
+   * a desktop device's widget is its viewport multiplied by the canvas zoom, so
+   * a 1440px monitor screenshotted on a canvas at 50% came out 720px wide. A
+   * clip is stated in document coordinates instead, which the canvas zoom has
+   * no part in: the picture is the size of the viewport the page believes it
+   * has, whatever the frame on screen happens to be scaled to.
+   *
+   * The *device*'s width is used rather than the page's own layout viewport:
+   * `clientWidth` stops at the scrollbar, and a screenshot of a 1440px desktop
+   * that is 1410px wide because the page happened to scroll is a picture of the
+   * wrong device. A page wider than its viewport still gets all of itself in a
+   * full-page shot — that is what the `max` is for.
+   *
+   * `null` when the page will not say (a view mid-teardown). The capture then
+   * falls back to the unclipped behaviour, which is right at 1:1 and no worse
+   * than nothing anywhere else.
+   */
+  private async captureClip(
+    target: CdpTarget,
+    spec: DeviceSpec | null,
+    fullPage: boolean
+  ): Promise<{ x: number; y: number; width: number; height: number; scale: number } | null> {
+    const metrics = await this.request<{
+      cssContentSize?: { width?: number; height?: number }
+      cssVisualViewport?: {
+        pageX?: number
+        pageY?: number
+        clientWidth?: number
+        clientHeight?: number
+      }
+    }>(target, 'Page.getLayoutMetrics', {})
+    if (metrics === null) return null
+
+    const viewport = metrics.cssVisualViewport
+    const content = metrics.cssContentSize
+    const width = spec === null ? viewport?.clientWidth : spec.width
+    const height = spec === null ? viewport?.clientHeight : spec.height
+
+    // Full page: the whole document from its origin. Viewport: exactly what is
+    // scrolled into view, which is what the user is looking at.
+    const region = fullPage
+      ? {
+          x: 0,
+          y: 0,
+          width: Math.max(width ?? 0, content?.width ?? 0),
+          height: Math.max(height ?? 0, content?.height ?? 0)
+        }
+      : {
+          x: viewport?.pageX ?? 0,
+          y: viewport?.pageY ?? 0,
+          width,
+          height
+        }
+
+    if (!isPositive(region.width) || !isPositive(region.height)) return null
+    if (!Number.isFinite(region.x) || !Number.isFinite(region.y)) return null
+
+    // `scale: 1` is CSS-pixel-for-CSS-pixel; the density comes from the
+    // emulated `deviceScaleFactor`, which is the knob the DPR option turns.
+    return { x: region.x, y: region.y, width: region.width, height: region.height, scale: 1 }
   }
 
   /** Detach on purpose (view going away). Never throws, never re-attaches. */

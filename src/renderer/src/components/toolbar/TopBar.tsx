@@ -1,8 +1,10 @@
+import { useState } from 'react'
 import {
   ArrowPathRoundedSquareIcon,
   ArrowsPointingOutIcon,
   ArrowTopRightOnSquareIcon,
   Bars2Icon,
+  Cog6ToothIcon,
   ComputerDesktopIcon,
   CursorArrowRaysIcon,
   EllipsisVerticalIcon,
@@ -18,6 +20,7 @@ import {
 } from '@heroicons/react/24/outline'
 import type { DockPosition } from '@shared/ipc'
 import { SuiteSelector } from '@renderer/components/device-manager/SuiteSelector'
+import { SettingsDialog } from '@renderer/components/settings/SettingsDialog'
 import { Button } from '@renderer/components/ui/button'
 import {
   DropdownMenu,
@@ -36,6 +39,7 @@ import { useSettings } from '@renderer/stores/settings'
 import { useSync } from '@renderer/stores/sync'
 import { AddressBar } from './AddressBar'
 import { NavControls } from './NavControls'
+import { ShotAllButton, ShotNotice } from './ShotControls'
 
 type IconButtonProps = {
   label: string
@@ -205,7 +209,7 @@ function InspectToggle(): React.JSX.Element {
   )
 }
 
-function OverflowMenu(): React.JSX.Element {
+function OverflowMenu({ onOpenSettings }: { onOpenSettings: () => void }): React.JSX.Element {
   const zoom = useLayout((s) => s.zoom)
   const zoomIn = useLayout((s) => s.zoomIn)
   const zoomOut = useLayout((s) => s.zoomOut)
@@ -241,6 +245,16 @@ function OverflowMenu(): React.JSX.Element {
           <ComputerDesktopIcon />
           Use system theme
         </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        {/*
+          Radix returns focus to the trigger as the menu closes, and a dialog
+          opened in the same tick would fight it for the focus. Deferring by one
+          frame lets the menu finish leaving first.
+        */}
+        <DropdownMenuItem onSelect={() => requestAnimationFrame(onOpenSettings)}>
+          <Cog6ToothIcon />
+          Settings…
+        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   )
@@ -256,22 +270,31 @@ function OverflowMenu(): React.JSX.Element {
  */
 export function TopBar(): React.JSX.Element {
   const rotateAll = useLayout((s) => s.rotateAll)
+  const [settingsOpen, setSettingsOpen] = useState(false)
 
   return (
     <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border bg-card px-2">
       <NavControls />
       <AddressBar />
+      {/*
+        Screenshot feedback lives here, not over the canvas: device pages are
+        native views composited above anything the renderer paints, so a toast
+        in the corner of the canvas would spend half its life behind a frame.
+      */}
+      <ShotNotice />
       <div className="flex items-center gap-1">
         <SuiteSelector />
         <DeviceLibraryButton />
         <SyncChip />
         <InspectToggle />
+        <ShotAllButton />
         <IconButton label="Rotate all devices" onClick={rotateAll}>
           <ArrowPathRoundedSquareIcon />
         </IconButton>
         <ThemeToggle />
-        <OverflowMenu />
+        <OverflowMenu onOpenSettings={() => setSettingsOpen(true)} />
       </div>
+      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
     </header>
   )
 }

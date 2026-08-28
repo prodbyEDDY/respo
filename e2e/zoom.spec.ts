@@ -70,6 +70,24 @@ function iphone(states: ViewState[]): ViewState {
   return found as ViewState
 }
 
+/** `Desktop 1440` — the one view on the default canvas with a Windows agent. */
+function desktop(states: ViewState[]): ViewState {
+  const found = states.find((state) => /Windows NT/.test(state.ua))
+  expect(found, 'the desktop view was not reporting').toBeDefined()
+  return found as ViewState
+}
+
+/** Step the canvas down the zoom ladder `times` rungs, from the overflow menu. */
+async function zoomOut(
+  window: Awaited<ReturnType<ElectronApplication['firstWindow']>>,
+  times: number
+): Promise<void> {
+  for (let i = 0; i < times; i += 1) {
+    await window.getByRole('button', { name: 'More options' }).click()
+    await window.getByRole('menuitem', { name: 'Zoom out' }).click()
+  }
+}
+
 /**
  * The load-bearing claim behind canvas zoom: `setZoomFactor` scales what is
  * *painted*, and leaves the emulated viewport alone.
@@ -139,6 +157,73 @@ test('canvas zoom scales the frame without touching the emulated viewport', asyn
     expect(rotated.mobile).toBe(false)
     // Rotation is not a device swap: it is still the same iPhone.
     expect(rotated.ua).toMatch(/iPhone/)
+  } finally {
+    await app.close()
+  }
+})
+
+/**
+ * The same claim for a desktop device, which is the case that does not come
+ * for free.
+ *
+ * Chromium's mobile emulation swallows the embedder's zoom level — a page under
+ * `mobile: true` lays out at the emulated width whatever `setZoomFactor` says.
+ * Desktop emulation does not: page zoom stays in force, and the emulated
+ * viewport is divided by it, so a 1440px monitor at 50% canvas zoom would
+ * report a 2880px viewport and resolve every media query as a screen nobody
+ * has. The emulation compensates for the zoom instead; this is the evidence.
+ */
+test('a desktop device keeps its own viewport at 50% canvas zoom', async () => {
+  const app = await electron.launch({
+    args: [MAIN_ENTRY, `--user-data-dir=${userDataDir}`],
+    env: {
+      ...(process.env as Record<string, string>),
+      RESPO_START_URL: PROBE_URL
+    }
+  })
+
+  try {
+    const window = await app.firstWindow()
+    await expect(window.locator('[data-load-state="ready"]')).toHaveCount(5)
+
+    const before = desktop(await viewStates(app, PROBE_URL))
+    expect(before.innerWidth).toBe(1440)
+    expect(before.innerHeight).toBe(900)
+
+    // 1 -> 0.9 -> 0.75 -> 0.67 -> 0.5.
+    await zoomOut(window, 4)
+    await expect
+      .poll(async () => desktop(await viewStates(app, PROBE_URL)).zoomFactor, {
+        message: 'the canvas zoom never reached the desktop view'
+      })
+      .toBeCloseTo(0.5, 2)
+
+    await expect
+      .poll(async () => desktop(await viewStates(app, PROBE_URL)).innerWidth, {
+        message: 'the desktop viewport followed the canvas zoom'
+      })
+      .toBe(1440)
+
+    const zoomed = desktop(await viewStates(app, PROBE_URL))
+    expect(zoomed.innerHeight).toBe(900)
+    // 1440px is not a phone at any zoom, and the page can tell.
+    expect(zoomed.mobile).toBe(false)
+
+    // Back up the ladder: the compensation has to unwind exactly, not drift.
+    //
+    // Polled, like the way down: `setZoomFactor` is synchronous and the metrics
+    // override that answers it is a protocol round trip, so the page is briefly
+    // — for about a frame — laid out at the zoom it is leaving.
+    await window.getByRole('button', { name: 'More options' }).click()
+    await window.getByRole('menuitem', { name: 'Reset zoom' }).click()
+    await expect
+      .poll(async () => desktop(await viewStates(app, PROBE_URL)).zoomFactor)
+      .toBeCloseTo(1, 2)
+    await expect
+      .poll(async () => desktop(await viewStates(app, PROBE_URL)).innerWidth, {
+        message: 'the desktop viewport did not come back with the zoom'
+      })
+      .toBe(1440)
   } finally {
     await app.close()
   }

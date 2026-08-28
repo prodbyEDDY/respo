@@ -539,7 +539,15 @@ describe('CDPController.capture', () => {
     expect(overrides[0]).toMatchObject({ width: 393, height: 852, deviceScaleFactor: 1 })
     // ...and back to exactly what the device spec says afterwards.
     expect(overrides[1]).toMatchObject({ width: 393, height: 852, deviceScaleFactor: 3 })
-    expect(methods(target).indexOf('Page.captureScreenshot')).toBe(1)
+    // Order, not position: the density goes down before the picture is taken
+    // and comes back after it.
+    const order = methods(target)
+    expect(order.indexOf('Emulation.setDeviceMetricsOverride')).toBeLessThan(
+      order.indexOf('Page.captureScreenshot')
+    )
+    expect(order.lastIndexOf('Emulation.setDeviceMetricsOverride')).toBeGreaterThan(
+      order.indexOf('Page.captureScreenshot')
+    )
   })
 
   it('restores the device density even when the capture throws', async () => {
@@ -565,7 +573,7 @@ describe('CDPController.capture', () => {
     target.calls.length = 0
 
     await controller.capture(target, { format: 'png', fullPage: false, dpr: 1 })
-    expect(methods(target)).toEqual(['Page.captureScreenshot'])
+    expect(methods(target)).toEqual(['Page.getLayoutMetrics', 'Page.captureScreenshot'])
   })
 
   it('re-states the emulation after a full-page capture resized the frame', async () => {
@@ -577,6 +585,7 @@ describe('CDPController.capture', () => {
 
     await controller.capture(target, { format: 'png', fullPage: true, dpr: 'device' })
     expect(methods(target)).toEqual([
+      'Page.getLayoutMetrics',
       'Page.captureScreenshot',
       'Emulation.setDeviceMetricsOverride'
     ])
@@ -594,5 +603,126 @@ describe('CDPController.capture', () => {
     expect(
       await controller.capture(detached, { format: 'png', fullPage: false, dpr: 'device' })
     ).toBeNull()
+  })
+})
+
+describe('CDPController — canvas zoom and the emulated viewport', () => {
+  let controller: CDPController
+
+  beforeEach(() => {
+    controller = new CDPController()
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+  })
+
+  function overridesOf(target: FakeTarget): Record<string, unknown>[] {
+    return target.calls
+      .filter(([method]) => method === 'Emulation.setDeviceMetricsOverride')
+      .map(([, params]) => params as Record<string, unknown>)
+  }
+
+  it('divides a desktop override by the zoom, so the page keeps its own width', async () => {
+    const target = fakeTarget()
+    await controller.attach(target)
+    await controller.applyDevice(target, DESKTOP)
+    target.calls.length = 0
+
+    controller.setZoom(target, 0.5)
+    await Promise.resolve()
+
+    // Page zoom multiplies CSS pixels by 1/0.5 on the way in, so half the
+    // widget is a whole 1440px viewport.
+    expect(overridesOf(target)).toEqual([
+      { width: 720, height: 450, deviceScaleFactor: 1, mobile: false }
+    ])
+  })
+
+  it('leaves a mobile override alone: that emulation swallows the zoom itself', async () => {
+    const target = fakeTarget()
+    await controller.attach(target)
+    await controller.applyDevice(target, IPHONE)
+    target.calls.length = 0
+
+    controller.setZoom(target, 0.5)
+    await Promise.resolve()
+
+    expect(methods(target)).toEqual([])
+  })
+
+  it('keeps the zoom for the emulation that follows a device change', async () => {
+    const target = fakeTarget()
+    await controller.attach(target)
+    controller.setZoom(target, 0.5)
+    await controller.applyDevice(target, DESKTOP)
+
+    expect(overridesOf(target)[0]).toMatchObject({ width: 720, height: 450 })
+  })
+
+  it('replays the zoomed emulation after an unexpected detach', async () => {
+    const target = fakeTarget()
+    await controller.attach(target)
+    await controller.applyDevice(target, DESKTOP)
+    controller.setZoom(target, 0.5)
+    await Promise.resolve()
+    target.calls.length = 0
+
+    target.fireDetach('crashed')
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(overridesOf(target)[0]).toMatchObject({ width: 720, height: 450 })
+  })
+
+  it('ignores a zoom that is not a scale', async () => {
+    const target = fakeTarget()
+    await controller.attach(target)
+    await controller.applyDevice(target, DESKTOP)
+    target.calls.length = 0
+
+    controller.setZoom(target, 0)
+    controller.setZoom(target, Number.NaN)
+    await Promise.resolve()
+
+    expect(methods(target)).toEqual([])
+  })
+
+  it('clips a capture to the device viewport, not to the zoomed widget', async () => {
+    const target = fakeTarget()
+    await controller.attach(target)
+    await controller.applyDevice(target, DESKTOP)
+    controller.setZoom(target, 0.5)
+    target.replies.set('Page.getLayoutMetrics', {
+      cssContentSize: { width: 1440, height: 4000 },
+      cssVisualViewport: { pageX: 0, pageY: 120, clientWidth: 1425, clientHeight: 900 }
+    })
+    target.replies.set('Page.captureScreenshot', { data: Buffer.from('x').toString('base64') })
+
+    await controller.capture(target, { format: 'png', fullPage: false, dpr: 'device' })
+    // The device's own width, not the page's `clientWidth` (which stops at the
+    // scrollbar) and not the widget's 720.
+    expect(paramsOf(target, 'Page.captureScreenshot')).toMatchObject({
+      clip: { x: 0, y: 120, width: 1440, height: 900, scale: 1 }
+    })
+
+    target.calls.length = 0
+    await controller.capture(target, { format: 'png', fullPage: true, dpr: 'device' })
+    expect(paramsOf(target, 'Page.captureScreenshot')).toMatchObject({
+      clip: { x: 0, y: 0, width: 1440, height: 4000, scale: 1 }
+    })
+  })
+
+  it('captures unclipped when the page will not say how big it is', async () => {
+    const target = fakeTarget()
+    await controller.attach(target)
+    await controller.applyDevice(target, DESKTOP)
+    target.replies.set('Page.getLayoutMetrics', {})
+    target.replies.set('Page.captureScreenshot', { data: Buffer.from('x').toString('base64') })
+    target.calls.length = 0
+
+    // A spec is known here, so the clip still comes out of it; the fallback is
+    // for a view whose device we never learned.
+    await controller.capture(target, { format: 'png', fullPage: false, dpr: 'device' })
+    expect(paramsOf(target, 'Page.captureScreenshot')).toMatchObject({
+      clip: { width: 1440, height: 900 }
+    })
   })
 })

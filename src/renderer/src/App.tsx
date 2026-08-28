@@ -5,6 +5,7 @@ import { Canvas } from '@renderer/components/previewer/Canvas'
 import { TopBar } from '@renderer/components/toolbar/TopBar'
 import { TooltipProvider } from '@renderer/components/ui/tooltip'
 import { useInspectHotkeys } from '@renderer/hooks/useInspectHotkeys'
+import { useShotHotkeys } from '@renderer/hooks/useShotHotkeys'
 import { ipcBridge } from '@renderer/lib/ipc'
 import { createLayoutTelemetry, type LayoutTelemetry } from '@renderer/lib/layout-telemetry'
 import { loadPersistedState } from '@renderer/lib/persistence'
@@ -14,6 +15,7 @@ import { applyRotation, useLayout } from '@renderer/stores/layout'
 import { attachNavigationBridge, useNavigation } from '@renderer/stores/navigation'
 import { attachPanelsBridge, selectDockVisible, usePanels } from '@renderer/stores/panels'
 import { useSettings } from '@renderer/stores/settings'
+import { attachShotsBridge, useShots } from '@renderer/stores/shots'
 import { useSync } from '@renderer/stores/sync'
 
 /**
@@ -66,6 +68,7 @@ function usePersistedState(): boolean {
         useSync.getState().hydrate(state.sync)
         useLayout.getState().hydrateRotation(state.rotated)
         usePanels.getState().hydrate(state.devtools)
+        useShots.getState().hydrate(state.screenshots)
       }
       setHydrated(true)
     })
@@ -117,8 +120,13 @@ function App(): React.JSX.Element {
   // same way, for the same StrictMode reason.
   useEffect(() => attachPanelsBridge(), [])
 
+  // Screenshot progress and results, batched the same way load events are.
+  useEffect(() => attachShotsBridge(), [])
+
   // mod+i arms the element picker, Escape puts it away.
   useInspectHotkeys()
+  // mod+s photographs the whole canvas.
+  useShotHotkeys()
 
   // Hand main the device set. Runs again whenever the selection changes; the
   // view manager reuses the views that stayed and loads the current url into
