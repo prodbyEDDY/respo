@@ -191,6 +191,8 @@ function sanitizeDevices(value: unknown): DeviceSpec[] {
     if (typeof device['touch'] !== 'boolean') continue
 
     seen.add(device['id'])
+    const type = device['type']
+    const rotatable = device['rotatable']
     out.push({
       id: device['id'],
       name: device['name'],
@@ -198,7 +200,11 @@ function sanitizeDevices(value: unknown): DeviceSpec[] {
       height: device['height'],
       dpr: device['dpr'],
       userAgent: device['userAgent'],
-      touch: device['touch']
+      touch: device['touch'],
+      // Optional, and a junk value is dropped rather than costing the device:
+      // both have a sane derivation when they are absent.
+      ...(type === 'phone' || type === 'tablet' || type === 'desktop' ? { type } : {}),
+      ...(typeof rotatable === 'boolean' ? { rotatable } : {})
     })
   }
   return out

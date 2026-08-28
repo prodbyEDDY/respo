@@ -152,9 +152,12 @@ export function DeviceFrame({ device, zoom, viewportRef }: DeviceFrameProps): Re
           {zoom === 1 ? '' : ` · ${Math.round(zoom * 100)}%`}
         </p>
         {load?.state === 'loading' ? <Spinner /> : null}
-        <div className="ml-auto">
-          <MirrorToggle deviceId={device.id} />
-        </div>
+        {/*
+          Next to the caption rather than pushed to the far edge: a 1920px
+          frame would put a right-aligned control most of a screen away from
+          the name it belongs to.
+        */}
+        <MirrorToggle deviceId={device.id} />
       </header>
 
       <div

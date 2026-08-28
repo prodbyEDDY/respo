@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { DeviceManagerView } from '@renderer/components/device-manager/DeviceManagerView'
 import { Canvas } from '@renderer/components/previewer/Canvas'
 import { TopBar } from '@renderer/components/toolbar/TopBar'
 import { TooltipProvider } from '@renderer/components/ui/tooltip'
@@ -85,6 +86,7 @@ function devTelemetry(): LayoutTelemetry | null {
 function App(): React.JSX.Element {
   const active = useDevices((s) => s.active)
   const rotated = useLayout((s) => s.rotated)
+  const view = useLayout((s) => s.view)
   const startUrl = useStartUrl()
   const hydrated = usePersistedState()
 
@@ -124,13 +126,35 @@ function App(): React.JSX.Element {
     useNavigation.getState().navigate(startUrl)
   }, [startUrl])
 
+  // Take the device views off the screen while another surface has the window.
+  //
+  // They are native views composited above everything the renderer draws, so
+  // nothing can cover them — but main hides any device the renderer does not
+  // report a rect for, and an empty canvas is exactly that statement. The views
+  // stay alive (and keep their pages) and come back when the canvas does.
+  useEffect(() => {
+    if (view === 'canvas') return
+    const bridge = ipcBridge()
+    if (bridge === null) return
+
+    void bridge
+      .invoke('views:set-layout', [], { x: 0, y: 0, width: 0, height: 0 })
+      .catch((error: unknown) => {
+        console.error('failed to hide device views', error)
+      })
+  }, [view])
+
   return (
     <TooltipProvider>
       <div className="flex h-full flex-col bg-background">
         <TopBar />
 
         <div className="min-h-0 flex-1">
-          <Canvas devices={devices} onLayoutRoundTrip={devTelemetry()?.record} />
+          {view === 'devices' ? (
+            <DeviceManagerView />
+          ) : (
+            <Canvas devices={devices} onLayoutRoundTrip={devTelemetry()?.record} />
+          )}
         </div>
       </div>
     </TooltipProvider>

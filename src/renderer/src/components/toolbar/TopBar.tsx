@@ -8,6 +8,8 @@ import {
   MagnifyingGlassMinusIcon,
   MagnifyingGlassPlusIcon,
   MoonIcon,
+  PlusIcon,
+  RectangleGroupIcon,
   SunIcon
 } from '@heroicons/react/24/outline'
 import { Button } from '@renderer/components/ui/button'
@@ -44,6 +46,28 @@ function IconButton({ label, onClick, children }: IconButtonProps): React.JSX.El
       </TooltipTrigger>
       <TooltipContent>{label}</TooltipContent>
     </Tooltip>
+  )
+}
+
+/**
+ * The way in and out of the device library.
+ *
+ * A plus, because the thing people come here to do is add a device; it turns
+ * into a way back once the library has the window, so the trip is one click in
+ * each direction.
+ */
+function DeviceLibraryButton(): React.JSX.Element {
+  const view = useLayout((s) => s.view)
+  const setView = useLayout((s) => s.setView)
+  const open = view === 'devices'
+
+  return (
+    <IconButton
+      label={open ? 'Back to the canvas' : 'Add or edit devices'}
+      onClick={() => setView(open ? 'canvas' : 'devices')}
+    >
+      {open ? <RectangleGroupIcon /> : <PlusIcon />}
+    </IconButton>
   )
 }
 
@@ -163,6 +187,7 @@ export function TopBar(): React.JSX.Element {
       <NavControls />
       <AddressBar />
       <div className="flex items-center gap-1">
+        <DeviceLibraryButton />
         <SyncChip />
         <IconButton label="Rotate all devices" onClick={rotateAll}>
           <ArrowPathRoundedSquareIcon />

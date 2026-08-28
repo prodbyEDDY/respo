@@ -54,6 +54,19 @@ export function validateDeviceSpecs(value: unknown): DeviceSpec[] {
     }
     if (!isBounded(device.dpr, MAX_DPR)) fail(`device.dpr must be in (0, ${MAX_DPR}]`)
     if (typeof device.touch !== 'boolean') fail('device.touch must be a boolean')
+
+    // Optional on a catalog device, present on a user-defined one.
+    if (
+      device.type !== undefined &&
+      device.type !== 'phone' &&
+      device.type !== 'tablet' &&
+      device.type !== 'desktop'
+    ) {
+      fail("device.type must be 'phone', 'tablet' or 'desktop'")
+    }
+    if (device.rotatable !== undefined && typeof device.rotatable !== 'boolean') {
+      fail('device.rotatable must be a boolean')
+    }
   }
 
   return value as DeviceSpec[]

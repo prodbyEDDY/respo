@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { deviceById } from '@shared/deviceCatalog'
+import { isRotatable } from '@shared/custom-devices'
 import type { DeviceSpec } from '@shared/types'
 import { useDevices } from './devices'
 
@@ -14,7 +14,19 @@ export const ZOOM_STEPS: readonly number[] = [
 export const MIN_ZOOM = ZOOM_STEPS[0] as number
 export const MAX_ZOOM = ZOOM_STEPS[ZOOM_STEPS.length - 1] as number
 
+/** The full-screen surface the window is showing. */
+export type WindowView = 'canvas' | 'devices'
+
 export interface LayoutState {
+  /**
+   * What fills the window below the toolbar. The Device Manager *replaces* the
+   * canvas rather than floating over it: device views are native surfaces
+   * composited above everything the renderer draws, so there is no such thing
+   * as a panel on top of them.
+   */
+  view: WindowView
+  setView: (view: WindowView) => void
+
   /**
    * Canvas zoom. The frames shrink in the DOM; main hands the logical viewport
    * back to the page with `webContents.setZoomFactor`, so the *emulated*
@@ -54,14 +66,21 @@ function stepDown(zoom: number): number {
 }
 
 /**
- * Only touch devices rotate. A desktop monitor has one orientation, and a
- * "landscape 1440×900 desktop" frame would be a viewport no user ever has.
+ * Only devices you can pick up rotate. A desktop monitor has one orientation,
+ * and a "landscape 1440×900 desktop" frame would be a viewport no user has.
+ *
+ * Resolved against the user's own devices too, not just the catalog: a custom
+ * phone rotates like any other phone.
  */
 function canRotate(deviceId: string): boolean {
-  return deviceById(deviceId)?.touch === true
+  const device = useDevices.getState().allDevices.find((d) => d.id === deviceId)
+  return device !== undefined && isRotatable(device)
 }
 
 export const useLayout = create<LayoutState>((set, get) => ({
+  view: 'canvas',
+  setView: (view) => set({ view }),
+
   zoom: 1,
 
   zoomIn: () => set({ zoom: stepUp(get().zoom) }),
@@ -86,7 +105,7 @@ export const useLayout = create<LayoutState>((set, get) => ({
     const { rotated } = get()
     const targets = useDevices
       .getState()
-      .active.filter((device) => device.touch)
+      .active.filter(isRotatable)
       .map((device) => device.id)
 
     // Nothing on the canvas can rotate: keep the object identity, so the
@@ -118,6 +137,10 @@ export function applyRotation(
   rotated: Record<string, boolean>
 ): DeviceSpec[] {
   return devices.map((device) =>
-    rotated[device.id] === true ? { ...device, width: device.height, height: device.width } : device
+    // `isRotatable` again, not just the flag: a custom device can be edited to
+    // stop rotating while a stale `true` is still sitting in the map.
+    rotated[device.id] === true && isRotatable(device)
+      ? { ...device, width: device.height, height: device.width }
+      : device
   )
 }
