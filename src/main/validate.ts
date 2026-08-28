@@ -7,7 +7,7 @@
  * back at its caller instead of reaching `ViewManager` or `nativeTheme`.
  */
 
-import type { ThemeSource } from '@shared/ipc'
+import type { InputEventPayload, ThemeSource } from '@shared/ipc'
 import type { PersistedState, Suite } from '@shared/persistence-types'
 import type { DeviceSpec } from '@shared/types'
 
@@ -120,6 +120,74 @@ export function validatePersistedPatch(value: unknown): Partial<PersistedState> 
     out.ui = { theme: validateThemeSource((ui as Record<string, unknown>)['theme']) }
   }
 
+  return out
+}
+
+/** Ceiling on one frame's worth of input. Matches the preload's own cap. */
+const MAX_INPUT_BATCH = 64
+/** No real `KeyboardEvent.key` or `.code` is longer than this. */
+const MAX_KEY_LENGTH = 32
+/** Alt | Ctrl | Meta | Shift — CDP defines no other modifier bits. */
+const MAX_MODIFIERS = 15
+
+function clamp01(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null
+  return value < 0 ? 0 : value > 1 ? 1 : value
+}
+
+function validateInputEvent(entry: unknown): InputEventPayload | null {
+  if (typeof entry !== 'object' || entry === null) return null
+  const event = entry as Record<string, unknown>
+
+  if (event['kind'] === 'scroll') {
+    const ratioX = clamp01(event['ratioX'])
+    const ratioY = clamp01(event['ratioY'])
+    if (ratioX === null || ratioY === null) return null
+    return { kind: 'scroll', ratioX, ratioY }
+  }
+
+  if (event['kind'] === 'mouse') {
+    const xNorm = clamp01(event['xNorm'])
+    const yNorm = clamp01(event['yNorm'])
+    if (xNorm === null || yNorm === null) return null
+    if (event['type'] !== 'down' && event['type'] !== 'up') return null
+    const button = event['button']
+    if (button !== 'left' && button !== 'middle' && button !== 'right') return null
+    return { kind: 'mouse', type: event['type'], xNorm, yNorm, button }
+  }
+
+  if (event['kind'] === 'key') {
+    if (event['type'] !== 'down' && event['type'] !== 'up') return null
+    const key = event['key']
+    const code = event['code']
+    if (!isFilledString(key) || key.length > MAX_KEY_LENGTH) return null
+    if (typeof code !== 'string' || code.length > MAX_KEY_LENGTH) return null
+    const modifiers = event['modifiers']
+    if (typeof modifiers !== 'number' || !Number.isInteger(modifiers)) return null
+    if (modifiers < 0 || modifiers > MAX_MODIFIERS) return null
+    return { kind: 'key', type: event['type'], key, code, modifiers }
+  }
+
+  return null
+}
+
+/**
+ * Validate a `sync:input` batch.
+ *
+ * Unlike the invoke channels this one *drops* rather than throws. The sender is
+ * an arbitrary web page reached through a one-way `send`: there is no promise
+ * to reject, an exception here would surface as an unhandled error in main, and
+ * a page that can make main log on demand is a nuisance of its own. Malformed
+ * entries simply never reach the engine.
+ */
+export function validateSyncInputBatch(value: unknown): InputEventPayload[] {
+  if (!Array.isArray(value)) return []
+
+  const out: InputEventPayload[] = []
+  for (const entry of value.slice(0, MAX_INPUT_BATCH)) {
+    const event = validateInputEvent(entry)
+    if (event !== null) out.push(event)
+  }
   return out
 }
 

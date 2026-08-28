@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>scroll fixture</title>
+    <style>
+      body {
+        margin: 0;
+        font:
+          14px/1.4 system-ui,
+          sans-serif;
+      }
+      /* Full width and a fifth of every viewport's height, so one normalized
+         position lands inside it on a 393px phone and a 1920px desktop alike. */
+      #go {
+        display: block;
+        width: 100%;
+        height: 20vh;
+        background: #cddffb;
+        color: #123;
+        text-decoration: none;
+        padding: 8px;
+        box-sizing: border-box;
+      }
+      /* Four viewports of runway: scrollable everywhere, at any device height. */
+      #runway {
+        height: 400vh;
+        background: linear-gradient(#fff, #333);
+      }
+    </style>
+  </head>
+  <body>
+    <a id="go" href="probe.html">follow me</a>
+    <div id="runway"></div>
+  </body>
+</html>

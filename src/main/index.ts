@@ -3,10 +3,17 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { normalizeUrl } from '@shared/ipc'
 import { defaultPersistedState } from '@shared/persistence-types'
-import { registerHandler, sendMainEvent } from './ipc'
+import { CDPController } from './cdp-controller'
+import { registerHandler, registerInputListener, sendMainEvent } from './ipc'
 import { createElectronStoreBackend, createPersistence, type Persistence } from './persistence'
 import { installDevicePermissionHandlers, openExternalSafe } from './security'
-import { validateDeviceSpecs, validatePersistedPatch, validateThemeSource } from './validate'
+import { SyncEngine } from './sync-engine'
+import {
+  validateDeviceSpecs,
+  validatePersistedPatch,
+  validateSyncInputBatch,
+  validateThemeSource
+} from './validate'
 import { ViewManager } from './view-manager'
 import { createElectronViewBackend } from './view-backend'
 import { createLoadStateBatcher, type LoadStateBatcher } from './load-state-batcher'
@@ -19,6 +26,7 @@ let loadStates: LoadStateBatcher | null = null
 let perf: PerfMonitor | null = null
 let stopSpike: (() => void) | null = null
 let persistence: Persistence | null = null
+let syncEngine: SyncEngine | null = null
 
 /** Until the address bar lands, every session opens here. */
 const DEFAULT_START_URL = 'https://example.com'
@@ -66,9 +74,17 @@ function createWindow(): void {
     sendMainEvent(mainWindow.webContents, { type: 'load-state', payload })
   })
 
+  // One CDP controller for the window's views, shared with the sync engine:
+  // mirroring rides the same debugger session emulation and screenshots use
+  // (CLAUDE.md §3), so there is never a second attach.
+  const cdp = new CDPController()
+  syncEngine = new SyncEngine(cdp)
+
   viewManager = new ViewManager(
     createElectronViewBackend(mainWindow, {
-      canvasLayer: process.env['RESPO_CANVAS_LAYER'] !== '0'
+      canvasLayer: process.env['RESPO_CANVAS_LAYER'] !== '0',
+      cdp,
+      sync: syncEngine
     }),
     { onLoadState: (payload) => loadStates?.report(payload) }
   )
@@ -81,6 +97,8 @@ function createWindow(): void {
     // The window is where every patch comes from, so its last one has to land
     // now — `before-quit` is not guaranteed to run before the process goes.
     persistence?.flush()
+    syncEngine?.dispose()
+    syncEngine = null
     viewManager?.destroy()
     viewManager = null
     loadStates?.cancel()
@@ -172,6 +190,13 @@ function registerIpcHandlers(): void {
   registerHandler('nav:reload', () => {
     viewManager?.reload()
   })
+
+  // The one-way stream from the device views. Its sender is an untrusted page,
+  // so the batch is validated (and clamped) before the engine sees any of it;
+  // anything malformed is dropped rather than thrown back at the page.
+  registerInputListener((senderId, payload) => {
+    syncEngine?.handleInput(senderId, validateSyncInputBatch(payload))
+  })
 }
 
 // This method will be called when Electron has finished
@@ -224,6 +249,8 @@ app.on('before-quit', () => {
   // reach disk before anything else starts tearing down.
   persistence?.dispose()
   persistence = null
+  syncEngine?.dispose()
+  syncEngine = null
   viewManager?.destroy()
   viewManager = null
   loadStates?.cancel()

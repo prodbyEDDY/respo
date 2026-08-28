@@ -43,6 +43,45 @@ export type LoadStatePayload = {
 /** Batched main -> renderer notification. One message carries many devices. */
 export type MainEvent = { type: 'load-state'; payload: LoadStatePayload[] }
 
+/**
+ * One interaction captured in a device view, in device-independent terms.
+ *
+ * Everything is normalized at the source so a 393px phone and a 1920px desktop
+ * can be described by the same numbers: positions are fractions of the
+ * viewport, scroll is a fraction of the scrollable distance. Nothing about the
+ * *page* travels with it — no text, no urls, no element identity. These
+ * payloads originate in pages Respo does not control, so the less they can
+ * carry, the less there is to abuse.
+ */
+export type InputEventPayload =
+  | { kind: 'scroll'; ratioX: number; ratioY: number }
+  | {
+      kind: 'mouse'
+      type: 'down' | 'up'
+      xNorm: number
+      yNorm: number
+      button: 'left' | 'middle' | 'right'
+    }
+  | { kind: 'key'; type: 'down' | 'up'; key: string; code: string; modifiers: number }
+
+/**
+ * device view -> main input stream. One-way (`ipcRenderer.send`) and therefore
+ * outside the invoke map, like `MAIN_EVENT_CHANNEL` — but still declared here,
+ * because no channel exists outside this module (CLAUDE.md §6).
+ *
+ * A message is always a *batch*: the device preload coalesces to one send per
+ * animation frame (CLAUDE.md §4).
+ */
+export const SYNC_INPUT_CHANNEL = 'sync:input'
+
+/**
+ * The channel's literal type. The device-view preload has to restate the string
+ * rather than import it — a sandboxed preload cannot load a shared bundle chunk
+ * — so it annotates its own copy with this and a rename here fails the build
+ * there instead of silently muting input sync.
+ */
+export type SyncInputChannel = typeof SYNC_INPUT_CHANNEL
+
 /** renderer -> main request/response channels. Extended by later tasks. */
 export type IpcInvokeMap = {
   'app:get-version': { args: []; result: string }

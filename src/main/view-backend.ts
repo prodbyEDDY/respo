@@ -1,17 +1,23 @@
 import { View, WebContentsView, type BaseWindow, type WebContents } from 'electron'
+import { join } from 'path'
 import type { LoadState, LoadStatePayload } from '@shared/ipc'
 import type { DeviceSpec, Rect } from '@shared/types'
 import { CDPController } from './cdp-controller'
 import { DEVICE_PARTITION, openExternalSafe } from './security'
+import type { SyncRegistry } from './sync-engine'
 import type { ManagedView, ReportLoadState, ViewBackend } from './view-manager'
 
 /**
  * Web preferences for every device view (spec §7a).
  *
- * No preload and no privileged bridge: everything Respo does to a page goes
- * through CDP from main, so the page itself gets nothing.
+ * The one preload is `device-view`, and it is not a bridge: it exposes nothing
+ * to the page, it only listens for input and reports it to main so the other
+ * viewports can mirror it. Everything Respo *does* to a page still goes through
+ * CDP from main. The sandbox stays on — the preload touches nothing but
+ * `ipcRenderer` and the DOM.
  */
 const DEVICE_WEB_PREFERENCES = {
+  preload: join(__dirname, '../preload/device-view.js'),
   sandbox: true,
   contextIsolation: true,
   nodeIntegration: false,
@@ -115,6 +121,14 @@ export type ElectronViewBackendOptions = {
    * composite above the whole window, and nothing in CSS can mask them.
    */
   canvasLayer?: boolean
+  /**
+   * The CDP session owner. Passed in when something outside the backend — the
+   * sync engine — needs to talk to the same sessions; otherwise the backend
+   * makes its own.
+   */
+  cdp?: CDPController
+  /** Told about every view's lifetime, so input can be mirrored into it. */
+  sync?: SyncRegistry
 }
 
 /** One `WebContentsView` per device, positioned by `ViewManager`. */
@@ -127,7 +141,8 @@ export function createElectronViewBackend(
   const views = new Set<WebContentsView>()
   const layer = useLayer ? new View() : null
   const parent = layer ?? window.contentView
-  const cdp = new CDPController()
+  const cdp = options.cdp ?? new CDPController()
+  const sync = options.sync ?? null
   let disposed = false
 
   if (layer !== null) {
@@ -166,6 +181,16 @@ export function createElectronViewBackend(
       watchLoadState(wc, device.id, report)
       const primed = cdp.attach(wc).then(() => wc.loadURL(PRIMER_URL).catch(() => undefined))
 
+      // The engine addresses this view by its `webContents` id — the same id
+      // its preload's input messages arrive under — and scales normalized
+      // coordinates against the emulated viewport.
+      sync?.registerDevice({
+        deviceId: device.id,
+        target: wc,
+        width: device.width,
+        height: device.height
+      })
+
       // `emulated` is the gate every navigation waits behind, so a page is
       // never fetched before its device profile is in place.
       let emulated = primed.then(() => cdp.applyDevice(wc, device))
@@ -185,6 +210,9 @@ export function createElectronViewBackend(
         },
         applyDevice(next: DeviceSpec): void {
           if (wc.isDestroyed()) return
+          // Rotation and edited metrics change what a normalized coordinate
+          // means here, so the engine has to hear about them too.
+          sync?.updateDevice(device.id, { width: next.width, height: next.height })
           emulated = emulated.then(() => cdp.applyDevice(wc, next))
         },
         loadUrl(url: string): void {
@@ -217,6 +245,7 @@ export function createElectronViewBackend(
         },
         dispose(): void {
           views.delete(view)
+          sync?.unregisterDevice(device.id)
           cdp.detachSafe(wc)
           parent.removeChildView(view)
           if (!wc.isDestroyed()) wc.close()
