@@ -216,13 +216,16 @@ test('scrolling the lead scrolls every follower to the same point in the documen
  * agree with it. That keeps the test honest about the mirror regardless of how
  * the coordinate that started it was interpreted on the way in.
  *
- * The suite is three touch devices, seeded rather than the default five: a
- * *desktop*-emulated view's CSS viewport is currently scaled by the canvas zoom
- * (a `macbook-1280` frame lays out at 2560px at 50%), which is a defect in the
- * emulation rather than in the mirror and would be measured here as one.
+ * The suite is seeded rather than the default five, and it deliberately ends on
+ * a desktop device: a desktop viewport used to be scaled by the canvas zoom (a
+ * 1440px monitor laid out at 2880px at 50%), and the emulation now divides that
+ * back out. A mirrored click is where the two conventions meet — the engine's
+ * coordinates are the device's own pixels, and the page they land in has to be
+ * the device's own size — so if the fix and the mirror ever disagree, they
+ * disagree here.
  */
 test('a mirrored click lands in the same place at 50% canvas zoom', async () => {
-  const suite = ['iphone-15-pro', 'pixel-8', 'ipad-mini']
+  const suite = ['iphone-15-pro', 'pixel-8', 'ipad-mini', 'desktop-1440']
 
   // Its own profile, seeded through the same channel the UI writes: the zoom
   // this test leaves behind is remembered per origin by the session, and the

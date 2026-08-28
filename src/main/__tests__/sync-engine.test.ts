@@ -61,24 +61,29 @@ function harness(): {
     }
   }
 
-  // Three devices: a phone lead and two followers of different sizes.
+  // Three devices: a phone lead and two followers of different sizes. The
+  // `mobile` flag is the emulation each one is under, and it decides how a
+  // dispatched coordinate is read (see `SyncDeviceRegistration.mobile`).
   state.engine.registerDevice({
     deviceId: 'phone',
     target: fakeTarget(1),
     width: 400,
-    height: 800
+    height: 800,
+    mobile: true
   })
   state.engine.registerDevice({
     deviceId: 'tablet',
     target: fakeTarget(2),
     width: 800,
-    height: 1000
+    height: 1000,
+    mobile: true
   })
   state.engine.registerDevice({
     deviceId: 'desktop',
     target: fakeTarget(3),
     width: 1920,
-    height: 1080
+    height: 1080,
+    mobile: false
   })
   state.engine.setLead('phone')
 
@@ -126,12 +131,13 @@ describe('SyncEngine', () => {
     })
 
     /**
-     * `Input.dispatchMouseEvent` coordinates are read in the zoomed widget's
-     * space, not the page's: Chromium multiplies what it is handed by the
-     * view's zoom factor, so at 50% canvas zoom a coordinate of 80 arrives in
-     * the page as 40. `e2e/sync.spec.ts` is the proof; this is the arithmetic.
+     * A mobile-emulated view reads `Input.dispatchMouseEvent` coordinates in the
+     * zoomed widget's space, not the page's: Chromium multiplies what it is
+     * handed by the view's zoom factor, so at 50% canvas zoom a coordinate of 80
+     * arrives in the page as 40. `e2e/sync.spec.ts` is the proof; this is the
+     * arithmetic.
      */
-    it('scales through the zoom the follower is displayed at', () => {
+    it('scales through the zoom a mobile follower is displayed at', () => {
       h.engine.setZoom('tablet', 0.5)
       h.engine.handleInput(1, [mouseDown(0.5, 0.25)])
 
@@ -144,13 +150,29 @@ describe('SyncEngine', () => {
       expect(onDesktop?.params).toMatchObject({ x: 960, y: 270 })
     })
 
+    /**
+     * The other half of the same rule. A desktop view keeps its page zoom, and
+     * its metrics override is divided by that zoom so the page still lays out
+     * at the device's own width — which means a coordinate goes in as page CSS
+     * pixels and must *not* be scaled again (`e2e/sync.spec.ts`, which now
+     * mirrors onto a desktop device at 50%).
+     */
+    it('leaves a desktop follower’s coordinates in the page’s own pixels', () => {
+      h.engine.setZoom('desktop', 0.5)
+      h.engine.handleInput(1, [mouseDown(0.5, 0.25)])
+
+      const onDesktop = h.mouse.find((c) => c.id === 3 && c.params.type === 'mousePressed')
+      expect(onDesktop?.params).toMatchObject({ x: 960, y: 270 })
+    })
+
     it('takes the zoom a view registers with, and ignores a nonsensical one', () => {
       h.engine.registerDevice({
         deviceId: 'zoomed',
         target: fakeTarget(8),
         width: 400,
         height: 800,
-        zoom: 2
+        zoom: 2,
+        mobile: true
       })
       h.engine.setZoom('desktop', 0)
       h.engine.handleInput(1, [mouseDown(0.5, 0.5)])
@@ -170,7 +192,8 @@ describe('SyncEngine', () => {
         deviceId: 'tablet',
         target: fakeTarget(2),
         width: 800,
-        height: 1000
+        height: 1000,
+        mobile: true
       })
 
       h.engine.handleInput(1, [mouseDown(0.5, 0.5)])
@@ -184,6 +207,31 @@ describe('SyncEngine', () => {
       h.engine.handleInput(1, [mouseDown(0.5, 0.5)])
       const onTablet = h.mouse.find((c) => c.id === 2 && c.params.type === 'mousePressed')
       expect(onTablet?.params).toMatchObject({ x: 500, y: 250 })
+    })
+
+    it('follows a device that stopped being mobile', () => {
+      // Editing a custom device's type rewrites its user agent, and the tablet
+      // above is now emulated as a desktop. At 50% canvas zoom that changes what
+      // a dispatched coordinate means: the mobile reading divides by the zoom,
+      // the desktop one does not (see `SyncDeviceRegistration.mobile`).
+      h.engine.setZoom('tablet', 0.5)
+      h.engine.updateDevice('tablet', { width: 800, height: 1000, mobile: false })
+
+      h.engine.handleInput(1, [mouseDown(0.5, 0.5)])
+      expect(
+        h.mouse.find((c) => c.id === 2 && c.params.type === 'mousePressed')?.params
+      ).toMatchObject({ x: 400, y: 500 })
+    })
+
+    it('leaves the mobile flag alone when an update does not mention it', () => {
+      h.engine.setZoom('tablet', 0.5)
+      h.engine.updateDevice('tablet', { width: 800, height: 1000 })
+
+      h.engine.handleInput(1, [mouseDown(0.5, 0.5)])
+      // Still mobile, so still divided by the zoom.
+      expect(
+        h.mouse.find((c) => c.id === 2 && c.params.type === 'mousePressed')?.params
+      ).toMatchObject({ x: 800, y: 1000 })
     })
   })
 
@@ -547,7 +595,8 @@ describe('SyncEngine', () => {
         deviceId: 'tablet',
         target: fakeTarget(2),
         width: 800,
-        height: 1000
+        height: 1000,
+        mobile: true
       })
 
       h.engine.handleInput(1, [mouseDown(0.5, 0.5)])

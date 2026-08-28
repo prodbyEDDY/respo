@@ -9,7 +9,7 @@
 
 import { slugify } from './custom-devices'
 import { DEFAULT_ACTIVE_DEVICE_IDS } from './deviceCatalog'
-import type { ThemeSource } from './ipc'
+import type { DockPosition, ShotDpr, ShotFormat, ThemeSource } from './ipc'
 import type { DeviceSpec } from './types'
 
 /** Bumped whenever a stored document stops being readable by this code. */
@@ -38,6 +38,51 @@ export type SyncSettings = {
   disabledDeviceIds: string[]
 }
 
+/**
+ * Where the user left the DevTools panel.
+ *
+ * Not *whether* it was open: a session that ended with DevTools on a device
+ * should not reopen it — restoring a debugging tool nobody asked for costs a
+ * frame's worth of canvas and a renderer process at every launch. Only the
+ * shape of the panel is worth remembering.
+ */
+export type DevtoolsSettings = {
+  dock: DockPosition
+  /**
+   * Thickness of the docked strip in window CSS pixels — its height at the
+   * bottom, its width on the right. One number for both edges: the panel is
+   * never docked to two of them at once, and carrying a second would only make
+   * the first switch feel like it forgot something.
+   */
+  size: number
+}
+
+/**
+ * Where screenshots go and what they look like.
+ *
+ * `directory` is empty on a fresh install and stays empty until the user picks
+ * a folder: the default is `Pictures/Respo`, which only main can resolve
+ * (`app.getPath`), and writing a resolved path into the document would freeze a
+ * profile copied to another machine onto a folder that does not exist there.
+ */
+export type ScreenshotSettings = {
+  /** Absolute path, or `''` for "wherever main puts them by default". */
+  directory: string
+  format: ShotFormat
+  dpr: ShotDpr
+}
+
+/** Bounds on the dock strip, shared by the renderer's drag and main's repair. */
+export const MIN_DOCK_SIZE = 160
+export const MAX_DOCK_SIZE = 2000
+export const DEFAULT_DOCK_SIZE = 320
+
+/** Clamp a dock thickness into the range the panel is usable in. */
+export function clampDockSize(size: number): number {
+  if (!Number.isFinite(size)) return DEFAULT_DOCK_SIZE
+  return Math.min(MAX_DOCK_SIZE, Math.max(MIN_DOCK_SIZE, Math.round(size)))
+}
+
 export type PersistedState = {
   schemaVersion: number
   customDevices: DeviceSpec[]
@@ -51,6 +96,10 @@ export type PersistedState = {
    * as `SyncSettings.disabledDeviceIds`.
    */
   rotated: Record<string, boolean>
+  /** How the DevTools panel is shaped. See `DevtoolsSettings`. */
+  devtools: DevtoolsSettings
+  /** Where screenshots go and what they look like. See `ScreenshotSettings`. */
+  screenshots: ScreenshotSettings
 }
 
 export const DEFAULT_SUITE_ID = 'default'
@@ -97,7 +146,13 @@ export function defaultPersistedState(): PersistedState {
     // Mirroring is the product: it is on out of the box, with nothing muted.
     sync: { enabled: true, disabledDeviceIds: [] },
     // Every device starts the way it is held.
-    rotated: {}
+    rotated: {},
+    // Bottom is where a browser puts DevTools, and it is the edge that costs a
+    // canvas of side-by-side viewports the least width.
+    devtools: { dock: 'bottom', size: DEFAULT_DOCK_SIZE },
+    // PNG at the device's own density: the truthful screenshot, which is the
+    // one someone comparing two viewports came for.
+    screenshots: { directory: '', format: 'png', dpr: 'device' }
   }
 }
 
@@ -122,6 +177,8 @@ export function mergePersistedState(
     ui: { ...base.ui, ...(patch.ui ?? {}) },
     sync: cloneSync(patch.sync ?? base.sync),
     rotated: { ...(patch.rotated ?? base.rotated) },
+    devtools: { ...(patch.devtools ?? base.devtools) },
+    screenshots: { ...(patch.screenshots ?? base.screenshots) },
     schemaVersion: SCHEMA_VERSION
   }
   return next
@@ -177,7 +234,9 @@ export function migratePersistedState(raw: unknown): MigrationResult {
       activeSuiteId: active,
       ui: { theme: sanitizeTheme((doc['ui'] as Record<string, unknown> | undefined)?.['theme']) },
       sync: sanitizeSync(doc['sync']),
-      rotated: sanitizeRotated(doc['rotated'])
+      rotated: sanitizeRotated(doc['rotated']),
+      devtools: sanitizeDevtools(doc['devtools']),
+      screenshots: sanitizeScreenshots(doc['screenshots'])
     },
     backup: null
   }
@@ -281,6 +340,81 @@ function sanitizeRotated(value: unknown): Record<string, boolean> {
     out[id] = true
   }
   return out
+}
+
+/**
+ * Repair the DevTools panel shape.
+ *
+ * Absent on every document written before this build, so "missing" has to mean
+ * the defaults rather than a reset — a field, not a document (see
+ * `migratePersistedState`). A junk size is clamped rather than dropped: the
+ * user's edge preference is worth keeping even when the number next to it is
+ * not.
+ */
+function sanitizeDevtools(value: unknown): DevtoolsSettings {
+  const defaults: DevtoolsSettings = { dock: 'bottom', size: DEFAULT_DOCK_SIZE }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return defaults
+
+  const devtools = value as Record<string, unknown>
+  const dock = devtools['dock']
+  return {
+    dock: dock === 'bottom' || dock === 'right' || dock === 'undocked' ? dock : defaults.dock,
+    size: typeof devtools['size'] === 'number' ? clampDockSize(devtools['size']) : defaults.size
+  }
+}
+
+/**
+ * Longest folder path worth keeping. Windows' extended limit is 32 767; this is
+ * far past any real folder and far short of something worth storing.
+ */
+export const MAX_PATH_LENGTH = 1024
+
+/**
+ * Whether a stored path is absolute, on either platform's rules.
+ *
+ * Deliberately not `node:path` — this module is shared with the renderer bundle
+ * and imports nothing — and deliberately platform-independent: a profile
+ * written on Windows and read on macOS should have the same folder accepted or
+ * rejected on both, rather than `C:\shots` silently becoming a relative path
+ * that resolves against the working directory. POSIX roots, drive-absolute
+ * paths and UNC shares are the three shapes a real folder comes in.
+ */
+export function isAbsolutePath(value: string): boolean {
+  if (value.startsWith('/') || value.startsWith('\\')) return true
+  return /^[A-Za-z]:[\\/]/.test(value)
+}
+
+/**
+ * Repair the screenshot settings.
+ *
+ * A field, not a document, and every part of it degrades on its own: a junk
+ * folder falls back to the default one rather than costing the user their
+ * format. A path containing a NUL is not a path — Node throws on it — so it is
+ * dropped here instead of at the first capture, and a *relative* one is dropped
+ * for the same reason `main/validate` refuses one: the store file is not a
+ * trusted input either, and "shots" would resolve against wherever the process
+ * happens to have been started.
+ */
+function sanitizeScreenshots(value: unknown): ScreenshotSettings {
+  const defaults: ScreenshotSettings = { directory: '', format: 'png', dpr: 'device' }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return defaults
+
+  const shots = value as Record<string, unknown>
+  const directory = shots['directory']
+  const format = shots['format']
+  const dpr = shots['dpr']
+
+  return {
+    directory:
+      typeof directory === 'string' &&
+      directory.length <= MAX_PATH_LENGTH &&
+      !directory.includes('\0') &&
+      isAbsolutePath(directory)
+        ? directory
+        : defaults.directory,
+    format: format === 'png' || format === 'jpeg' ? format : defaults.format,
+    dpr: dpr === 1 || dpr === 'device' ? dpr : defaults.dpr
+  }
 }
 
 /** Drop unusable suites; inside a usable one, drop only the junk ids. */

@@ -1,15 +1,21 @@
 import { useEffect, useMemo, useState } from 'react'
 import { DeviceManagerView } from '@renderer/components/device-manager/DeviceManagerView'
+import { DevtoolsDock } from '@renderer/components/devtools/DevtoolsDock'
 import { Canvas } from '@renderer/components/previewer/Canvas'
 import { TopBar } from '@renderer/components/toolbar/TopBar'
 import { TooltipProvider } from '@renderer/components/ui/tooltip'
+import { useInspectHotkeys } from '@renderer/hooks/useInspectHotkeys'
+import { useShotHotkeys } from '@renderer/hooks/useShotHotkeys'
 import { ipcBridge } from '@renderer/lib/ipc'
 import { createLayoutTelemetry, type LayoutTelemetry } from '@renderer/lib/layout-telemetry'
 import { loadPersistedState } from '@renderer/lib/persistence'
+import { cn } from '@renderer/lib/utils'
 import { useDevices } from '@renderer/stores/devices'
 import { applyRotation, useLayout } from '@renderer/stores/layout'
 import { attachNavigationBridge, useNavigation } from '@renderer/stores/navigation'
+import { attachPanelsBridge, selectDockVisible, usePanels } from '@renderer/stores/panels'
 import { useSettings } from '@renderer/stores/settings'
+import { attachShotsBridge, useShots } from '@renderer/stores/shots'
 import { useSync } from '@renderer/stores/sync'
 
 /**
@@ -61,6 +67,8 @@ function usePersistedState(): boolean {
         useDevices.getState().hydrate(state)
         useSync.getState().hydrate(state.sync)
         useLayout.getState().hydrateRotation(state.rotated)
+        usePanels.getState().hydrate(state.devtools)
+        useShots.getState().hydrate(state.screenshots)
       }
       setHydrated(true)
     })
@@ -90,6 +98,12 @@ function App(): React.JSX.Element {
   const view = useLayout((s) => s.view)
   const startUrl = useStartUrl()
   const hydrated = usePersistedState()
+  const dock = usePanels((s) => s.dock)
+  const dockedDeviceId = usePanels((s) => s.dockedDeviceId)
+  // The Device Manager replaces the canvas, and the DevTools frontend is a
+  // native surface that would composite straight over it.
+  const dockVisible = usePanels(selectDockVisible)
+  const showDock = view === 'canvas' && dockVisible
 
   // Rotation is expressed as a device spec with its sides swapped, so it flows
   // through the existing path: the frame gets the new box, and main re-runs
@@ -100,6 +114,19 @@ function App(): React.JSX.Element {
   // Batched `load-state` events from main. Reference-counted inside, so
   // StrictMode's mount/unmount/mount never leaves two subscriptions behind.
   useEffect(() => attachNavigationBridge(), [])
+
+  // Main is the authority on what DevTools is open: it is the side that learns
+  // a DevTools window was closed from its own title bar. Reference-counted the
+  // same way, for the same StrictMode reason.
+  useEffect(() => attachPanelsBridge(), [])
+
+  // Screenshot progress and results, batched the same way load events are.
+  useEffect(() => attachShotsBridge(), [])
+
+  // mod+i arms the element picker, Escape puts it away.
+  useInspectHotkeys()
+  // mod+s photographs the whole canvas.
+  useShotHotkeys()
 
   // Hand main the device set. Runs again whenever the selection changes; the
   // view manager reuses the views that stayed and loads the current url into
@@ -150,12 +177,21 @@ function App(): React.JSX.Element {
       <div className="flex h-full flex-col bg-background">
         <TopBar />
 
-        <div className="min-h-0 flex-1">
-          {view === 'devices' ? (
-            <DeviceManagerView />
-          ) : (
-            <Canvas devices={devices} onLayoutRoundTrip={devTelemetry()?.record} />
-          )}
+        {/*
+          The canvas and the DevTools dock are flex siblings, which is the whole
+          mechanism: reserving the strip makes the canvas container smaller, its
+          ResizeObserver fires, and every device frame re-measures and reports
+          its new box. Nothing here knows about the dock beyond its edge.
+        */}
+        <div className={cn('flex min-h-0 flex-1', dock === 'right' ? 'flex-row' : 'flex-col')}>
+          <div className="min-h-0 min-w-0 flex-1">
+            {view === 'devices' ? (
+              <DeviceManagerView />
+            ) : (
+              <Canvas devices={devices} onLayoutRoundTrip={devTelemetry()?.record} />
+            )}
+          </div>
+          {showDock && dockedDeviceId !== null ? <DevtoolsDock deviceId={dockedDeviceId} /> : null}
         </div>
       </div>
     </TooltipProvider>

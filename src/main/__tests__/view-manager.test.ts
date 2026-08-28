@@ -123,9 +123,25 @@ describe('ViewManager.syncDevices', () => {
     expect(backend.views.get('a')?.applyDevice).toHaveBeenCalledTimes(2)
   })
 
-  it('does not re-emulate a device that only got renamed', () => {
+  it('carries a rename down to the view without reloading the page', () => {
     manager.syncDevices([device('a')])
+    manager.navigateAll('example.com')
     manager.syncDevices([{ ...device('a'), name: 'Renamed' }])
+
+    // No emulation depends on the name, but a screenshot's file name is built
+    // from it: a device renamed mid-session that kept being photographed under
+    // its old name is a rename that only half happened.
+    expect(backend.views.get('a')?.applyDevice).toHaveBeenCalledTimes(2)
+    expect(backend.views.get('a')?.applyDevice).toHaveBeenLastCalledWith(
+      expect.objectContaining({ name: 'Renamed' })
+    )
+    // And the page the user is looking at is not fetched again for it.
+    expect(backend.views.get('a')?.loadUrl).toHaveBeenCalledTimes(1)
+  })
+
+  it('leaves a view alone when the device did not change at all', () => {
+    manager.syncDevices([device('a')])
+    manager.syncDevices([device('a')])
 
     expect(backend.views.get('a')?.applyDevice).toHaveBeenCalledTimes(1)
   })
@@ -248,6 +264,23 @@ describe('ViewManager.applyLayout', () => {
     manager.applyLayout([rect('a', { zoom: 1, y: 1 })], CANVAS)
 
     expect(backend.views.get('a')?.setZoomFactor.mock.calls).toEqual([[0.5], [1]])
+  })
+
+  /**
+   * The zoom is not only how big a frame is painted: a desktop view's CDP
+   * metrics override is divided by it, so a view that misses a zoom change is
+   * left emulating the wrong viewport — and it is still a live page that
+   * "screenshot every device" will photograph. Bounds may go stale off screen;
+   * the zoom may not.
+   */
+  it('still tells a culled view about a zoom change', () => {
+    manager.applyLayout([rect('a', { zoom: 0.5 })], CANVAS)
+    // Scrolled far off the canvas: hidden, and not worth a `setBounds`.
+    manager.applyLayout([rect('a', { zoom: 1, x: 9000 })], CANVAS)
+
+    const view = backend.views.get('a')
+    expect(view?.setZoomFactor.mock.calls).toEqual([[0.5], [1]])
+    expect(view?.setVisible.mock.calls.at(-1)).toEqual([false])
   })
 })
 

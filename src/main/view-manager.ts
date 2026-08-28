@@ -122,8 +122,14 @@ export class ViewManager {
     for (const device of devices) {
       const existing = this.entries.get(device.id)
       if (existing !== undefined) {
-        // Same id, different metrics — the catalog entry was edited under us.
-        if (!sameEmulation(existing.device, device)) existing.view.applyDevice(device)
+        // Same id, different spec — the catalog entry was edited under us. The
+        // *name* counts as a change even though no emulation depends on it: it
+        // is what a screenshot's file name is built from, and a device renamed
+        // mid-session that kept being photographed under its old name would be
+        // a rename that only half happened.
+        if (!sameEmulation(existing.device, device) || existing.device.name !== device.name) {
+          existing.view.applyDevice(device)
+        }
         existing.device = device
         continue
       }
@@ -166,6 +172,17 @@ export class ViewManager {
       if (entry === undefined) continue
       seen.add(placement.deviceId)
 
+      // Zoom before the culling check, unlike bounds: it is not only how big
+      // the frame is painted, it is half of the device emulation. A desktop
+      // view's metrics override is divided by the zoom (see `metricsOf` in
+      // `cdp-controller`), and a scrolled-away view is still a live page — one
+      // that "screenshot every device" captures, and one whose viewport must
+      // not depend on whether it happened to be on screen.
+      if (entry.zoom !== placement.zoom) {
+        entry.zoom = placement.zoom
+        entry.view.setZoomFactor(placement.zoom)
+      }
+
       if (!placement.visible) {
         // Offscreen: hide and leave the stale bounds alone. Chromium stops
         // producing frames for a hidden view (spec §8, virtualization).
@@ -176,10 +193,6 @@ export class ViewManager {
       if (!sameRect(entry.bounds, placement.bounds)) {
         entry.bounds = placement.bounds
         entry.view.setBounds(placement.bounds)
-      }
-      if (entry.zoom !== placement.zoom) {
-        entry.zoom = placement.zoom
-        entry.view.setZoomFactor(placement.zoom)
       }
       entry.wantVisible = true
       this.applyVisibility(entry)

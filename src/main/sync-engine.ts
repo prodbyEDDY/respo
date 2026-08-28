@@ -34,6 +34,21 @@ export type SyncDeviceRegistration = {
    */
   zoom?: number
   /**
+   * Whether this view is under Chromium's *mobile* emulation.
+   *
+   * It decides how `Input.dispatchMouseEvent` reads a coordinate, which is the
+   * only reason the engine cares. Mobile emulation swallows the embedder's page
+   * zoom, so the coordinate arrives scaled by it and has to be divided back out
+   * (`e2e/sync.spec.ts`). A desktop-emulated view keeps its page zoom, and its
+   * metrics override is pre-divided by the same zoom to compensate
+   * (`metricsOf` in `cdp-controller`) — the two cancel, and a coordinate goes
+   * in as the page's own CSS pixels.
+   *
+   * Defaults to `false`: "the number means what it says" is the rule, and the
+   * mobile case is the exception to it.
+   */
+  mobile?: boolean
+  /**
    * Tell this view's preload whether it is currently the input source.
    *
    * Optional, and only ever an optimisation: `handleInput` drops everything
@@ -50,7 +65,15 @@ export type SyncDeviceRegistration = {
  */
 export interface SyncRegistry {
   registerDevice(registration: SyncDeviceRegistration): void
-  updateDevice(deviceId: string, size: { width: number; height: number }): void
+  /**
+   * A rotation, or an edited spec.
+   *
+   * `mobile` travels with the size because it can change for the same reason
+   * the size can: editing a custom device's *type* rewrites its user agent, and
+   * a phone that becomes a desktop stops being under Chromium's mobile
+   * emulation. Left alone when it is omitted — see `SyncDeviceRegistration`.
+   */
+  updateDevice(deviceId: string, device: { width: number; height: number; mobile?: boolean }): void
   /**
    * Tell the engine what zoom factor a view is being shown at.
    *
@@ -216,11 +239,17 @@ export class SyncEngine implements SyncRegistry {
     this.publishCapture()
   }
 
-  updateDevice(deviceId: string, size: { width: number; height: number }): void {
+  updateDevice(
+    deviceId: string,
+    device: { width: number; height: number; mobile?: boolean }
+  ): void {
     const entry = this.byDeviceId.get(deviceId)
     if (entry === undefined) return
-    entry.width = size.width
-    entry.height = size.height
+    entry.width = device.width
+    entry.height = device.height
+    // A mirrored click is read in a different space under mobile emulation, so
+    // a device that stopped being mobile has to stop being treated as one.
+    if (device.mobile !== undefined) entry.mobile = device.mobile
   }
 
   /** Remember the zoom a view is shown at. See `SyncRegistry.setZoom`. */
@@ -382,12 +411,14 @@ export class SyncEngine implements SyncRegistry {
     const pressed = event.type === 'down'
 
     for (const entry of this.followers(source)) {
-      // The fraction is turned into the follower's own device pixels, then out
-      // of page space into the space `Input.dispatchMouseEvent` actually reads:
-      // Chromium multiplies the coordinate it is handed by the widget's zoom,
-      // so a canvas at 50% needs twice the number to land in the same place.
-      const x = Math.round((xNorm * entry.width) / entry.zoom)
-      const y = Math.round((yNorm * entry.height) / entry.zoom)
+      // The fraction becomes the follower's own device pixels, and then — for a
+      // mobile-emulated view only — the space `Input.dispatchMouseEvent` reads
+      // it in: Chromium multiplies what it is handed by the widget's zoom, so a
+      // canvas at 50% needs twice the number to land in the same place. A
+      // desktop view's emulation already cancels that out; see `mobile`.
+      const scale = entry.mobile === true ? entry.zoom : 1
+      const x = Math.round((xNorm * entry.width) / scale)
+      const y = Math.round((yNorm * entry.height) / scale)
 
       if (pressed) {
         // Hover state first: menus, tooltips and delegated handlers all key off

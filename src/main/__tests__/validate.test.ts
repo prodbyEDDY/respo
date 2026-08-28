@@ -6,6 +6,9 @@ import {
   validateDeviceSpecs,
   validateLeadDeviceId,
   validatePersistedPatch,
+  validateScreenshotDirectory,
+  validateShotPath,
+  validateShotRequest,
   validateSyncInputBatch,
   validateThemeSource
 } from '../validate'
@@ -311,5 +314,111 @@ describe('validatePersistedPatch — sync switches', () => {
     expect(() => validatePersistedPatch({ sync: { enabled: true, disabledDeviceIds } })).toThrow(
       /at most 64/i
     )
+  })
+})
+
+describe('validateShotRequest', () => {
+  it('accepts the bare request the UI sends', () => {
+    expect(validateShotRequest({ fullPage: false })).toEqual({ fullPage: false })
+  })
+
+  it('keeps an explicit format and density', () => {
+    expect(validateShotRequest({ fullPage: true, format: 'jpeg', dpr: 1 })).toEqual({
+      fullPage: true,
+      format: 'jpeg',
+      dpr: 1
+    })
+  })
+
+  it('drops extra keys rather than passing them to main', () => {
+    expect(validateShotRequest({ fullPage: false, quality: 100, path: '/etc' })).toEqual({
+      fullPage: false
+    })
+  })
+
+  it.each([
+    ['not an object', 'png'],
+    ['an array', []],
+    ['a missing fullPage', {}],
+    ['a non-boolean fullPage', { fullPage: 'yes' }],
+    ['an unknown format', { fullPage: false, format: 'webp' }],
+    ['a density that is neither', { fullPage: false, dpr: 2 }]
+  ])('rejects %s', (_label, request) => {
+    expect(() => validateShotRequest(request)).toThrow(/invalid ipc payload/i)
+  })
+})
+
+describe('validateShotPath', () => {
+  it('accepts a plausible file path', () => {
+    const path = String.raw`C:\Users\me\Pictures\Respo\a.png`
+    expect(validateShotPath(path)).toBe(path)
+  })
+
+  it.each([
+    ['an empty string', ''],
+    ['a number', 42],
+    ['null', null],
+    ['a NUL byte', '/shots/a.png\u0000.txt'],
+    ['an absurd length', `/${'a'.repeat(2000)}`]
+  ])('rejects %s', (_label, path) => {
+    expect(() => validateShotPath(path)).toThrow(/invalid ipc payload/i)
+  })
+})
+
+describe('validatePersistedPatch — screenshots', () => {
+  it('keeps the format and the density', () => {
+    const patch = validatePersistedPatch({
+      screenshots: { directory: '', format: 'jpeg', dpr: 1 }
+    })
+    expect(patch.screenshots).toMatchObject({ format: 'jpeg', dpr: 1 })
+  })
+
+  it('drops the folder the renderer sent and keeps main’s own', () => {
+    const patch = validatePersistedPatch(
+      { screenshots: { directory: '\\\\attacker\\share', format: 'png', dpr: 'device' } },
+      { screenshotDirectory: '/home/me/shots' }
+    )
+    // The folder is where every capture is written and what `shot:reveal` is
+    // checked against. A renderer that could set it could point both anywhere
+    // — a UNC share included — so the field never comes from the patch.
+    expect(patch.screenshots).toEqual({
+      directory: '/home/me/shots',
+      format: 'png',
+      dpr: 'device'
+    })
+  })
+
+  it('falls back to the default folder when main has none yet', () => {
+    const patch = validatePersistedPatch({
+      screenshots: { directory: '/tmp/anything', format: 'png', dpr: 'device' }
+    })
+    expect(patch.screenshots?.directory).toBe('')
+  })
+
+  it.each([
+    ['not an object', 'shots'],
+    ['an unknown format', { directory: '', format: 'gif', dpr: 'device' }],
+    ['an arbitrary density', { directory: '', format: 'png', dpr: 3 }]
+  ])('rejects %s', (_label, screenshots) => {
+    expect(() => validatePersistedPatch({ screenshots })).toThrow(/invalid ipc payload/i)
+  })
+})
+
+describe('validateScreenshotDirectory', () => {
+  it('accepts an absolute folder, and the empty string that means the default', () => {
+    expect(validateScreenshotDirectory('/home/me/shots')).toBe('/home/me/shots')
+    expect(validateScreenshotDirectory('')).toBe('')
+  })
+
+  it.each([
+    ['a relative folder', 'shots'],
+    ['a number', 42],
+    ['null', null],
+    ['a NUL byte', '/shots\u0000'],
+    ['an absurd length', `/${'a'.repeat(2000)}`]
+  ])('rejects %s', (_label, directory) => {
+    // The one door left for this value is the folder dialog in `shot:choose-dir`
+    // — and a path is checked even when it came back out of the OS.
+    expect(() => validateScreenshotDirectory(directory)).toThrow(/invalid ipc payload/i)
   })
 })

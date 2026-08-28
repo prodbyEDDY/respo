@@ -11,7 +11,7 @@ vi.mock('electron', () => ({
   session: { fromPartition: vi.fn() }
 }))
 
-import { watchLoadState } from '../view-backend'
+import { showFrontendPanel, watchLoadState } from '../view-backend'
 
 type Listener = (...args: unknown[]) => void
 
@@ -240,5 +240,47 @@ describe('watchLoadState', () => {
   it('ignores a sub-frame same-document navigation', () => {
     fake.emit('did-navigate-in-page', null, 'https://ads.example/frame', false)
     expect(reported).toEqual([])
+  })
+})
+
+describe('showFrontendPanel', () => {
+  /** The slice of a DevTools frontend's `WebContents` the call touches. */
+  function fakeFrontend(): { wc: WebContents; scripts: string[] } {
+    const scripts: string[] = []
+    const wc = {
+      isDestroyed: () => false,
+      isLoading: () => false,
+      getURL: () => 'devtools://devtools/bundled/devtools_app.html',
+      executeJavaScript: (script: string) => {
+        scripts.push(script)
+        return Promise.resolve(undefined)
+      },
+      once: () => undefined
+    } as unknown as WebContents
+    return { wc, scripts }
+  }
+
+  it('asks the frontend for the panels Respo actually opens', () => {
+    const frontend = fakeFrontend()
+
+    showFrontendPanel(frontend.wc, 'console')
+    showFrontendPanel(frontend.wc, 'elements')
+
+    expect(frontend.scripts).toEqual([
+      'globalThis.DevToolsAPI?.showPanel("console")',
+      'globalThis.DevToolsAPI?.showPanel("elements")'
+    ])
+  })
+
+  it('refuses any other name rather than interpolating it', () => {
+    const frontend = fakeFrontend()
+
+    // The script runs inside a privileged `devtools://` document, so the name
+    // is whitelisted rather than escaped: nothing unexpected reaches it at all.
+    showFrontendPanel(frontend.wc, 'sources')
+    showFrontendPanel(frontend.wc, 'console"); fetch("https://evil.example')
+    showFrontendPanel(frontend.wc, '')
+
+    expect(frontend.scripts).toEqual([])
   })
 })

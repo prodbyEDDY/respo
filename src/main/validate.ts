@@ -7,9 +7,18 @@
  * back at its caller instead of reaching `ViewManager` or `nativeTheme`.
  */
 
-import type { InputEventPayload, ThemeSource } from '@shared/ipc'
-import type { PersistedState, Suite, SyncSettings } from '@shared/persistence-types'
-import type { DeviceSpec } from '@shared/types'
+import type { DockPosition, InputEventPayload, ShotRequest, ThemeSource } from '@shared/ipc'
+import {
+  clampDockSize,
+  MAX_PATH_LENGTH,
+  type DevtoolsSettings,
+  type PersistedState,
+  type ScreenshotSettings,
+  type Suite,
+  type SyncSettings
+} from '@shared/persistence-types'
+import { isAbsolute } from 'node:path'
+import type { DeviceSpec, Rect } from '@shared/types'
 
 /** More device views than a canvas could ever show is a bug or an attack. */
 const MAX_DEVICES = 64
@@ -127,14 +136,32 @@ function validateSuites(value: unknown): Suite[] {
 }
 
 /**
+ * The fields main fills in itself when it merges a renderer patch.
+ *
+ * Everything here is a value the renderer may *read* but must never *set*: the
+ * patch it sends carries a copy, and this is the copy that wins.
+ */
+export type PersistedPatchContext = {
+  /**
+   * The screenshots folder main currently holds. The renderer's copy of it is
+   * dropped — see `validateScreenshotSettings`.
+   */
+  screenshotDirectory?: string
+}
+
+/**
  * Validate a `store:save` payload.
  *
  * Unknown keys are *dropped* rather than rejected: a newer renderer talking to
  * an older main should degrade, not fail. `schemaVersion` is dropped with them
  * — main owns the version, and a patch that could set it would let a
- * compromised renderer make the next boot discard the user's document.
+ * compromised renderer make the next boot discard the user's document. The
+ * screenshots folder is dropped for a sharper reason; see below.
  */
-export function validatePersistedPatch(value: unknown): Partial<PersistedState> {
+export function validatePersistedPatch(
+  value: unknown,
+  context: PersistedPatchContext = {}
+): Partial<PersistedState> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     fail('store:save expects a patch object')
   }
@@ -160,8 +187,114 @@ export function validatePersistedPatch(value: unknown): Partial<PersistedState> 
   }
   if (patch['sync'] !== undefined) out.sync = validateSyncSettings(patch['sync'])
   if (patch['rotated'] !== undefined) out.rotated = validateRotated(patch['rotated'])
+  if (patch['devtools'] !== undefined) out.devtools = validateDevtoolsSettings(patch['devtools'])
+  if (patch['screenshots'] !== undefined) {
+    out.screenshots = validateScreenshotSettings(patch['screenshots'], context.screenshotDirectory)
+  }
 
   return out
+}
+
+/**
+ * Validate the persisted screenshot settings.
+ *
+ * The folder is *not* taken from the patch at all. It is the one string in this
+ * document main turns into a path it writes to, and a validator is a shape
+ * check, not an authorization: a renderer that could set it could point the
+ * next capture — and, through `shot:reveal`, the folder-containment check that
+ * guards `showItemInFolder` — at any path on the machine, a UNC share included.
+ * So the field is dropped here and main merges the value it already holds
+ * (`current`), which only `shot:choose-dir` can move. Format and density are
+ * ordinary preferences and come from the renderer as before.
+ */
+function validateScreenshotSettings(value: unknown, current = ''): ScreenshotSettings {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    fail('store:save screenshots must be an object')
+  }
+  const shots = value as Record<string, unknown>
+
+  return {
+    directory: current,
+    format: validateShotFormat(shots['format']),
+    dpr: validateShotDpr(shots['dpr'])
+  }
+}
+
+/**
+ * A folder to write screenshots into: absolute, sane length, no NUL.
+ *
+ * The one door left for this value is `shot:choose-dir`, where it comes back
+ * out of a system dialog the user drove — and it is checked even there, because
+ * "the OS gave it to us" is a reason to expect a good path, not to skip the
+ * check that keeps a relative one from resolving against the working directory.
+ */
+export function validateScreenshotDirectory(value: unknown): string {
+  if (value === '') return ''
+  if (typeof value !== 'string' || value.length > MAX_PATH_LENGTH) {
+    fail(`screenshots.directory must be a string of at most ${MAX_PATH_LENGTH} characters`)
+  }
+  if (value.includes('\0')) fail('screenshots.directory must not contain NUL')
+  if (!isAbsolute(value)) fail('screenshots.directory must be an absolute path')
+  return value
+}
+
+function validateShotFormat(value: unknown): 'png' | 'jpeg' {
+  if (value !== 'png' && value !== 'jpeg') fail("screenshot format must be 'png' or 'jpeg'")
+  return value
+}
+
+function validateShotDpr(value: unknown): 'device' | 1 {
+  if (value !== 'device' && value !== 1) fail("screenshot dpr must be 'device' or 1")
+  return value
+}
+
+/**
+ * Validate a `shot:device` / `shot:all` request.
+ *
+ * `format` and `dpr` are optional — main fills them from the saved settings —
+ * but a *present* one still has to be one of the two values each accepts:
+ * `format` reaches `Page.captureScreenshot` and decides a file extension.
+ */
+export function validateShotRequest(value: unknown): ShotRequest {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    fail('screenshot request must be an object')
+  }
+  const request = value as Record<string, unknown>
+  if (typeof request['fullPage'] !== 'boolean') fail('screenshot fullPage must be a boolean')
+
+  return {
+    fullPage: request['fullPage'],
+    ...(request['format'] === undefined ? {} : { format: validateShotFormat(request['format']) }),
+    ...(request['dpr'] === undefined ? {} : { dpr: validateShotDpr(request['dpr']) })
+  }
+}
+
+/**
+ * Validate a `shot:reveal` path.
+ *
+ * Only the *shape* is checked here; whether it points inside the screenshots
+ * folder is `ScreenshotQueue.reveal`'s job, because only it knows where that
+ * folder currently is.
+ */
+export function validateShotPath(value: unknown): string {
+  if (!isFilledString(value) || value.length > MAX_PATH_LENGTH) {
+    fail(`shot:reveal expects a path of at most ${MAX_PATH_LENGTH} characters`)
+  }
+  if (value.includes('\0')) fail('shot:reveal path must not contain NUL')
+  return value
+}
+
+/** Validate the persisted DevTools panel shape. The size is clamped, not rejected. */
+function validateDevtoolsSettings(value: unknown): DevtoolsSettings {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    fail('store:save devtools must be an object')
+  }
+  const devtools = value as Record<string, unknown>
+  const size = devtools['size']
+  if (typeof size !== 'number' || !Number.isFinite(size)) {
+    fail('store:save devtools.size must be a finite number')
+  }
+  return { dock: validateDockPosition(devtools['dock']), size: clampDockSize(size) }
 }
 
 /** Validate the per-device orientation map: `{ [deviceId]: isLandscape }`. */
@@ -306,6 +439,58 @@ export function validateSyncInputBatch(value: unknown): InputEventPayload[] {
   }
   return out
 }
+
+/** Validate a `devtools:set-dock` payload (and the persisted mirror of it). */
+export function validateDockPosition(value: unknown): DockPosition {
+  if (value !== 'bottom' && value !== 'right' && value !== 'undocked') {
+    fail("devtools:set-dock expects 'bottom', 'right' or 'undocked'")
+  }
+  return value
+}
+
+/**
+ * Validate a `devtools:close` payload: a device id, or `null` for "the dock".
+ *
+ * Not checked against the live device set — the manager ignores an id it never
+ * opened, and closing a panel that is already gone is a race, not an attack.
+ */
+export function validateOptionalDeviceId(value: unknown): string | null {
+  if (value === null) return null
+  if (!isFilledString(value) || value.length > MAX_NAME_LENGTH) {
+    fail('devtools:close expects a device id or null')
+  }
+  return value
+}
+
+/**
+ * Validate a `devtools:set-bounds` rect.
+ *
+ * A rect straight out of `getBoundingClientRect`: fractional, possibly negative
+ * while the panel animates in, and never larger than a display. It is rounded
+ * here rather than in main's hot path — `setBounds` takes integers, and a
+ * fractional one would leave a hairline of window showing through the panel.
+ */
+export function validateBounds(value: unknown): Rect {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    fail('devtools:set-bounds expects a rect')
+  }
+  const rect = value as Record<string, unknown>
+  const out: Record<'x' | 'y' | 'width' | 'height', number> = { x: 0, y: 0, width: 0, height: 0 }
+
+  for (const key of ['x', 'y', 'width', 'height'] as const) {
+    const side = rect[key]
+    if (typeof side !== 'number' || !Number.isFinite(side) || Math.abs(side) > MAX_BOUNDS) {
+      fail(`devtools:set-bounds ${key} must be a finite number within ±${MAX_BOUNDS}`)
+    }
+    out[key] = Math.round(side)
+  }
+  // A negative extent is not a small panel, it is a malformed one.
+  if (out.width < 0 || out.height < 0) fail('devtools:set-bounds extents must not be negative')
+  return out
+}
+
+/** Far outside any display arrangement, far short of an overflow. */
+const MAX_BOUNDS = 100_000
 
 /** Validate a `theme:set-source` payload. Throws on anything else. */
 export function validateThemeSource(value: unknown): ThemeSource {

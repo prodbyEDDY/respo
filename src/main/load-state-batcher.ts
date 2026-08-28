@@ -10,7 +10,8 @@ export type Deferrer = {
   defer(task: () => void): () => void
 }
 
-const immediateDeferrer: Deferrer = {
+/** The default: coalesce to one flush per turn of the event loop. */
+export const immediateDeferrer: Deferrer = {
   defer(task) {
     const handle = setImmediate(task)
     return () => {

@@ -234,3 +234,59 @@ describe('device orientation', () => {
     expect(state.suites).toEqual(defaultPersistedState().suites)
   })
 })
+
+describe('screenshot settings', () => {
+  it('starts as PNG at the device density, in main’s default folder', () => {
+    expect(defaultPersistedState().screenshots).toEqual({
+      directory: '',
+      format: 'png',
+      dpr: 'device'
+    })
+  })
+
+  it('survives a document written before this build', () => {
+    const stored: Record<string, unknown> = { ...defaultPersistedState() }
+    delete stored['screenshots']
+    const { state, backup } = migratePersistedState(stored)
+
+    // A missing field is a field, not an unreadable document: the rest of the
+    // user's settings must not be reset over it.
+    expect(state.screenshots).toEqual(defaultPersistedState().screenshots)
+    expect(state.suites).toEqual(defaultPersistedState().suites)
+    expect(backup).toBeNull()
+  })
+
+  it('repairs each part on its own', () => {
+    const stored: Record<string, unknown> = {
+      ...defaultPersistedState(),
+      screenshots: { directory: String.raw`C:\shots`, format: 'gif', dpr: 4 }
+    }
+    const { state } = migratePersistedState(stored)
+
+    expect(state.screenshots).toEqual({
+      directory: String.raw`C:\shots`,
+      format: 'png',
+      dpr: 'device'
+    })
+  })
+
+  it('drops a folder that is not a usable path', () => {
+    const stored: Record<string, unknown> = {
+      ...defaultPersistedState(),
+      screenshots: { directory: '/shots\u0000', format: 'jpeg', dpr: 1 }
+    }
+    const { state } = migratePersistedState(stored)
+
+    expect(state.screenshots).toEqual({ directory: '', format: 'jpeg', dpr: 1 })
+  })
+
+  it('replaces the slice wholesale on a patch', () => {
+    const base = defaultPersistedState()
+    const next = mergePersistedState(base, {
+      screenshots: { directory: '/shots', format: 'jpeg', dpr: 1 }
+    })
+
+    expect(next.screenshots).toEqual({ directory: '/shots', format: 'jpeg', dpr: 1 })
+    expect(base.screenshots.directory).toBe('')
+  })
+})

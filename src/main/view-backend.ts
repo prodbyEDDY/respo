@@ -1,8 +1,24 @@
-import { View, WebContentsView, type BaseWindow, type WebContents } from 'electron'
+import {
+  BrowserWindow,
+  clipboard,
+  Menu,
+  View,
+  WebContentsView,
+  type BaseWindow,
+  type WebContents
+} from 'electron'
 import { join } from 'path'
 import { SYNC_CAPTURE_CHANNEL, type LoadState, type LoadStatePayload } from '@shared/ipc'
 import type { DeviceSpec, Rect } from '@shared/types'
-import { CDPController } from './cdp-controller'
+import { CDPController, isMobileDevice } from './cdp-controller'
+import type {
+  CreateDevtoolsPanel,
+  DevtoolsCommands,
+  DevtoolsPanel,
+  DevtoolsRegistry
+} from './devtools-manager'
+import { deviceMenuTemplate, type InspectRegistry } from './inspector'
+import type { ShotRegistry } from './screenshot-queue'
 import { DEVICE_PARTITION, openExternalSafe } from './security'
 import type { SyncRegistry } from './sync-engine'
 import type { ManagedView, ReportLoadState, ViewBackend } from './view-manager'
@@ -171,6 +187,130 @@ export type ElectronViewBackendOptions = {
   cdp?: CDPController
   /** Told about every view's lifetime, so input can be mirrored into it. */
   sync?: SyncRegistry
+  /**
+   * Told about every view's lifetime, so DevTools can be opened on it — and
+   * asked to open it, by the context menu on the view.
+   */
+  devtools?: DevtoolsRegistry & DevtoolsCommands
+  /** Told about every view's lifetime, so it can be put into the element picker. */
+  inspect?: InspectRegistry
+  /** Told about every view's lifetime, so it can be screenshotted. */
+  shots?: ShotRegistry
+}
+
+/** Default size of a DevTools window, when the panel gets one of its own. */
+const DEVTOOLS_WINDOW_SIZE = { width: 1000, height: 720 }
+
+/**
+ * The panels Respo ever asks a DevTools frontend for.
+ *
+ * A whitelist rather than an escape: this name is interpolated into a script
+ * that runs inside a privileged `devtools://` document, and the only defence
+ * that does not depend on `JSON.stringify` being airtight is never letting an
+ * unexpected string reach it. Both entries are panels Respo's own UI opens.
+ */
+const FRONTEND_PANELS = new Set(['console', 'elements'])
+
+/**
+ * Ask a DevTools frontend to bring one of its panels to the front.
+ *
+ * `DevToolsAPI` is the frontend's embedder interface — the same object Chrome
+ * itself drives it through — and `showPanel` is how a host says "open the
+ * console". It is not part of Electron's API, so every call is guarded and a
+ * refusal is silent: the frontend then stays on Elements, which is a worse
+ * answer to "Open Console" but not a broken window. Nothing about the
+ * frontend's own styling or layout is touched.
+ *
+ * Timing is the subtle part: the frontend is handed to Electron and only *then*
+ * starts loading `devtools://`, so the call has to wait for the document that
+ * will answer it.
+ *
+ * Exported for its unit test; production code reaches it through the factory.
+ */
+export function showFrontendPanel(frontend: WebContents, name: string): void {
+  if (!FRONTEND_PANELS.has(name)) return
+  const request = `globalThis.DevToolsAPI?.showPanel(${JSON.stringify(name)})`
+  const apply = (): void => {
+    if (frontend.isDestroyed()) return
+    frontend.executeJavaScript(request).catch(() => undefined)
+  }
+
+  if (frontend.getURL() !== '' && !frontend.isLoading()) apply()
+  else frontend.once('did-finish-load', apply)
+}
+
+/**
+ * Build the surfaces `DevtoolsManager` shows a DevTools frontend in.
+ *
+ * The manager owns *when*; this owns *where*. Both shapes are plain Electron
+ * surfaces Respo created, which is what lets the manager treat them
+ * identically — Electron is never asked to make a DevTools window of its own,
+ * so it never has one to position, size or close behind our back.
+ */
+export function createDevtoolsPanelFactory(window: BaseWindow): CreateDevtoolsPanel {
+  return ({ mode, title }): DevtoolsPanel => {
+    if (mode === 'window') {
+      const host = new BrowserWindow({ ...DEVTOOLS_WINDOW_SIZE, title, autoHideMenuBar: true })
+      // The frontend renames its own document; the window keeps the device name
+      // instead, because that is what tells five of these apart on a taskbar.
+      host.on('page-title-updated', (event) => {
+        event.preventDefault()
+      })
+
+      const listeners: (() => void)[] = []
+      host.on('closed', () => {
+        for (const listener of listeners) listener()
+      })
+
+      return {
+        frontend: host.webContents,
+        setBounds(): void {
+          // A window is placed by the user, not by the canvas.
+        },
+        showPanel(name: string): void {
+          if (!host.isDestroyed()) showFrontendPanel(host.webContents, name)
+        },
+        onClosed(listener): void {
+          listeners.push(listener)
+        },
+        destroy(): void {
+          if (!host.isDestroyed()) host.destroy()
+        }
+      }
+    }
+
+    // No `webPreferences`: this is Chromium's own DevTools frontend, and the
+    // device-view hardening (sandbox, shared partition, device preload) would
+    // be applied to entirely the wrong document.
+    const view = new WebContentsView()
+    view.setBounds({ x: 0, y: 0, width: 0, height: 0 })
+    // Added after the canvas layer, so it composites above it — though the
+    // renderer reserves the strip, so the two never actually overlap.
+    window.contentView.addChildView(view)
+
+    return {
+      frontend: view.webContents,
+      showPanel(name: string): void {
+        if (!view.webContents.isDestroyed()) showFrontendPanel(view.webContents, name)
+      },
+      setBounds(bounds: Rect): void {
+        if (view.webContents.isDestroyed()) return
+        view.setBounds({
+          x: Math.round(bounds.x),
+          y: Math.round(bounds.y),
+          width: Math.round(bounds.width),
+          height: Math.round(bounds.height)
+        })
+      },
+      onClosed(): void {
+        // The dock is closed through the manager, never around it.
+      },
+      destroy(): void {
+        window.contentView.removeChildView(view)
+        if (!view.webContents.isDestroyed()) view.webContents.close()
+      }
+    }
+  }
 }
 
 /** One `WebContentsView` per device, positioned by `ViewManager`. */
@@ -185,6 +325,9 @@ export function createElectronViewBackend(
   const parent = layer ?? window.contentView
   const cdp = options.cdp ?? new CDPController()
   const sync = options.sync ?? null
+  const devtools = options.devtools ?? null
+  const inspect = options.inspect ?? null
+  const shots = options.shots ?? null
   let disposed = false
 
   if (layer !== null) {
@@ -231,10 +374,52 @@ export function createElectronViewBackend(
         target: wc,
         width: device.width,
         height: device.height,
+        // How a dispatched coordinate is read depends on which emulation this
+        // view is under — see `SyncDeviceRegistration.mobile`.
+        mobile: isMobileDevice(device),
         setCapturing: (capturing) => {
           if (wc.isDestroyed()) return
           wc.send(SYNC_CAPTURE_CHANNEL, capturing)
         }
+      })
+
+      // DevTools is opened on this page from main, so the manager needs the
+      // same handle the sync engine took above.
+      devtools?.registerDevice(device.id, wc)
+      // The element picker rides the CDP session, so the inspector is given the
+      // debugger target rather than the `webContents`.
+      inspect?.registerDevice({ deviceId: device.id, target: wc })
+
+      // Screenshots ride the same session. The name and the emulated size go
+      // with it: both end up in the file name.
+      shots?.registerDevice({
+        deviceId: device.id,
+        name: device.name,
+        width: device.width,
+        height: device.height,
+        target: wc
+      })
+
+      // Right click anywhere in the page. Electron's params are already in the
+      // space `inspectElement` hit-tests in, so the point goes through as it
+      // came; `inspector.ts` owns what the menu offers.
+      wc.on('context-menu', (_event, params) => {
+        if (wc.isDestroyed() || devtools === null) return
+
+        const template = deviceMenuTemplate(
+          { x: params.x, y: params.y, url: wc.getURL() },
+          {
+            inspectElement: (x, y) => devtools.inspectElement(device.id, x, y),
+            openConsole: () => devtools.openConsole(device.id),
+            reload: () => {
+              if (!wc.isDestroyed()) wc.reload()
+            },
+            copyUrl: (url) => clipboard.writeText(url)
+          }
+        )
+        Menu.buildFromTemplate(
+          template.map((item) => ({ label: item.label, enabled: item.enabled, click: item.click }))
+        ).popup({ window })
       })
 
       // A preload is a document's script: the copy running in the page this
@@ -242,6 +427,9 @@ export function createElectronViewBackend(
       // its own "report everything" default. Say it again now.
       wc.on('dom-ready', () => {
         sync?.refreshCapture(device.id)
+        // Overlay state belongs to the document it was set on, so a page that
+        // loads while the picker is armed has to be armed again.
+        inspect?.refresh(device.id)
       })
 
       // `emulated` is the gate every navigation waits behind, so a page is
@@ -260,16 +448,37 @@ export function createElectronViewBackend(
         setZoomFactor(zoom: number): void {
           if (wc.isDestroyed()) return
           wc.setZoomFactor(zoom)
+          // Page zoom is half of the emulation for a desktop device: the
+          // metrics override is in widget pixels, so it has to be divided by
+          // the zoom for the page to keep laying out at the device's own width
+          // (see `metricsOf` in `cdp-controller`).
+          cdp.setZoom(wc, zoom)
           // The engine dispatches mouse events into this view, and those
           // coordinates are read in the zoomed widget's space rather than the
           // page's own (see `SyncRegistry.setZoom`).
           sync?.setZoom(device.id, zoom)
+          // `inspectElement` reads its point in the same zoomed space, from the
+          // other side: see `inspector.ts`.
+          inspect?.setZoom(device.id, zoom)
         },
         applyDevice(next: DeviceSpec): void {
           if (wc.isDestroyed()) return
           // Rotation and edited metrics change what a normalized coordinate
-          // means here, so the engine has to hear about them too.
-          sync?.updateDevice(device.id, { width: next.width, height: next.height })
+          // means here, so the engine has to hear about them too — including
+          // the mobile flag, which an edited device *type* rewrites along with
+          // the user agent it is derived from.
+          sync?.updateDevice(device.id, {
+            width: next.width,
+            height: next.height,
+            mobile: isMobileDevice(next)
+          })
+          // A screenshot's file name carries the viewport it was taken at, so
+          // a rotated device has to stop claiming its portrait size.
+          shots?.updateDevice(device.id, {
+            name: next.name,
+            width: next.width,
+            height: next.height
+          })
           emulated = emulated.then(() => cdp.applyDevice(wc, next))
         },
         loadUrl(url: string): void {
@@ -305,6 +514,11 @@ export function createElectronViewBackend(
         dispose(): void {
           views.delete(view)
           sync?.unregisterDevice(device.id)
+          inspect?.unregisterDevice(device.id)
+          shots?.unregisterDevice(device.id)
+          // Before the `webContents` goes: the manager still has to close a
+          // panel that was open on it, and destroy the frontend behind it.
+          devtools?.unregisterDevice(device.id)
           cdp.detachSafe(wc)
           parent.removeChildView(view)
           if (!wc.isDestroyed()) wc.close()

@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <!-- Without this, mobile emulation lays the page out at 980px and scales
+         it down, which would make the captured height a function of the
+         emulation rather than of the document. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>tall fixture</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+      }
+      /* An exact, device-independent document height: the full-page capture is
+         asserted against it, so it must not depend on the viewport. */
+      #page {
+        height: 4000px;
+        position: relative;
+        background: #ffffff;
+      }
+      /* No margin anywhere: a collapsing paragraph margin would escape #page
+         and make the document 4016px tall, which is a fixture bug that would
+         read as a capture bug. */
+      #page p {
+        margin: 0;
+      }
+      /* Far below the fold of every device on the canvas — the tallest is
+         1366px — so a capture that contains it is a capture that went past the
+         viewport. */
+      #below {
+        position: absolute;
+        top: 3600px;
+        left: 0;
+        right: 0;
+        height: 400px;
+        background: #1d4ed8;
+        color: #ffffff;
+        font:
+          32px/400px system-ui,
+          sans-serif;
+        text-align: center;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="page">
+      <p>top of the document</p>
+      <div id="below">below the fold</div>
+    </div>
+  </body>
+</html>

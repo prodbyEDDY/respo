@@ -1,7 +1,12 @@
+import { useState } from 'react'
 import {
   ArrowPathRoundedSquareIcon,
   ArrowsPointingOutIcon,
+  ArrowTopRightOnSquareIcon,
+  Bars2Icon,
+  Cog6ToothIcon,
   ComputerDesktopIcon,
+  CursorArrowRaysIcon,
   EllipsisVerticalIcon,
   LinkIcon,
   LinkSlashIcon,
@@ -10,9 +15,12 @@ import {
   MoonIcon,
   PlusIcon,
   RectangleGroupIcon,
-  SunIcon
+  SunIcon,
+  ViewColumnsIcon
 } from '@heroicons/react/24/outline'
+import type { DockPosition } from '@shared/ipc'
 import { SuiteSelector } from '@renderer/components/device-manager/SuiteSelector'
+import { SettingsDialog } from '@renderer/components/settings/SettingsDialog'
 import { Button } from '@renderer/components/ui/button'
 import {
   DropdownMenu,
@@ -26,10 +34,12 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
 import { cn } from '@renderer/lib/utils'
 import { useLayout } from '@renderer/stores/layout'
+import { usePanels } from '@renderer/stores/panels'
 import { useSettings } from '@renderer/stores/settings'
 import { useSync } from '@renderer/stores/sync'
 import { AddressBar } from './AddressBar'
 import { NavControls } from './NavControls'
+import { ShotAllButton, ShotNotice } from './ShotControls'
 
 type IconButtonProps = {
   label: string
@@ -133,7 +143,73 @@ function ThemeToggle(): React.JSX.Element {
  * than as three more buttons in the bar: ctrl+wheel on the canvas is the
  * gesture people actually use.
  */
-function OverflowMenu(): React.JSX.Element {
+/**
+ * Where DevTools opens, as a menu.
+ *
+ * The dock's own header carries the same three choices, but it only exists
+ * while something is docked — and a panel the user just moved into its own
+ * window has no header to bring it back from. This is that way back, one level
+ * off the main flow because it is a preference, not a step in any task.
+ */
+function DevtoolsDockItems(): React.JSX.Element {
+  const dock = usePanels((s) => s.dock)
+  const setDock = usePanels((s) => s.setDock)
+
+  const item = (value: DockPosition, label: string, icon: React.ReactNode): React.JSX.Element => (
+    <DropdownMenuItem
+      onSelect={() => setDock(value)}
+      className={cn(dock === value && 'text-primary')}
+    >
+      {icon}
+      {label}
+      {dock === value ? <DropdownMenuShortcut>on</DropdownMenuShortcut> : null}
+    </DropdownMenuItem>
+  )
+
+  return (
+    <>
+      <DropdownMenuLabel>DevTools</DropdownMenuLabel>
+      {item('bottom', 'Dock to bottom', <Bars2Icon />)}
+      {item('right', 'Dock to right', <ViewColumnsIcon />)}
+      {item('undocked', 'Separate window', <ArrowTopRightOnSquareIcon />)}
+    </>
+  )
+}
+
+/**
+ * The element picker, as one toggle over the whole canvas.
+ *
+ * Deliberately not per device: the question people ask is "what is *this*",
+ * pointing at whichever viewport shows the problem, and having to say which
+ * device first would be a step that answers nothing. Clicking anything in any
+ * device ends the mode and opens that device's DevTools on the element.
+ */
+function InspectToggle(): React.JSX.Element {
+  const inspecting = usePanels((s) => s.inspecting)
+  const toggle = usePanels((s) => s.toggleInspecting)
+  const label = inspecting ? 'Stop inspecting (Esc)' : 'Inspect an element (Ctrl+I)'
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label={label}
+          aria-pressed={inspecting}
+          data-inspecting={inspecting ? 'on' : 'off'}
+          onClick={toggle}
+          className={cn(inspecting && 'bg-primary/15 text-primary')}
+        >
+          <CursorArrowRaysIcon />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
+  )
+}
+
+function OverflowMenu({ onOpenSettings }: { onOpenSettings: () => void }): React.JSX.Element {
   const zoom = useLayout((s) => s.zoom)
   const zoomIn = useLayout((s) => s.zoomIn)
   const zoomOut = useLayout((s) => s.zoomOut)
@@ -163,9 +239,21 @@ function OverflowMenu(): React.JSX.Element {
           <DropdownMenuShortcut>{Math.round(zoom * 100)}%</DropdownMenuShortcut>
         </DropdownMenuItem>
         <DropdownMenuSeparator />
+        <DevtoolsDockItems />
+        <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={() => setTheme('system')}>
           <ComputerDesktopIcon />
           Use system theme
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        {/*
+          Radix returns focus to the trigger as the menu closes, and a dialog
+          opened in the same tick would fight it for the focus. Deferring by one
+          frame lets the menu finish leaving first.
+        */}
+        <DropdownMenuItem onSelect={() => requestAnimationFrame(onOpenSettings)}>
+          <Cog6ToothIcon />
+          Settings…
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -182,21 +270,31 @@ function OverflowMenu(): React.JSX.Element {
  */
 export function TopBar(): React.JSX.Element {
   const rotateAll = useLayout((s) => s.rotateAll)
+  const [settingsOpen, setSettingsOpen] = useState(false)
 
   return (
     <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border bg-card px-2">
       <NavControls />
       <AddressBar />
+      {/*
+        Screenshot feedback lives here, not over the canvas: device pages are
+        native views composited above anything the renderer paints, so a toast
+        in the corner of the canvas would spend half its life behind a frame.
+      */}
+      <ShotNotice />
       <div className="flex items-center gap-1">
         <SuiteSelector />
         <DeviceLibraryButton />
         <SyncChip />
+        <InspectToggle />
+        <ShotAllButton />
         <IconButton label="Rotate all devices" onClick={rotateAll}>
           <ArrowPathRoundedSquareIcon />
         </IconButton>
         <ThemeToggle />
-        <OverflowMenu />
+        <OverflowMenu onOpenSettings={() => setSettingsOpen(true)} />
       </div>
+      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
     </header>
   )
 }

@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>inspect fixture</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+      }
+      div {
+        position: absolute;
+        left: 0;
+        width: 200px;
+        height: 100px;
+      }
+      #alpha {
+        top: 0;
+        background: #f00;
+      }
+      #beta {
+        top: 200px;
+        background: #0f0;
+      }
+      #gamma {
+        top: 400px;
+        background: #00f;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="alpha"></div>
+    <div id="beta"></div>
+    <div id="gamma"></div>
+    <script>
+      // The title is the channel the e2e suite reads a view's identity from:
+      // main can pull it off any webContents, and Playwright has no page handle
+      // for a WebContentsView. Re-reported on resize, because the emulated
+      // viewport lands after the document has already run once.
+      function report() {
+        document.title = JSON.stringify({ innerWidth: window.innerWidth })
+      }
+      report()
+      window.addEventListener('resize', report)
+      window.addEventListener('load', report)
+    </script>
+  </body>
+</html>

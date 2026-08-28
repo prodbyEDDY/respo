@@ -1,18 +1,34 @@
+import { useEffect, useState } from 'react'
 import {
   ArrowPathIcon,
   ArrowPathRoundedSquareIcon,
+  ArrowsUpDownIcon,
+  CameraIcon,
+  ChevronDownIcon,
+  ClipboardIcon,
+  CodeBracketIcon,
   ExclamationTriangleIcon,
   LinkIcon,
-  LinkSlashIcon
+  LinkSlashIcon,
+  ViewfinderCircleIcon
 } from '@heroicons/react/24/outline'
 import { isRotatable } from '@shared/custom-devices'
 import type { LoadStatePayload } from '@shared/ipc'
 import type { DeviceSpec } from '@shared/types'
 import { Button } from '@renderer/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuShortcut,
+  DropdownMenuTrigger
+} from '@renderer/components/ui/dropdown-menu'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
 import { cn } from '@renderer/lib/utils'
 import { useLayout } from '@renderer/stores/layout'
 import { useNavigation } from '@renderer/stores/navigation'
+import { selectIsOpen, usePanels } from '@renderer/stores/panels'
+import { selectIsBusy, useShots } from '@renderer/stores/shots'
 import { useSync } from '@renderer/stores/sync'
 
 export type DeviceFrameProps = {
@@ -136,6 +152,134 @@ function RotateToggle({ deviceId }: { deviceId: string }): React.JSX.Element {
 }
 
 /**
+ * Open this device's own DevTools, from its own header.
+ *
+ * Per device, not per app: Respo has as many pages open as there are frames,
+ * and "the" DevTools would have to mean one of them. A second click closes it
+ * again, so the control says what state it is in and how to leave it.
+ */
+function DevtoolsToggle({ deviceId }: { deviceId: string }): React.JSX.Element {
+  const open = usePanels((s) => selectIsOpen(s, deviceId))
+  const toggle = usePanels((s) => s.toggle)
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          aria-label="Open DevTools for this device"
+          aria-pressed={open}
+          data-devtools={open ? 'open' : 'closed'}
+          onClick={() => toggle(deviceId)}
+          className={cn(open ? 'text-primary' : 'text-muted-foreground hover:text-foreground')}
+        >
+          <CodeBracketIcon />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>{open ? 'Close DevTools' : 'Open DevTools'}</TooltipContent>
+    </Tooltip>
+  )
+}
+
+/**
+ * Screenshot this device, from its own header.
+ *
+ * One click is the whole gesture: the viewport, saved. Everything else is one
+ * level down — alt+click, or the split arrow — because "a picture of this
+ * frame" is what people come here for and a menu in front of it would charge
+ * every screenshot for the two that are not the common one.
+ */
+function ShotButton({ deviceId }: { deviceId: string }): React.JSX.Element {
+  const busy = useShots((s) => selectIsBusy(s, deviceId))
+  const capture = useShots((s) => s.capture)
+  const copy = useShots((s) => s.copy)
+
+  return (
+    <span className="flex items-center">
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            aria-label="Screenshot this device"
+            data-shooting={busy ? 'true' : undefined}
+            disabled={busy}
+            // Alt is the modifier a browser's own "capture full size" hides
+            // behind, and the menu says so out loud for anyone who never
+            // learned it.
+            onClick={(event) => capture(deviceId, { fullPage: event.altKey })}
+            className="text-muted-foreground hover:text-foreground disabled:opacity-100"
+          >
+            {busy ? <Spinner /> : <CameraIcon />}
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>Screenshot — hold Alt for the full page</TooltipContent>
+      </Tooltip>
+
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            aria-label="Screenshot options"
+            className="-ml-1.5 w-3 text-muted-foreground hover:text-foreground"
+          >
+            <ChevronDownIcon />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start">
+          <DropdownMenuItem onSelect={() => capture(deviceId, { fullPage: false })}>
+            <ViewfinderCircleIcon />
+            Visible area
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => capture(deviceId, { fullPage: true })}>
+            <ArrowsUpDownIcon />
+            Full page
+            <DropdownMenuShortcut>Alt</DropdownMenuShortcut>
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => copy(deviceId)}>
+            <ClipboardIcon />
+            Copy to clipboard
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </span>
+  )
+}
+
+/**
+ * The shutter: one flash of the frame when a picture of it lands.
+ *
+ * Opacity only, 150ms (DESIGN-SYSTEM.md motion budget), and drawn *outside* the
+ * viewport element for the same reason the lead ring is — the page is a native
+ * view composited over that box, so anything painted inside it is invisible.
+ *
+ * Driven by a counter rather than a flag: two screenshots in a row are two
+ * flashes, and a boolean that is already `true` would show only the first.
+ */
+function useShutter(deviceId: string): boolean {
+  const token = useShots((s) => s.flash[deviceId] ?? 0)
+  // What this frame has already flashed for. Seeded with the current count, so
+  // a frame that mounts onto a device with a history does not flash for it.
+  const [acknowledged, setAcknowledged] = useState(token)
+  // Derived during render rather than set from the effect: the flash *is* the
+  // difference between the two numbers, and an effect that assigns it would
+  // render the frame twice to say the same thing.
+  const flashing = token !== acknowledged
+
+  useEffect(() => {
+    if (!flashing) return
+    const timer = setTimeout(() => setAcknowledged(token), 150)
+    return () => {
+      clearTimeout(timer)
+    }
+  }, [flashing, token])
+
+  return flashing
+}
+
+/**
  * Chrome around one device: a caption, and an empty rectangle standing in for
  * the page.
  *
@@ -152,6 +296,7 @@ export function DeviceFrame({ device, zoom, viewportRef }: DeviceFrameProps): Re
   // the moment it is muted while the pointer is still resting on it.
   const isLead = useSync((s) => s.leadDeviceId === device.id && s.disabled[device.id] !== true)
   const setLead = useSync((s) => s.setLead)
+  const flashing = useShutter(device.id)
   const width = Math.round(device.width * zoom)
   const height = Math.round(device.height * zoom)
 
@@ -182,6 +327,21 @@ export function DeviceFrame({ device, zoom, viewportRef }: DeviceFrameProps): Re
         )}
       />
 
+      {/*
+        The shutter. Outside the frame like the lead ring, and for the same
+        reason: the page is a native view composited over that rectangle, so a
+        flash drawn inside it would never be seen.
+      */}
+      <span
+        aria-hidden="true"
+        data-shutter={flashing ? 'on' : 'off'}
+        className={cn(
+          'pointer-events-none absolute -inset-1 rounded-lg border-2 border-primary bg-primary/10',
+          'transition-opacity duration-150 ease-out',
+          flashing ? 'opacity-100' : 'opacity-0'
+        )}
+      />
+
       <header className="flex items-center gap-2 px-0.5">
         <h2 className="text-caption font-medium text-foreground">{device.name}</h2>
         <p className="text-micro tabular-nums text-muted-foreground">
@@ -196,6 +356,8 @@ export function DeviceFrame({ device, zoom, viewportRef }: DeviceFrameProps): Re
         */}
         <MirrorToggle deviceId={device.id} />
         {isRotatable(device) ? <RotateToggle deviceId={device.id} /> : null}
+        <ShotButton deviceId={device.id} />
+        <DevtoolsToggle deviceId={device.id} />
       </header>
 
       <div
