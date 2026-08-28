@@ -1,4 +1,4 @@
-import { app, BrowserWindow, nativeTheme } from 'electron'
+import { app, BrowserWindow, clipboard, ClipboardItem, dialog, nativeTheme, shell } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { normalizeUrl, type DevtoolsStatePayload } from '@shared/ipc'
@@ -15,6 +15,7 @@ import {
   importBackup,
   type Persistence
 } from './persistence'
+import { createNodeShotFileSystem, ScreenshotQueue } from './screenshot-queue'
 import { installDevicePermissionHandlers, openExternalSafe } from './security'
 import { SyncEngine } from './sync-engine'
 import {
@@ -26,6 +27,8 @@ import {
   validateLeadDeviceId,
   validateOptionalDeviceId,
   validatePersistedPatch,
+  validateShotPath,
+  validateShotRequest,
   validateSyncInputBatch,
   validateThemeSource
 } from './validate'
@@ -44,6 +47,7 @@ let persistence: Persistence | null = null
 let syncEngine: SyncEngine | null = null
 let devtools: DevtoolsManager | null = null
 let inspector: Inspector | null = null
+let shots: ScreenshotQueue | null = null
 /**
  * Device names, by id, as the renderer last reported them.
  *
@@ -55,6 +59,23 @@ const deviceNames = new Map<string, string>()
 
 /** Until the address bar lands, every session opens here. */
 const DEFAULT_START_URL = 'https://example.com'
+
+/** The folder under `Pictures` a fresh install writes screenshots into. */
+const DEFAULT_SHOT_FOLDER = 'Respo'
+
+/**
+ * Where screenshots go, resolved.
+ *
+ * The document stores `''` until the user picks a folder, because the default
+ * is a path only main can name (`app.getPath`) and one that differs per
+ * machine. Resolved on every capture rather than cached: the settings dialog
+ * can move it mid-session.
+ */
+function screenshotDirectory(): string {
+  const configured = persistence?.load().screenshots.directory ?? ''
+  if (configured !== '') return configured
+  return join(app.getPath('pictures'), DEFAULT_SHOT_FOLDER)
+}
 
 /**
  * The url the views open on. `RESPO_START_URL` is the seam the e2e suite (and,
@@ -137,13 +158,37 @@ function createWindow(): void {
     }
   })
 
+  // Screenshots ride the same CDP sessions as everything else and run three at
+  // a time (CLAUDE.md §4): a full-page capture is a document-sized raster, and
+  // ten of them at once is the canvas stalling.
+  shots = new ScreenshotQueue({
+    cdp,
+    fs: createNodeShotFileSystem(),
+    directory: screenshotDirectory,
+    defaults: () => {
+      const saved = persistence?.load().screenshots
+      return { format: saved?.format ?? 'png', dpr: saved?.dpr ?? 'device' }
+    },
+    onState: (batch) => {
+      sendMainEvent(mainWindow.webContents, { type: 'shot-state', payload: batch })
+    },
+    // Electron's clipboard is the W3C-shaped one: an item per MIME type,
+    // written atomically. PNG is what every paste target understands.
+    copyImage: (png) =>
+      clipboard.write([
+        new ClipboardItem({ 'image/png': new Blob([new Uint8Array(png)], { type: 'image/png' }) })
+      ]),
+    revealFile: (path) => shell.showItemInFolder(path)
+  })
+
   viewManager = new ViewManager(
     createElectronViewBackend(mainWindow, {
       canvasLayer: process.env['RESPO_CANVAS_LAYER'] !== '0',
       cdp,
       sync: syncEngine,
       devtools,
-      inspect: inspector
+      inspect: inspector,
+      shots
     }),
     { onLoadState: (payload) => loadStates?.report(payload) }
   )
@@ -163,6 +208,9 @@ function createWindow(): void {
     // picker would swallow the next click in a page that is still loading.
     inspector?.dispose()
     inspector = null
+    // Before the views too: a capture in flight holds a CDP session open.
+    shots?.dispose()
+    shots = null
     devtools?.dispose()
     devtools = null
     deviceNames.clear()
@@ -263,6 +311,7 @@ function registerIpcHandlers(): void {
     const live = new Set(specs.map((spec) => spec.id))
     devtools?.retain(live)
     inspector?.retain(live)
+    shots?.retain(live)
   })
 
   // The hot path: one call per animation frame, applied synchronously so every
@@ -339,6 +388,46 @@ function registerIpcHandlers(): void {
     return devtools?.setDock(next) ?? emptyDevtoolsState()
   })
 
+  // Screenshots. `shot:device` and `shot:all` only *start* work — they answer
+  // with the batch they queued, and the captures themselves report through
+  // batched `shot-state` events (CLAUDE.md §4).
+  registerHandler('shot:device', (_event, deviceId, request) => {
+    const id = validateDeviceId(deviceId)
+    const options = validateShotRequest(request)
+    return shots?.captureDevice(id, options) ?? { batchId: '', queued: 0 }
+  })
+
+  registerHandler('shot:all', (_event, request) => {
+    const options = validateShotRequest(request)
+    return shots?.captureAll(options) ?? { batchId: '', queued: 0 }
+  })
+
+  registerHandler('shot:copy', (_event, deviceId) => {
+    const id = validateDeviceId(deviceId)
+    return shots?.copy(id) ?? false
+  })
+
+  // The path is the renderer's, so it is checked twice: shape here, and
+  // containment in the screenshots folder inside the queue.
+  registerHandler('shot:reveal', (_event, path) => shots?.reveal(validateShotPath(path)) ?? false)
+
+  registerHandler('shot:get-dir', () => screenshotDirectory())
+
+  // The folder dialog runs here, like the backup ones: the renderer names no
+  // paths of its own, it only persists what the user picked (CLAUDE.md §7).
+  registerHandler('shot:choose-dir', async (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender)
+    const options = {
+      title: 'Choose a folder for screenshots',
+      defaultPath: screenshotDirectory(),
+      properties: ['openDirectory' as const, 'createDirectory' as const]
+    }
+    const result = await (window === null
+      ? dialog.showOpenDialog(options)
+      : dialog.showOpenDialog(window, options))
+    return result.canceled ? null : (result.filePaths[0] ?? null)
+  })
+
   // The one-way stream from the device views. Its sender is an untrusted page,
   // so the batch is validated (and clamped) before the engine sees any of it;
   // anything malformed is dropped rather than thrown back at the page.
@@ -401,6 +490,8 @@ app.on('before-quit', () => {
   syncEngine = null
   inspector?.dispose()
   inspector = null
+  shots?.dispose()
+  shots = null
   devtools?.dispose()
   devtools = null
   viewManager?.destroy()

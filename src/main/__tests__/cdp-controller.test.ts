@@ -465,3 +465,134 @@ describe('CDPController.nodePoint', () => {
     expect(await controller.nodePoint(target, 5)).toBeNull()
   })
 })
+
+describe('CDPController.capture', () => {
+  let controller: CDPController
+
+  beforeEach(() => {
+    controller = new CDPController()
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+  })
+
+  /** What a page answers `Page.captureScreenshot` with: base64 image data. */
+  function reply(target: FakeTarget, text: string): void {
+    target.replies.set('Page.captureScreenshot', { data: Buffer.from(text).toString('base64') })
+  }
+
+  it('decodes the protocol answer into image bytes', async () => {
+    const target = fakeTarget()
+    await controller.attach(target)
+    await controller.applyDevice(target, IPHONE)
+    reply(target, 'png-bytes')
+
+    const image = await controller.capture(target, {
+      format: 'png',
+      fullPage: false,
+      dpr: 'device'
+    })
+
+    expect(image?.toString()).toBe('png-bytes')
+    expect(paramsOf(target, 'Page.captureScreenshot')).toMatchObject({
+      format: 'png',
+      captureBeyondViewport: false
+    })
+  })
+
+  it('asks for the whole document when the shot is full-page', async () => {
+    const target = fakeTarget()
+    await controller.attach(target)
+    await controller.applyDevice(target, IPHONE)
+    reply(target, 'tall')
+
+    await controller.capture(target, { format: 'png', fullPage: true, dpr: 'device' })
+    expect(paramsOf(target, 'Page.captureScreenshot')).toMatchObject({
+      captureBeyondViewport: true
+    })
+  })
+
+  it('carries a quality for jpeg and none for png', async () => {
+    const target = fakeTarget()
+    await controller.attach(target)
+    await controller.applyDevice(target, IPHONE)
+    reply(target, 'jpg')
+
+    await controller.capture(target, { format: 'jpeg', fullPage: false, dpr: 'device' })
+    const params = paramsOf(target, 'Page.captureScreenshot') as Record<string, unknown>
+    expect(params['format']).toBe('jpeg')
+    expect(typeof params['quality']).toBe('number')
+  })
+
+  it('drops to 1x on request and puts the device density back', async () => {
+    const target = fakeTarget()
+    await controller.attach(target)
+    await controller.applyDevice(target, IPHONE)
+    reply(target, 'png')
+    target.calls.length = 0
+
+    await controller.capture(target, { format: 'png', fullPage: false, dpr: 1 })
+
+    const overrides = target.calls
+      .filter(([method]) => method === 'Emulation.setDeviceMetricsOverride')
+      .map(([, params]) => params as Record<string, unknown>)
+    expect(overrides).toHaveLength(2)
+    // Down to 1x for the capture...
+    expect(overrides[0]).toMatchObject({ width: 393, height: 852, deviceScaleFactor: 1 })
+    // ...and back to exactly what the device spec says afterwards.
+    expect(overrides[1]).toMatchObject({ width: 393, height: 852, deviceScaleFactor: 3 })
+    expect(methods(target).indexOf('Page.captureScreenshot')).toBe(1)
+  })
+
+  it('restores the device density even when the capture throws', async () => {
+    const target = fakeTarget()
+    await controller.attach(target)
+    await controller.applyDevice(target, IPHONE)
+    target.calls.length = 0
+    target.failNext.add('Page.captureScreenshot')
+
+    expect(await controller.capture(target, { format: 'png', fullPage: false, dpr: 1 })).toBeNull()
+
+    const overrides = target.calls
+      .filter(([method]) => method === 'Emulation.setDeviceMetricsOverride')
+      .map(([, params]) => params as Record<string, unknown>)
+    expect(overrides.at(-1)).toMatchObject({ deviceScaleFactor: 3 })
+  })
+
+  it('does not touch the emulation for a device that is already 1x', async () => {
+    const target = fakeTarget()
+    await controller.attach(target)
+    await controller.applyDevice(target, DESKTOP)
+    reply(target, 'png')
+    target.calls.length = 0
+
+    await controller.capture(target, { format: 'png', fullPage: false, dpr: 1 })
+    expect(methods(target)).toEqual(['Page.captureScreenshot'])
+  })
+
+  it('re-states the emulation after a full-page capture resized the frame', async () => {
+    const target = fakeTarget()
+    await controller.attach(target)
+    await controller.applyDevice(target, DESKTOP)
+    reply(target, 'png')
+    target.calls.length = 0
+
+    await controller.capture(target, { format: 'png', fullPage: true, dpr: 'device' })
+    expect(methods(target)).toEqual([
+      'Page.captureScreenshot',
+      'Emulation.setDeviceMetricsOverride'
+    ])
+  })
+
+  it('answers with nothing when the page returns no data, or there is no session', async () => {
+    const target = fakeTarget()
+    await controller.attach(target)
+    target.replies.set('Page.captureScreenshot', { data: '' })
+    expect(
+      await controller.capture(target, { format: 'png', fullPage: false, dpr: 'device' })
+    ).toBeNull()
+
+    const detached = fakeTarget()
+    expect(
+      await controller.capture(detached, { format: 'png', fullPage: false, dpr: 'device' })
+    ).toBeNull()
+  })
+})

@@ -58,6 +58,67 @@ export type DevtoolsStatePayload = {
   detachedDeviceIds: string[]
 }
 
+/**
+ * Image encoding for a screenshot. The two `Page.captureScreenshot` speaks, and
+ * the only two worth offering: one lossless, one small.
+ */
+export type ShotFormat = 'png' | 'jpeg'
+
+/**
+ * The pixel density a screenshot is taken at.
+ *
+ * `device` is the honest answer — an iPhone shot comes out at 3× like the phone
+ * itself — and `1` is the practical one: a CSS-pixel-for-pixel image, for a bug
+ * report or a design review where a 1179px-wide "393px viewport" is a nuisance.
+ */
+export type ShotDpr = 'device' | 1
+
+/**
+ * What one screenshot gesture asks for.
+ *
+ * `format` and `dpr` are optional because the settings dialog is where they
+ * normally live: main fills them in from the saved document, so the common call
+ * is `{ fullPage: false }` and nothing has to restate a preference.
+ */
+export type ShotRequest = {
+  /** The whole document rather than the emulated viewport. */
+  fullPage: boolean
+  format?: ShotFormat
+  dpr?: ShotDpr
+}
+
+/** Where one screenshot job is in its life. */
+export type ShotState = 'queued' | 'active' | 'done' | 'failed'
+
+/**
+ * One screenshot job, as the renderer hears about it.
+ *
+ * `batchId`/`batchSize` are what make "3 of 5 saved" expressible without the
+ * renderer tracking anything: every job of one gesture carries the same batch
+ * id and the size it started at, so counting the terminal states of a batch is
+ * a fold over the events it has already been given.
+ */
+export type ShotStatePayload = {
+  id: string
+  batchId: string
+  batchSize: number
+  deviceId: string
+  /** The device's name as it was when the shot was taken. For the toast. */
+  deviceName: string
+  state: ShotState
+  /** Where the file landed. Present on `done` only. */
+  path?: string
+  /** Why it did not. Present on `failed` only. */
+  error?: string
+}
+
+/** What `shot:device` / `shot:all` answer with: the batch they just started. */
+export type ShotStartResult = {
+  batchId: string
+  /** Jobs actually queued. Zero means there was nothing on the canvas. */
+  queued: number
+}
+
 export type LoadState = 'loading' | 'ready' | 'failed'
 
 export type LoadStatePayload = {
@@ -90,6 +151,12 @@ export type MainEvent =
   | { type: 'load-state'; payload: LoadStatePayload[] }
   | { type: 'devtools-state'; payload: DevtoolsStatePayload }
   | { type: 'inspect-mode'; payload: { active: boolean } }
+  /**
+   * Screenshot progress, coalesced the same way `load-state` is: five devices
+   * moving through queued -> active -> done is one message per turn, keyed by
+   * job, not fifteen (CLAUDE.md §4).
+   */
+  | { type: 'shot-state'; payload: ShotStatePayload[] }
 
 /**
  * One interaction captured in a device view, in device-independent terms.
@@ -245,6 +312,36 @@ export type IpcInvokeMap = {
    * the renderer never has to time that itself.
    */
   'inspect:set': { args: [boolean]; result: boolean }
+  /**
+   * Screenshot one device. Answers with the batch it queued, not with a file:
+   * a capture is asynchronous and the result travels as `shot-state`.
+   */
+  'shot:device': { args: [string, ShotRequest]; result: ShotStartResult }
+  /** Screenshot every device on the canvas. Same contract, M jobs. */
+  'shot:all': { args: [ShotRequest]; result: ShotStartResult }
+  /**
+   * Put one device's viewport on the clipboard instead of on disk.
+   *
+   * `false` means the view could not be captured (it is gone, or its debugger
+   * is unavailable) — the renderer says so rather than claiming a copy.
+   */
+  'shot:copy': { args: [string]; result: boolean }
+  /**
+   * Show a saved screenshot in the file manager.
+   *
+   * Main refuses any path outside the screenshots folder: this is a renderer
+   * handing main a path, and `showItemInFolder` on an arbitrary one is a
+   * disclosure lever, not a convenience.
+   */
+  'shot:reveal': { args: [string]; result: boolean }
+  /** The folder screenshots are written to, resolved (never the empty default). */
+  'shot:get-dir': { args: []; result: string }
+  /**
+   * Pick the screenshots folder through a system dialog. `null` when the user
+   * dismissed it. The renderer persists what comes back; it never names a path
+   * of its own (CLAUDE.md §7).
+   */
+  'shot:choose-dir': { args: []; result: string | null }
 }
 
 export type IpcChannel = keyof IpcInvokeMap
@@ -274,7 +371,13 @@ const CHANNEL_REGISTRY: Record<IpcChannel, true> = {
   'devtools:close': true,
   'devtools:set-bounds': true,
   'devtools:set-dock': true,
-  'inspect:set': true
+  'inspect:set': true,
+  'shot:device': true,
+  'shot:all': true,
+  'shot:copy': true,
+  'shot:reveal': true,
+  'shot:get-dir': true,
+  'shot:choose-dir': true
 }
 
 export const IPC_CHANNELS: readonly IpcChannel[] = Object.keys(CHANNEL_REGISTRY) as IpcChannel[]

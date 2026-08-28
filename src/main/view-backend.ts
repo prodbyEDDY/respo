@@ -18,6 +18,7 @@ import type {
   DevtoolsRegistry
 } from './devtools-manager'
 import { deviceMenuTemplate, type InspectRegistry } from './inspector'
+import type { ShotRegistry } from './screenshot-queue'
 import { DEVICE_PARTITION, openExternalSafe } from './security'
 import type { SyncRegistry } from './sync-engine'
 import type { ManagedView, ReportLoadState, ViewBackend } from './view-manager'
@@ -193,6 +194,8 @@ export type ElectronViewBackendOptions = {
   devtools?: DevtoolsRegistry & DevtoolsCommands
   /** Told about every view's lifetime, so it can be put into the element picker. */
   inspect?: InspectRegistry
+  /** Told about every view's lifetime, so it can be screenshotted. */
+  shots?: ShotRegistry
 }
 
 /** Default size of a DevTools window, when the panel gets one of its own. */
@@ -311,6 +314,7 @@ export function createElectronViewBackend(
   const sync = options.sync ?? null
   const devtools = options.devtools ?? null
   const inspect = options.inspect ?? null
+  const shots = options.shots ?? null
   let disposed = false
 
   if (layer !== null) {
@@ -369,6 +373,16 @@ export function createElectronViewBackend(
       // The element picker rides the CDP session, so the inspector is given the
       // debugger target rather than the `webContents`.
       inspect?.registerDevice({ deviceId: device.id, target: wc })
+
+      // Screenshots ride the same session. The name and the emulated size go
+      // with it: both end up in the file name.
+      shots?.registerDevice({
+        deviceId: device.id,
+        name: device.name,
+        width: device.width,
+        height: device.height,
+        target: wc
+      })
 
       // Right click anywhere in the page. Electron's params are already in the
       // space `inspectElement` hit-tests in, so the point goes through as it
@@ -431,6 +445,13 @@ export function createElectronViewBackend(
           // Rotation and edited metrics change what a normalized coordinate
           // means here, so the engine has to hear about them too.
           sync?.updateDevice(device.id, { width: next.width, height: next.height })
+          // A screenshot's file name carries the viewport it was taken at, so
+          // a rotated device has to stop claiming its portrait size.
+          shots?.updateDevice(device.id, {
+            name: next.name,
+            width: next.width,
+            height: next.height
+          })
           emulated = emulated.then(() => cdp.applyDevice(wc, next))
         },
         loadUrl(url: string): void {
@@ -467,6 +488,7 @@ export function createElectronViewBackend(
           views.delete(view)
           sync?.unregisterDevice(device.id)
           inspect?.unregisterDevice(device.id)
+          shots?.unregisterDevice(device.id)
           // Before the `webContents` goes: the manager still has to close a
           // panel that was open on it, and destroy the frontend behind it.
           devtools?.unregisterDevice(device.id)

@@ -7,14 +7,17 @@
  * back at its caller instead of reaching `ViewManager` or `nativeTheme`.
  */
 
-import type { DockPosition, InputEventPayload, ThemeSource } from '@shared/ipc'
+import type { DockPosition, InputEventPayload, ShotRequest, ThemeSource } from '@shared/ipc'
 import {
   clampDockSize,
+  MAX_PATH_LENGTH,
   type DevtoolsSettings,
   type PersistedState,
+  type ScreenshotSettings,
   type Suite,
   type SyncSettings
 } from '@shared/persistence-types'
+import { isAbsolute } from 'node:path'
 import type { DeviceSpec, Rect } from '@shared/types'
 
 /** More device views than a canvas could ever show is a bug or an attack. */
@@ -167,8 +170,89 @@ export function validatePersistedPatch(value: unknown): Partial<PersistedState> 
   if (patch['sync'] !== undefined) out.sync = validateSyncSettings(patch['sync'])
   if (patch['rotated'] !== undefined) out.rotated = validateRotated(patch['rotated'])
   if (patch['devtools'] !== undefined) out.devtools = validateDevtoolsSettings(patch['devtools'])
+  if (patch['screenshots'] !== undefined) {
+    out.screenshots = validateScreenshotSettings(patch['screenshots'])
+  }
 
   return out
+}
+
+/**
+ * Validate the persisted screenshot settings.
+ *
+ * The folder is the part that matters: it is the one string in this document
+ * that main turns into a path it writes to. `''` (the default folder) and an
+ * absolute path are the only two shapes accepted — a relative one would resolve
+ * against whatever the process' working directory happens to be.
+ */
+function validateScreenshotSettings(value: unknown): ScreenshotSettings {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    fail('store:save screenshots must be an object')
+  }
+  const shots = value as Record<string, unknown>
+
+  return {
+    directory: validateScreenshotDirectory(shots['directory']),
+    format: validateShotFormat(shots['format']),
+    dpr: validateShotDpr(shots['dpr'])
+  }
+}
+
+/** A folder to write screenshots into: absolute, sane length, no NUL. */
+export function validateScreenshotDirectory(value: unknown): string {
+  if (value === '') return ''
+  if (typeof value !== 'string' || value.length > MAX_PATH_LENGTH) {
+    fail(`screenshots.directory must be a string of at most ${MAX_PATH_LENGTH} characters`)
+  }
+  if (value.includes('\0')) fail('screenshots.directory must not contain NUL')
+  if (!isAbsolute(value)) fail('screenshots.directory must be an absolute path')
+  return value
+}
+
+function validateShotFormat(value: unknown): 'png' | 'jpeg' {
+  if (value !== 'png' && value !== 'jpeg') fail("screenshot format must be 'png' or 'jpeg'")
+  return value
+}
+
+function validateShotDpr(value: unknown): 'device' | 1 {
+  if (value !== 'device' && value !== 1) fail("screenshot dpr must be 'device' or 1")
+  return value
+}
+
+/**
+ * Validate a `shot:device` / `shot:all` request.
+ *
+ * `format` and `dpr` are optional — main fills them from the saved settings —
+ * but a *present* one still has to be one of the two values each accepts:
+ * `format` reaches `Page.captureScreenshot` and decides a file extension.
+ */
+export function validateShotRequest(value: unknown): ShotRequest {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    fail('screenshot request must be an object')
+  }
+  const request = value as Record<string, unknown>
+  if (typeof request['fullPage'] !== 'boolean') fail('screenshot fullPage must be a boolean')
+
+  return {
+    fullPage: request['fullPage'],
+    ...(request['format'] === undefined ? {} : { format: validateShotFormat(request['format']) }),
+    ...(request['dpr'] === undefined ? {} : { dpr: validateShotDpr(request['dpr']) })
+  }
+}
+
+/**
+ * Validate a `shot:reveal` path.
+ *
+ * Only the *shape* is checked here; whether it points inside the screenshots
+ * folder is `ScreenshotQueue.reveal`'s job, because only it knows where that
+ * folder currently is.
+ */
+export function validateShotPath(value: unknown): string {
+  if (!isFilledString(value) || value.length > MAX_PATH_LENGTH) {
+    fail(`shot:reveal expects a path of at most ${MAX_PATH_LENGTH} characters`)
+  }
+  if (value.includes('\0')) fail('shot:reveal path must not contain NUL')
+  return value
 }
 
 /** Validate the persisted DevTools panel shape. The size is clamped, not rejected. */

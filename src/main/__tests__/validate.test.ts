@@ -6,6 +6,8 @@ import {
   validateDeviceSpecs,
   validateLeadDeviceId,
   validatePersistedPatch,
+  validateShotPath,
+  validateShotRequest,
   validateSyncInputBatch,
   validateThemeSource
 } from '../validate'
@@ -311,5 +313,79 @@ describe('validatePersistedPatch — sync switches', () => {
     expect(() => validatePersistedPatch({ sync: { enabled: true, disabledDeviceIds } })).toThrow(
       /at most 64/i
     )
+  })
+})
+
+describe('validateShotRequest', () => {
+  it('accepts the bare request the UI sends', () => {
+    expect(validateShotRequest({ fullPage: false })).toEqual({ fullPage: false })
+  })
+
+  it('keeps an explicit format and density', () => {
+    expect(validateShotRequest({ fullPage: true, format: 'jpeg', dpr: 1 })).toEqual({
+      fullPage: true,
+      format: 'jpeg',
+      dpr: 1
+    })
+  })
+
+  it('drops extra keys rather than passing them to main', () => {
+    expect(validateShotRequest({ fullPage: false, quality: 100, path: '/etc' })).toEqual({
+      fullPage: false
+    })
+  })
+
+  it.each([
+    ['not an object', 'png'],
+    ['an array', []],
+    ['a missing fullPage', {}],
+    ['a non-boolean fullPage', { fullPage: 'yes' }],
+    ['an unknown format', { fullPage: false, format: 'webp' }],
+    ['a density that is neither', { fullPage: false, dpr: 2 }]
+  ])('rejects %s', (_label, request) => {
+    expect(() => validateShotRequest(request)).toThrow(/invalid ipc payload/i)
+  })
+})
+
+describe('validateShotPath', () => {
+  it('accepts a plausible file path', () => {
+    const path = String.raw`C:\Users\me\Pictures\Respo\a.png`
+    expect(validateShotPath(path)).toBe(path)
+  })
+
+  it.each([
+    ['an empty string', ''],
+    ['a number', 42],
+    ['null', null],
+    ['a NUL byte', '/shots/a.png\u0000.txt'],
+    ['an absurd length', `/${'a'.repeat(2000)}`]
+  ])('rejects %s', (_label, path) => {
+    expect(() => validateShotPath(path)).toThrow(/invalid ipc payload/i)
+  })
+})
+
+describe('validatePersistedPatch — screenshots', () => {
+  it('keeps a folder, a format and a density', () => {
+    const patch = validatePersistedPatch({
+      screenshots: { directory: '/home/me/shots', format: 'jpeg', dpr: 1 }
+    })
+    expect(patch.screenshots).toEqual({ directory: '/home/me/shots', format: 'jpeg', dpr: 1 })
+  })
+
+  it('accepts the empty folder that means "wherever main puts them"', () => {
+    const patch = validatePersistedPatch({
+      screenshots: { directory: '', format: 'png', dpr: 'device' }
+    })
+    expect(patch.screenshots?.directory).toBe('')
+  })
+
+  it.each([
+    ['not an object', 'shots'],
+    ['a relative folder', { directory: 'shots', format: 'png', dpr: 'device' }],
+    ['a folder with a NUL', { directory: '/shots\u0000', format: 'png', dpr: 'device' }],
+    ['an unknown format', { directory: '', format: 'gif', dpr: 'device' }],
+    ['an arbitrary density', { directory: '', format: 'png', dpr: 3 }]
+  ])('rejects %s', (_label, screenshots) => {
+    expect(() => validatePersistedPatch({ screenshots })).toThrow(/invalid ipc payload/i)
   })
 })

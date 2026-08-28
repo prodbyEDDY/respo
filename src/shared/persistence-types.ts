@@ -9,7 +9,7 @@
 
 import { slugify } from './custom-devices'
 import { DEFAULT_ACTIVE_DEVICE_IDS } from './deviceCatalog'
-import type { DockPosition, ThemeSource } from './ipc'
+import type { DockPosition, ShotDpr, ShotFormat, ThemeSource } from './ipc'
 import type { DeviceSpec } from './types'
 
 /** Bumped whenever a stored document stops being readable by this code. */
@@ -57,6 +57,21 @@ export type DevtoolsSettings = {
   size: number
 }
 
+/**
+ * Where screenshots go and what they look like.
+ *
+ * `directory` is empty on a fresh install and stays empty until the user picks
+ * a folder: the default is `Pictures/Respo`, which only main can resolve
+ * (`app.getPath`), and writing a resolved path into the document would freeze a
+ * profile copied to another machine onto a folder that does not exist there.
+ */
+export type ScreenshotSettings = {
+  /** Absolute path, or `''` for "wherever main puts them by default". */
+  directory: string
+  format: ShotFormat
+  dpr: ShotDpr
+}
+
 /** Bounds on the dock strip, shared by the renderer's drag and main's repair. */
 export const MIN_DOCK_SIZE = 160
 export const MAX_DOCK_SIZE = 2000
@@ -83,6 +98,8 @@ export type PersistedState = {
   rotated: Record<string, boolean>
   /** How the DevTools panel is shaped. See `DevtoolsSettings`. */
   devtools: DevtoolsSettings
+  /** Where screenshots go and what they look like. See `ScreenshotSettings`. */
+  screenshots: ScreenshotSettings
 }
 
 export const DEFAULT_SUITE_ID = 'default'
@@ -132,7 +149,10 @@ export function defaultPersistedState(): PersistedState {
     rotated: {},
     // Bottom is where a browser puts DevTools, and it is the edge that costs a
     // canvas of side-by-side viewports the least width.
-    devtools: { dock: 'bottom', size: DEFAULT_DOCK_SIZE }
+    devtools: { dock: 'bottom', size: DEFAULT_DOCK_SIZE },
+    // PNG at the device's own density: the truthful screenshot, which is the
+    // one someone comparing two viewports came for.
+    screenshots: { directory: '', format: 'png', dpr: 'device' }
   }
 }
 
@@ -158,6 +178,7 @@ export function mergePersistedState(
     sync: cloneSync(patch.sync ?? base.sync),
     rotated: { ...(patch.rotated ?? base.rotated) },
     devtools: { ...(patch.devtools ?? base.devtools) },
+    screenshots: { ...(patch.screenshots ?? base.screenshots) },
     schemaVersion: SCHEMA_VERSION
   }
   return next
@@ -214,7 +235,8 @@ export function migratePersistedState(raw: unknown): MigrationResult {
       ui: { theme: sanitizeTheme((doc['ui'] as Record<string, unknown> | undefined)?.['theme']) },
       sync: sanitizeSync(doc['sync']),
       rotated: sanitizeRotated(doc['rotated']),
-      devtools: sanitizeDevtools(doc['devtools'])
+      devtools: sanitizeDevtools(doc['devtools']),
+      screenshots: sanitizeScreenshots(doc['screenshots'])
     },
     backup: null
   }
@@ -338,6 +360,41 @@ function sanitizeDevtools(value: unknown): DevtoolsSettings {
   return {
     dock: dock === 'bottom' || dock === 'right' || dock === 'undocked' ? dock : defaults.dock,
     size: typeof devtools['size'] === 'number' ? clampDockSize(devtools['size']) : defaults.size
+  }
+}
+
+/**
+ * Longest folder path worth keeping. Windows' extended limit is 32 767; this is
+ * far past any real folder and far short of something worth storing.
+ */
+export const MAX_PATH_LENGTH = 1024
+
+/**
+ * Repair the screenshot settings.
+ *
+ * A field, not a document, and every part of it degrades on its own: a junk
+ * folder falls back to the default one rather than costing the user their
+ * format. A path containing a NUL is not a path — Node throws on it — so it is
+ * dropped here instead of at the first capture.
+ */
+function sanitizeScreenshots(value: unknown): ScreenshotSettings {
+  const defaults: ScreenshotSettings = { directory: '', format: 'png', dpr: 'device' }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return defaults
+
+  const shots = value as Record<string, unknown>
+  const directory = shots['directory']
+  const format = shots['format']
+  const dpr = shots['dpr']
+
+  return {
+    directory:
+      typeof directory === 'string' &&
+      directory.length <= MAX_PATH_LENGTH &&
+      !directory.includes('\0')
+        ? directory
+        : defaults.directory,
+    format: format === 'png' || format === 'jpeg' ? format : defaults.format,
+    dpr: dpr === 1 || dpr === 'device' ? dpr : defaults.dpr
   }
 }
 

@@ -1,3 +1,4 @@
+import type { ShotDpr, ShotFormat } from '@shared/ipc'
 import type { DeviceSpec } from '@shared/types'
 
 /**
@@ -94,6 +95,20 @@ export type CdpEventListener = (method: string, params: unknown) => void
 /** A point in a page's own CSS pixels, relative to its viewport. */
 export type Point = { x: number; y: number }
 
+/** What one `Page.captureScreenshot` call is being asked for. */
+export type CaptureOptions = {
+  format: ShotFormat
+  /** The whole document rather than what fits in the emulated viewport. */
+  fullPage: boolean
+  dpr: ShotDpr
+}
+
+/**
+ * JPEG quality for lossy screenshots. High enough that text stays crisp, low
+ * enough that the format is worth choosing at all.
+ */
+const JPEG_QUALITY = 90
+
 /**
  * Chromium's element-picker colours, in its own `HighlightConfig` shape.
  *
@@ -129,6 +144,28 @@ const INSET = 2
  */
 export function isMobileDevice(spec: DeviceSpec): boolean {
   return /iPhone|iPad|iPod|Android/.test(spec.userAgent)
+}
+
+/**
+ * One device's `Emulation.setDeviceMetricsOverride` parameters.
+ *
+ * Shared by `applyDevice` and by the screenshot path, which briefly overrides
+ * the density and has to put *exactly* this back afterwards — a restore that
+ * reconstructed the parameters separately would be a place for the two to
+ * drift.
+ */
+function metricsOf(spec: DeviceSpec): {
+  width: number
+  height: number
+  deviceScaleFactor: number
+  mobile: boolean
+} {
+  return {
+    width: Math.round(spec.width),
+    height: Math.round(spec.height),
+    deviceScaleFactor: spec.dpr,
+    mobile: isMobileDevice(spec)
+  }
 }
 
 /**
@@ -200,12 +237,7 @@ export class CDPController {
     if (session !== undefined) session.device = spec
     if (target.isDestroyed() || !(session?.attached ?? false)) return
 
-    await this.send(target, 'Emulation.setDeviceMetricsOverride', {
-      width: Math.round(spec.width),
-      height: Math.round(spec.height),
-      deviceScaleFactor: spec.dpr,
-      mobile: isMobileDevice(spec)
-    })
+    await this.send(target, 'Emulation.setDeviceMetricsOverride', metricsOf(spec))
 
     await this.send(target, 'Emulation.setTouchEmulationEnabled', {
       enabled: spec.touch,
@@ -375,6 +407,65 @@ export class CDPController {
     // moved between the click and now. Its centre still opens DevTools
     // somewhere sensible, which beats not opening it at all.
     return { x: Math.round(centre.x), y: Math.round(centre.y) }
+  }
+
+  /**
+   * Screenshot one view, over the same CDP session everything else rides.
+   *
+   * `Page.captureScreenshot` rather than `webContents.capturePage()`, and the
+   * difference is not stylistic: `capturePage` grabs the *widget*, so it comes
+   * back at the canvas zoom (a 1440px desktop shot at 50% is a 720px image) and
+   * at the screen's density rather than the device's. The protocol renders the
+   * emulated viewport, which is the thing the user is actually looking at a
+   * picture of — and screenshots are CDP-first by rule (CLAUDE.md §3).
+   *
+   * Two knobs, both of which have to be put back:
+   *
+   * - `captureBeyondViewport` renders the whole scrollable document. Chromium
+   *   resizes the frame to do it and restores itself afterwards, but the
+   *   emulation override is re-applied anyway — an override that silently
+   *   changed under a screenshot would be a canvas of wrong viewports.
+   * - `dpr: 1` is a temporary `deviceScaleFactor` override. The device spec
+   *   stays the source of truth: the restore runs in a `finally`, so a capture
+   *   that throws still leaves the view emulating its own device.
+   *
+   * `null` means "no image": a torn-down view, a debugger that is not ours, a
+   * page that refused. The queue turns that into one failed job, not a dead
+   * batch.
+   */
+  async capture(target: CdpTarget, options: CaptureOptions): Promise<Buffer | null> {
+    if (!this.live(target)) return null
+
+    const spec = this.sessions.get(target.id)?.device ?? null
+    // Nothing to override when the device is already at 1×, and nothing to
+    // restore when we never learned what this view emulates.
+    const override = options.dpr === 1 && spec !== null && spec.dpr !== 1
+
+    try {
+      if (override && spec !== null) {
+        await this.send(target, 'Emulation.setDeviceMetricsOverride', {
+          ...metricsOf(spec),
+          deviceScaleFactor: 1
+        })
+      }
+
+      const answer = await this.request<{ data?: unknown }>(target, 'Page.captureScreenshot', {
+        format: options.format,
+        captureBeyondViewport: options.fullPage,
+        fromSurface: true,
+        ...(options.format === 'jpeg' ? { quality: JPEG_QUALITY } : {})
+      })
+
+      const data = answer?.data
+      if (typeof data !== 'string' || data === '') return null
+      return Buffer.from(data, 'base64')
+    } finally {
+      // Restored after a full-page capture too: it is the call that resized the
+      // frame, and re-stating an unchanged override is a no-op in Chromium.
+      if ((override || options.fullPage) && spec !== null && this.live(target)) {
+        await this.send(target, 'Emulation.setDeviceMetricsOverride', metricsOf(spec))
+      }
+    }
   }
 
   /** Detach on purpose (view going away). Never throws, never re-attaches. */
