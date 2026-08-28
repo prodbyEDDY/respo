@@ -10,8 +10,10 @@
 import type { DockPosition, InputEventPayload, ShotRequest, ThemeSource } from '@shared/ipc'
 import {
   clampDockSize,
+  isCanvasLayoutMode,
   MAX_PATH_LENGTH,
   type DevtoolsSettings,
+  type LayoutSettings,
   type PersistedState,
   type ScreenshotSettings,
   type Suite,
@@ -187,6 +189,7 @@ export function validatePersistedPatch(
   }
   if (patch['sync'] !== undefined) out.sync = validateSyncSettings(patch['sync'])
   if (patch['rotated'] !== undefined) out.rotated = validateRotated(patch['rotated'])
+  if (patch['layout'] !== undefined) out.layout = validateLayoutSettings(patch['layout'])
   if (patch['devtools'] !== undefined) out.devtools = validateDevtoolsSettings(patch['devtools'])
   if (patch['screenshots'] !== undefined) {
     out.screenshots = validateScreenshotSettings(patch['screenshots'], context.screenshotDirectory)
@@ -282,6 +285,33 @@ export function validateShotPath(value: unknown): string {
   }
   if (value.includes('\0')) fail('shot:reveal path must not contain NUL')
   return value
+}
+
+/**
+ * Validate the persisted canvas layout.
+ *
+ * The device id is a *label* here, not something main resolves: nothing on this
+ * side looks a device up by it, the renderer falls back to the first frame when
+ * it names nothing, and `null` is the honest way to say "no preference". So it
+ * is length-checked like every other id and otherwise passed through.
+ */
+function validateLayoutSettings(value: unknown): LayoutSettings {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    fail('store:save layout must be an object')
+  }
+  const layout = value as Record<string, unknown>
+  const mode = layout['mode']
+  if (!isCanvasLayoutMode(mode)) fail('store:save layout.mode is not a known layout')
+
+  const device = layout['individualDeviceId']
+  if (device !== null && device !== undefined && !isFilledString(device)) {
+    fail('store:save layout.individualDeviceId must be a device id or null')
+  }
+  if (typeof device === 'string' && device.length > MAX_NAME_LENGTH) {
+    fail('store:save layout.individualDeviceId is too long')
+  }
+
+  return { mode, individualDeviceId: typeof device === 'string' ? device : null }
 }
 
 /** Validate the persisted DevTools panel shape. The size is clamped, not rejected. */

@@ -422,3 +422,48 @@ describe('validateScreenshotDirectory', () => {
     expect(() => validateScreenshotDirectory(directory)).toThrow(/invalid ipc payload/i)
   })
 })
+
+describe('validatePersistedPatch — the canvas layout', () => {
+  it('accepts every layout this build can draw', () => {
+    for (const mode of ['column', 'flex', 'masonry', 'individual']) {
+      expect(validatePersistedPatch({ layout: { mode, individualDeviceId: null } })).toEqual({
+        layout: { mode, individualDeviceId: null }
+      })
+    }
+  })
+
+  it('keeps the device the canvas was expanded on', () => {
+    expect(
+      validatePersistedPatch({ layout: { mode: 'individual', individualDeviceId: 'ipad-mini' } })
+    ).toEqual({ layout: { mode: 'individual', individualDeviceId: 'ipad-mini' } })
+  })
+
+  it('reads a missing device id as "no preference"', () => {
+    expect(validatePersistedPatch({ layout: { mode: 'flex' } })).toEqual({
+      layout: { mode: 'flex', individualDeviceId: null }
+    })
+  })
+
+  it.each([
+    ['a mode this build has never heard of', { mode: 'kaleidoscope' }],
+    ['no mode at all', { individualDeviceId: 'pixel-8' }],
+    ['a device id that is not a string', { mode: 'flex', individualDeviceId: 7 }],
+    ['a device id longer than any name', { mode: 'flex', individualDeviceId: 'a'.repeat(500) }]
+  ])('rejects %s', (_label, layout) => {
+    expect(() => validatePersistedPatch({ layout })).toThrow(/invalid ipc payload/i)
+  })
+
+  it.each([
+    ['an array', []],
+    ['a string', 'masonry'],
+    ['null', null]
+  ])('rejects a slice that is %s', (_label, layout) => {
+    expect(() => validatePersistedPatch({ layout })).toThrow(/invalid ipc payload/i)
+  })
+
+  it('leaves the rest of the document alone when no layout is offered', () => {
+    expect(validatePersistedPatch({ activeSuiteId: 'default' })).toEqual({
+      activeSuiteId: 'default'
+    })
+  })
+})

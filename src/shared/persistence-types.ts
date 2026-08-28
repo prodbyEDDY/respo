@@ -58,6 +58,43 @@ export type DevtoolsSettings = {
 }
 
 /**
+ * How the canvas arranges the frames.
+ *
+ * - `column` — one device per row, in suite order. The narrow, predictable
+ *   reading order: scroll down and you have seen every device, in the order the
+ *   suite names them.
+ * - `flex` — rows that wrap at the canvas width, each row as tall as its
+ *   tallest frame. What Respo has always done, and the default.
+ * - `masonry` — the same frames packed into columns by height, each device
+ *   dropped into whichever column is currently shortest. Same information as
+ *   `flex` with the ragged vertical gaps taken out.
+ * - `individual` — one device fills the canvas, the rest wait in a tab strip.
+ */
+export type CanvasLayoutMode = 'column' | 'flex' | 'masonry' | 'individual'
+
+/** Every canvas layout mode, in the order `mod+shift+l` cycles them. */
+export const CANVAS_LAYOUT_MODES: readonly CanvasLayoutMode[] = [
+  'column',
+  'flex',
+  'masonry',
+  'individual'
+]
+
+/**
+ * How the user left the canvas.
+ *
+ * `individualDeviceId` is remembered alongside the mode rather than derived: a
+ * session that ended on one device should come back to *that* device, and the
+ * canvas has no other way to know which of five it was. `null` — or an id no
+ * longer on the canvas — means "the first device of the suite", which is what
+ * the renderer falls back to anyway.
+ */
+export type LayoutSettings = {
+  mode: CanvasLayoutMode
+  individualDeviceId: string | null
+}
+
+/**
  * Where screenshots go and what they look like.
  *
  * `directory` is empty on a fresh install and stays empty until the user picks
@@ -96,6 +133,8 @@ export type PersistedState = {
    * as `SyncSettings.disabledDeviceIds`.
    */
   rotated: Record<string, boolean>
+  /** How the canvas arranges the frames. See `LayoutSettings`. */
+  layout: LayoutSettings
   /** How the DevTools panel is shaped. See `DevtoolsSettings`. */
   devtools: DevtoolsSettings
   /** Where screenshots go and what they look like. See `ScreenshotSettings`. */
@@ -147,6 +186,9 @@ export function defaultPersistedState(): PersistedState {
     sync: { enabled: true, disabledDeviceIds: [] },
     // Every device starts the way it is held.
     rotated: {},
+    // Rows that wrap: the arrangement that shows the most devices at once on a
+    // canvas of mixed widths, and the one Respo has always opened on.
+    layout: { mode: 'flex', individualDeviceId: null },
     // Bottom is where a browser puts DevTools, and it is the edge that costs a
     // canvas of side-by-side viewports the least width.
     devtools: { dock: 'bottom', size: DEFAULT_DOCK_SIZE },
@@ -177,6 +219,7 @@ export function mergePersistedState(
     ui: { ...base.ui, ...(patch.ui ?? {}) },
     sync: cloneSync(patch.sync ?? base.sync),
     rotated: { ...(patch.rotated ?? base.rotated) },
+    layout: { ...(patch.layout ?? base.layout) },
     devtools: { ...(patch.devtools ?? base.devtools) },
     screenshots: { ...(patch.screenshots ?? base.screenshots) },
     schemaVersion: SCHEMA_VERSION
@@ -235,6 +278,7 @@ export function migratePersistedState(raw: unknown): MigrationResult {
       ui: { theme: sanitizeTheme((doc['ui'] as Record<string, unknown> | undefined)?.['theme']) },
       sync: sanitizeSync(doc['sync']),
       rotated: sanitizeRotated(doc['rotated']),
+      layout: sanitizeLayout(doc['layout']),
       devtools: sanitizeDevtools(doc['devtools']),
       screenshots: sanitizeScreenshots(doc['screenshots'])
     },
@@ -340,6 +384,33 @@ function sanitizeRotated(value: unknown): Record<string, boolean> {
     out[id] = true
   }
   return out
+}
+
+/** Whether `value` names a canvas layout this build knows how to draw. */
+export function isCanvasLayoutMode(value: unknown): value is CanvasLayoutMode {
+  return CANVAS_LAYOUT_MODES.includes(value as CanvasLayoutMode)
+}
+
+/**
+ * Repair the canvas layout.
+ *
+ * Absent on every document written before this build, so "missing" means the
+ * defaults rather than a reset — a field, not a document (see
+ * `migratePersistedState`). The remembered device is kept independently of the
+ * mode: a junk mode must not also cost the user the device they were on, and an
+ * id that no longer names a device costs nothing because the canvas falls back
+ * to the first one either way.
+ */
+function sanitizeLayout(value: unknown): LayoutSettings {
+  const defaults: LayoutSettings = { mode: 'flex', individualDeviceId: null }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return defaults
+
+  const layout = value as Record<string, unknown>
+  const device = layout['individualDeviceId']
+  return {
+    mode: isCanvasLayoutMode(layout['mode']) ? layout['mode'] : defaults.mode,
+    individualDeviceId: isFilledString(device) ? device : null
+  }
 }
 
 /**

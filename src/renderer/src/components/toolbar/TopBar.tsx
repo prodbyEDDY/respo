@@ -15,10 +15,13 @@ import {
   MoonIcon,
   PlusIcon,
   RectangleGroupIcon,
+  Square2StackIcon,
+  SquaresPlusIcon,
   SunIcon,
   ViewColumnsIcon
 } from '@heroicons/react/24/outline'
 import type { DockPosition } from '@shared/ipc'
+import type { CanvasLayoutMode } from '@shared/persistence-types'
 import { SuiteSelector } from '@renderer/components/device-manager/SuiteSelector'
 import { SettingsDialog } from '@renderer/components/settings/SettingsDialog'
 import { Button } from '@renderer/components/ui/button'
@@ -27,6 +30,8 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuShortcut,
   DropdownMenuTrigger
@@ -144,6 +149,49 @@ function ThemeToggle(): React.JSX.Element {
  * gesture people actually use.
  */
 /**
+ * How the canvas arranges the frames, as a radio group.
+ *
+ * Four mutually exclusive answers to one question, so they are radio items and
+ * not four toggles: the menu says which one is on without the user having to
+ * infer it from three that are off, and screen readers say the same thing. The
+ * chord is on the group rather than on a row, because it steps through all four
+ * rather than reaching any one of them.
+ */
+function LayoutModeItems(): React.JSX.Element {
+  const mode = useLayout((s) => s.mode)
+  const setMode = useLayout((s) => s.setMode)
+
+  const item = (
+    value: CanvasLayoutMode,
+    label: string,
+    icon: React.ReactNode
+  ): React.JSX.Element => (
+    <DropdownMenuRadioItem value={value}>
+      {icon}
+      {label}
+    </DropdownMenuRadioItem>
+  )
+
+  return (
+    <>
+      <DropdownMenuLabel className="flex items-center">
+        Layout
+        <DropdownMenuShortcut>{'⇧'}Ctrl L</DropdownMenuShortcut>
+      </DropdownMenuLabel>
+      <DropdownMenuRadioGroup
+        value={mode}
+        onValueChange={(next) => setMode(next as CanvasLayoutMode)}
+      >
+        {item('column', 'Column', <Bars2Icon />)}
+        {item('flex', 'Flexible rows', <ViewColumnsIcon />)}
+        {item('masonry', 'Masonry', <SquaresPlusIcon />)}
+        {item('individual', 'One device', <Square2StackIcon />)}
+      </DropdownMenuRadioGroup>
+    </>
+  )
+}
+
+/**
  * Where DevTools opens, as a menu.
  *
  * The dock's own header carries the same three choices, but it only exists
@@ -224,6 +272,8 @@ function OverflowMenu({ onOpenSettings }: { onOpenSettings: () => void }): React
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
+        <LayoutModeItems />
+        <DropdownMenuSeparator />
         <DropdownMenuLabel>Canvas zoom</DropdownMenuLabel>
         <DropdownMenuItem onSelect={zoomIn}>
           <MagnifyingGlassPlusIcon />

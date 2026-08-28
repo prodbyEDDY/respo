@@ -1,5 +1,10 @@
 import { create } from 'zustand'
 import { isRotatable } from '@shared/custom-devices'
+import {
+  CANVAS_LAYOUT_MODES,
+  type CanvasLayoutMode,
+  type LayoutSettings
+} from '@shared/persistence-types'
 import type { DeviceSpec } from '@shared/types'
 import { savePersistedState } from '@renderer/lib/persistence'
 import { useDevices } from './devices'
@@ -39,6 +44,42 @@ export interface LayoutState {
   /** Free-form zoom, for the ctrl+wheel gesture. Clamped, not snapped. */
   setZoom: (zoom: number) => void
   resetZoom: () => void
+
+  /**
+   * How the canvas arranges the frames. See `CanvasLayoutMode`.
+   *
+   * Switching is instant and costs no view: every mode reports the same
+   * placeholders through the same once-per-frame `views:set-layout`, so main
+   * simply moves the surfaces it already has — except `individual`, which
+   * reports one frame and lets main's own culling suspend the rest.
+   */
+  mode: CanvasLayoutMode
+  setMode: (mode: CanvasLayoutMode) => void
+  /** Step to the next mode. What `mod+shift+l` does. */
+  cycleMode: () => void
+
+  /**
+   * The device `individual` shows. `null` means "the first one on the canvas",
+   * which is also what an id that has left the suite falls back to.
+   */
+  individualDeviceId: string | null
+  /** Show one device full-canvas. The expand button in a frame's header. */
+  enterIndividual: (deviceId: string) => void
+  /** Switch which device `individual` is showing. A click on a tab. */
+  showIndividual: (deviceId: string) => void
+  /** Back to the arrangement the canvas was in before. Escape, or the button. */
+  exitIndividual: () => void
+  /** Install the layout main restored at boot. Writes nothing back. */
+  hydrateLayout: (layout: LayoutSettings) => void
+  /**
+   * What the canvas looked like before one device took it over.
+   *
+   * Not persisted, and not a history: leaving `individual` is a single step
+   * back to the arrangement and the zoom the user was actually looking at.
+   * Expanding a device fits it to the canvas, which *is* a zoom change — one
+   * they did not ask for and would otherwise have to undo by hand.
+   */
+  beforeIndividual: { mode: CanvasLayoutMode; zoom: number } | null
 
   /** Device ids currently in landscape. Absent id means portrait. */
   rotated: Record<string, boolean>
@@ -96,6 +137,57 @@ export const useLayout = create<LayoutState>((set, get) => ({
 
   resetZoom: () => set({ zoom: 1 }),
 
+  mode: 'flex',
+  individualDeviceId: null,
+  beforeIndividual: null,
+
+  setMode: (mode) => {
+    const state = get()
+    if (state.mode === mode) return
+
+    if (mode === 'individual') {
+      // Remember what to come back to *before* the canvas fits the device.
+      set({ mode, beforeIndividual: { mode: state.mode, zoom: state.zoom } })
+    } else if (state.beforeIndividual !== null) {
+      set({ mode, zoom: state.beforeIndividual.zoom, beforeIndividual: null })
+    } else {
+      set({ mode })
+    }
+    persistLayout(get())
+  },
+
+  cycleMode: () => {
+    const { mode, setMode } = get()
+    const at = CANVAS_LAYOUT_MODES.indexOf(mode)
+    // An unknown mode cannot happen through the store, but it can arrive from a
+    // document; stepping from "nowhere" to the first mode is the honest answer.
+    const next = CANVAS_LAYOUT_MODES[(at + 1) % CANVAS_LAYOUT_MODES.length] as CanvasLayoutMode
+    setMode(next)
+  },
+
+  enterIndividual: (deviceId) => {
+    set({ individualDeviceId: deviceId })
+    get().setMode('individual')
+    // `setMode` is a no-op when the canvas is already in individual mode, and
+    // the device above still has to be written down.
+    persistLayout(get())
+  },
+
+  showIndividual: (deviceId) => {
+    if (get().individualDeviceId === deviceId) return
+    set({ individualDeviceId: deviceId })
+    persistLayout(get())
+  },
+
+  exitIndividual: () => {
+    const { mode, beforeIndividual, setMode } = get()
+    if (mode !== 'individual') return
+    setMode(beforeIndividual?.mode ?? 'flex')
+  },
+
+  hydrateLayout: (layout) =>
+    set({ mode: layout.mode, individualDeviceId: layout.individualDeviceId }),
+
   rotated: {},
 
   rotate: (deviceId) => {
@@ -128,6 +220,19 @@ export const useLayout = create<LayoutState>((set, get) => ({
 
   hydrateRotation: (rotated) => set({ rotated: { ...rotated } })
 }))
+
+/**
+ * Write the canvas arrangement.
+ *
+ * Both fields every time: they are one decision — "this layout, on this
+ * device" — and a patch that carried only the mode would leave the document
+ * pointing at whichever device the *previous* session expanded.
+ */
+function persistLayout(state: Pick<LayoutState, 'mode' | 'individualDeviceId'>): void {
+  savePersistedState({
+    layout: { mode: state.mode, individualDeviceId: state.individualDeviceId }
+  })
+}
 
 /**
  * Write the orientations, keeping only the landscape ones.

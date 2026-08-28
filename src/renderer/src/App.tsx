@@ -5,6 +5,7 @@ import { Canvas } from '@renderer/components/previewer/Canvas'
 import { TopBar } from '@renderer/components/toolbar/TopBar'
 import { TooltipProvider } from '@renderer/components/ui/tooltip'
 import { useInspectHotkeys } from '@renderer/hooks/useInspectHotkeys'
+import { useLayoutHotkeys } from '@renderer/hooks/useLayoutHotkeys'
 import { useShotHotkeys } from '@renderer/hooks/useShotHotkeys'
 import { ipcBridge } from '@renderer/lib/ipc'
 import { createLayoutTelemetry, type LayoutTelemetry } from '@renderer/lib/layout-telemetry'
@@ -67,6 +68,7 @@ function usePersistedState(): boolean {
         useDevices.getState().hydrate(state)
         useSync.getState().hydrate(state.sync)
         useLayout.getState().hydrateRotation(state.rotated)
+        useLayout.getState().hydrateLayout(state.layout)
         usePanels.getState().hydrate(state.devtools)
         useShots.getState().hydrate(state.screenshots)
       }
@@ -127,6 +129,8 @@ function App(): React.JSX.Element {
   useInspectHotkeys()
   // mod+s photographs the whole canvas.
   useShotHotkeys()
+  // mod+shift+l cycles the canvas layout, Escape leaves individual mode.
+  useLayoutHotkeys()
 
   // Hand main the device set. Runs again whenever the selection changes; the
   // view manager reuses the views that stayed and loads the current url into

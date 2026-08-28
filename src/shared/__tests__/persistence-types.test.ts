@@ -290,3 +290,71 @@ describe('screenshot settings', () => {
     expect(base.screenshots.directory).toBe('')
   })
 })
+
+describe('the canvas layout slice', () => {
+  it('opens on wrapping rows, with no device singled out', () => {
+    expect(defaultPersistedState().layout).toEqual({ mode: 'flex', individualDeviceId: null })
+  })
+
+  it('reads back a layout the user left behind', () => {
+    const stored: Record<string, unknown> = {
+      ...defaultPersistedState(),
+      layout: { mode: 'individual', individualDeviceId: 'ipad-mini' }
+    }
+    const { state } = migratePersistedState(stored)
+
+    expect(state.layout).toEqual({ mode: 'individual', individualDeviceId: 'ipad-mini' })
+  })
+
+  it('falls back to the default for a document written before this build', () => {
+    const stored = { ...defaultPersistedState() } as Record<string, unknown>
+    delete stored['layout']
+    const { state, backup } = migratePersistedState(stored)
+
+    // A missing field is repaired, not a reason to reset the whole document.
+    expect(state.layout).toEqual({ mode: 'flex', individualDeviceId: null })
+    expect(backup).toBeNull()
+    expect(state.suites).toHaveLength(1)
+  })
+
+  it('repairs a mode this build does not know, keeping the device', () => {
+    const stored: Record<string, unknown> = {
+      ...defaultPersistedState(),
+      layout: { mode: 'kaleidoscope', individualDeviceId: 'pixel-8' }
+    }
+    const { state } = migratePersistedState(stored)
+
+    expect(state.layout).toEqual({ mode: 'flex', individualDeviceId: 'pixel-8' })
+  })
+
+  it.each([
+    ['a junk device id', { mode: 'column', individualDeviceId: 7 }],
+    ['an empty device id', { mode: 'column', individualDeviceId: '' }]
+  ])('drops %s without costing the mode', (_label, layout) => {
+    const stored: Record<string, unknown> = { ...defaultPersistedState(), layout }
+    const { state } = migratePersistedState(stored)
+
+    expect(state.layout).toEqual({ mode: 'column', individualDeviceId: null })
+  })
+
+  it.each([
+    ['an array', []],
+    ['a string', 'masonry'],
+    ['null', null]
+  ])('falls back whole when the slice is %s', (_label, layout) => {
+    const stored: Record<string, unknown> = { ...defaultPersistedState(), layout }
+    const { state } = migratePersistedState(stored)
+
+    expect(state.layout).toEqual({ mode: 'flex', individualDeviceId: null })
+  })
+
+  it('replaces the slice wholesale on a patch', () => {
+    const base = defaultPersistedState()
+    const next = mergePersistedState(base, {
+      layout: { mode: 'masonry', individualDeviceId: 'pixel-8' }
+    })
+
+    expect(next.layout).toEqual({ mode: 'masonry', individualDeviceId: 'pixel-8' })
+    expect(base.layout.mode).toBe('flex')
+  })
+})
