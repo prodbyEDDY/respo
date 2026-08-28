@@ -1,14 +1,17 @@
 import {
   ArrowPathIcon,
+  ArrowPathRoundedSquareIcon,
   ExclamationTriangleIcon,
   LinkIcon,
   LinkSlashIcon
 } from '@heroicons/react/24/outline'
+import { isRotatable } from '@shared/custom-devices'
 import type { LoadStatePayload } from '@shared/ipc'
 import type { DeviceSpec } from '@shared/types'
 import { Button } from '@renderer/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
 import { cn } from '@renderer/lib/utils'
+import { useLayout } from '@renderer/stores/layout'
 import { useNavigation } from '@renderer/stores/navigation'
 import { useSync } from '@renderer/stores/sync'
 
@@ -101,6 +104,38 @@ function MirrorToggle({ deviceId }: { deviceId: string }): React.JSX.Element {
 }
 
 /**
+ * Turn one device on its side, from its own header.
+ *
+ * Only rendered for a device that has a side to be turned on: a desktop monitor
+ * has one orientation, and a control that would do nothing is worse than no
+ * control. The store swaps the spec's width and height, which is what makes
+ * main re-run the CDP emulation for this view alone.
+ */
+function RotateToggle({ deviceId }: { deviceId: string }): React.JSX.Element {
+  const landscape = useLayout((s) => s.rotated[deviceId] === true)
+  const rotate = useLayout((s) => s.rotate)
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          aria-label="Rotate this device"
+          aria-pressed={landscape}
+          data-orientation={landscape ? 'landscape' : 'portrait'}
+          onClick={() => rotate(deviceId)}
+          className={cn(landscape ? 'text-primary' : 'text-muted-foreground hover:text-foreground')}
+        >
+          <ArrowPathRoundedSquareIcon />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>{landscape ? 'Back to portrait' : 'Rotate to landscape'}</TooltipContent>
+    </Tooltip>
+  )
+}
+
+/**
  * Chrome around one device: a caption, and an empty rectangle standing in for
  * the page.
  *
@@ -158,6 +193,7 @@ export function DeviceFrame({ device, zoom, viewportRef }: DeviceFrameProps): Re
           the name it belongs to.
         */}
         <MirrorToggle deviceId={device.id} />
+        {isRotatable(device) ? <RotateToggle deviceId={device.id} /> : null}
       </header>
 
       <div

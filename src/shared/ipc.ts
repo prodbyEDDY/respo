@@ -39,6 +39,17 @@ export type LoadStatePayload = {
   title?: string
   errorCode?: number
   errorDesc?: string
+  /**
+   * This view's own history, as of this event.
+   *
+   * Optional because they are a late addition and a payload without them is
+   * still a valid one — a renderer that has not heard from a device yet simply
+   * assumes it cannot go anywhere. Back and forward act on every view at once
+   * (there is one page across many viewports), so the toolbar enables a button
+   * when *any* device could take that step.
+   */
+  canGoBack?: boolean
+  canGoForward?: boolean
 }
 
 /** Batched main -> renderer notification. One message carries many devices. */

@@ -44,6 +44,34 @@ function isPrimer(url: string): boolean {
 }
 
 /**
+ * What one view could do with its own history, right now.
+ *
+ * Read on demand rather than tracked: Chromium owns the entry list, and
+ * anything this module counted would drift the first time a page pushed state.
+ *
+ * "Back" deliberately does not mean `canGoBack()`. Every view is primed with
+ * `about:blank` before emulation can be applied, so the first real page always
+ * has a previous entry — and stepping onto it would blank the canvas. A
+ * navigation the user never made is not somewhere they can go back to.
+ *
+ * Exported for its unit test; production code reaches it through `create`.
+ */
+export function readHistory(wc: WebContents): { canGoBack: boolean; canGoForward: boolean } {
+  try {
+    const history = wc.navigationHistory
+    const index = history.getActiveIndex()
+    const previous = index <= 0 ? undefined : history.getAllEntries()[index - 1]
+    return {
+      canGoBack: previous !== undefined && !isPrimer(previous.url),
+      canGoForward: history.canGoForward()
+    }
+  } catch {
+    // A view already tearing down has no history to speak of.
+    return { canGoBack: false, canGoForward: false }
+  }
+}
+
+/**
  * Translate one view's `webContents` load events into `LoadStatePayload`s.
  *
  * Every event is per-view and unbatched here on purpose: the batcher upstream
@@ -60,7 +88,12 @@ export function watchLoadState(wc: WebContents, deviceId: string, report: Report
 
   const emit = (payload: Omit<LoadStatePayload, 'deviceId'>): void => {
     if (wc.isDestroyed()) return
-    report({ deviceId, ...payload, ...(title === undefined ? {} : { title }) })
+    report({
+      deviceId,
+      ...payload,
+      ...readHistory(wc),
+      ...(title === undefined ? {} : { title })
+    })
   }
 
   /**
@@ -102,6 +135,15 @@ export function watchLoadState(wc: WebContents, deviceId: string, report: Report
       errorCode,
       errorDesc: errorDescription
     })
+  })
+
+  // A same-document navigation is announced before its entry is committed, so
+  // the history read above can be one step stale. This fires after it lands and
+  // costs nothing: the batcher keeps one payload per device per turn, so a
+  // correction and the event it corrects collapse into the same message.
+  wc.on('did-navigate-in-page', (_event, url, isMainFrame) => {
+    if (isMainFrame !== true || failedThisNavigation || isPrimer(url)) return
+    emit({ state: settledState(), url })
   })
 
   wc.on('page-title-updated', (_event, next) => {
@@ -240,7 +282,9 @@ export function createElectronViewBackend(
           })
         },
         goBack(): void {
-          if (wc.isDestroyed() || !wc.navigationHistory.canGoBack()) return
+          // The same reading the toolbar's enable state is derived from: back
+          // never means back onto the `about:blank` the view was primed with.
+          if (wc.isDestroyed() || !readHistory(wc).canGoBack) return
           wc.navigationHistory.goBack()
         },
         goForward(): void {

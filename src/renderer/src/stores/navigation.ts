@@ -110,6 +110,25 @@ export const useNavigation = create<NavigationState>((set, get) => ({
   setUrl: (url) => set({ url })
 }))
 
+/**
+ * Whether the toolbar's back (or forward) button can do anything.
+ *
+ * History is per-view, and `nav:back` steps *every* view: a device that has
+ * nowhere to go is a no-op in main, so the button is live as long as at least
+ * one device would move. Anything stricter would grey out a control that still
+ * works; anything looser is the dishonest always-enabled button this replaces.
+ *
+ * Selectors rather than stored fields: `perDevice` already holds the answer,
+ * and a derived copy of it is one more thing to keep in step.
+ */
+export function selectCanGoBack(state: NavigationState): boolean {
+  return Object.values(state.perDevice).some((payload) => payload.canGoBack === true)
+}
+
+export function selectCanGoForward(state: NavigationState): boolean {
+  return Object.values(state.perDevice).some((payload) => payload.canGoForward === true)
+}
+
 let unsubscribe: (() => void) | null = null
 let subscribers = 0
 

@@ -16,9 +16,9 @@ test.afterAll(() => {
 
 /** Device ids of the frames on the canvas, in canvas order. */
 function canvasOrder(page: Page): Promise<string[]> {
-  return page.locator('[data-testid="canvas"] [data-device-id]').evaluateAll((nodes) =>
-    nodes.map((node) => node.getAttribute('data-device-id') ?? '')
-  )
+  return page
+    .locator('[data-testid="canvas"] [data-device-id]')
+    .evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-device-id') ?? ''))
 }
 
 /** Device ids of the chips in the suite row, in suite order. */
@@ -83,9 +83,7 @@ test('a suite decides which devices are on the canvas, and in what order', async
     await page.mouse.up()
 
     const reordered = [before[1], before[0], ...before.slice(2)]
-    await expect
-      .poll(() => chipOrder(page), { message: 'the chip never moved' })
-      .toEqual(reordered)
+    await expect.poll(() => chipOrder(page), { message: 'the chip never moved' }).toEqual(reordered)
 
     // Back to the canvas: the frames are in the order the suite now holds.
     await page.keyboard.press('Escape')

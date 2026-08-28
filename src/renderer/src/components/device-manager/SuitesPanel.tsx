@@ -142,6 +142,7 @@ export function SuitesPanel(): React.JSX.Element {
   const [notice, setNotice] = useState<Notice | null>(null)
   const [creating, setCreating] = useState(false)
   const [name, setName] = useState('')
+  const [createError, setCreateError] = useState<string | null>(null)
   const [pendingDelete, setPendingDelete] = useState<string | null>(null)
   const [confirmingReset, setConfirmingReset] = useState(false)
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -183,11 +184,14 @@ export function SuitesPanel(): React.JSX.Element {
   const create = (): void => {
     const result = useDevices.getState().createSuite(name)
     if (!result.ok) {
-      say('error', explain(result.reason))
+      // Inside the dialog, not in the panel's status line: the panel is behind
+      // the overlay, and an answer nobody can see is not an answer.
+      setCreateError(explain(result.reason))
       return
     }
     setCreating(false)
     setName('')
+    setCreateError(null)
     say('ok', `Now showing “${result.suite.name}”.`)
   }
 
@@ -292,6 +296,7 @@ export function SuitesPanel(): React.JSX.Element {
           className="rounded-full text-muted-foreground"
           onClick={() => {
             setName('')
+            setCreateError(null)
             setCreating(true)
           }}
         >
@@ -380,13 +385,20 @@ export function SuitesPanel(): React.JSX.Element {
             maxLength={MAX_SUITE_NAME_LENGTH}
             aria-label="Suite name"
             placeholder="Marketing site"
-            onChange={(event) => setName(event.target.value)}
+            aria-invalid={createError !== null || undefined}
+            onChange={(event) => {
+              setName(event.target.value)
+              setCreateError(null)
+            }}
             onKeyDown={(event) => {
               if (event.key !== 'Enter') return
               event.preventDefault()
               create()
             }}
           />
+          {createError === null ? null : (
+            <p className="text-caption text-status-error">{createError}</p>
+          )}
           <DialogFooter>
             <Button variant="ghost" onClick={() => setCreating(false)}>
               Cancel

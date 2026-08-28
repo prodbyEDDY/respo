@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import type { LoadStatePayload, MainEvent, RespoApi } from '@shared/ipc'
-import { attachNavigationBridge, useNavigation } from '../navigation'
+import {
+  attachNavigationBridge,
+  selectCanGoBack,
+  selectCanGoForward,
+  useNavigation
+} from '../navigation'
 
 type BridgeMock = {
   invoke: Mock<RespoApi['invoke']>
@@ -172,6 +177,40 @@ describe('navigation store', () => {
       useNavigation.getState().pruneDevices(['a', 'b'])
 
       expect(useNavigation.getState().perDevice).toBe(before)
+    })
+  })
+
+  describe('history selectors', () => {
+    it('say no until a device has reported', () => {
+      expect(selectCanGoBack(useNavigation.getState())).toBe(false)
+      expect(selectCanGoForward(useNavigation.getState())).toBe(false)
+    })
+
+    it('are true when any one device could take the step', () => {
+      useNavigation
+        .getState()
+        .applyLoadStates([
+          payload('a', { canGoBack: false, canGoForward: false }),
+          payload('b', { canGoBack: true, canGoForward: false })
+        ])
+
+      expect(selectCanGoBack(useNavigation.getState())).toBe(true)
+      expect(selectCanGoForward(useNavigation.getState())).toBe(false)
+    })
+
+    it('follow the newest state of a device, not the first one', () => {
+      useNavigation.getState().applyLoadStates([payload('a', { canGoBack: true })])
+      expect(selectCanGoBack(useNavigation.getState())).toBe(true)
+
+      useNavigation.getState().applyLoadStates([payload('a', { canGoBack: false })])
+      expect(selectCanGoBack(useNavigation.getState())).toBe(false)
+    })
+
+    it('forget a device that left the canvas', () => {
+      useNavigation.getState().applyLoadStates([payload('a'), payload('b', { canGoForward: true })])
+      useNavigation.getState().pruneDevices(['a'])
+
+      expect(selectCanGoForward(useNavigation.getState())).toBe(false)
     })
   })
 

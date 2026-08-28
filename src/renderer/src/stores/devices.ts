@@ -322,7 +322,7 @@ export const useDevices = create<DevicesState>((set, get) => ({
 
     const nextSuites = suites.filter((s) => s.id !== id)
     const nextActiveId =
-      activeSuiteId === id ? ((nextSuites[0] as Suite).id ?? DEFAULT_SUITE_ID) : activeSuiteId
+      activeSuiteId === id ? (nextSuites[0]?.id ?? DEFAULT_SUITE_ID) : activeSuiteId
 
     set({
       suites: nextSuites,
