@@ -49,8 +49,21 @@ export interface ShotsState {
   settings: ScreenshotSettings
   /** The folder main actually writes to — the default, resolved. */
   directory: string
-  /** Devices with a capture queued or running. */
+  /**
+   * Devices with a capture queued or running. Derived from `jobs`, never
+   * written directly.
+   */
   busy: Record<string, true>
+  /**
+   * The device behind every job that has not reached a terminal state, by job
+   * id.
+   *
+   * Keyed by job rather than by device because a device can be in two batches
+   * at once — "screenshot everything" while one device's own capture is still
+   * queued — and a terminal event for the first job would otherwise clear a
+   * spinner the second one still needs.
+   */
+  jobs: Record<string, string>
   /**
    * Bumped every time a device's screenshot lands. The frame watches the number
    * rather than a boolean, so two shots in a row flash twice.
@@ -119,6 +132,7 @@ export const useShots = create<ShotsState>((set, get) => ({
   settings: { ...DEFAULT_SHOT_SETTINGS },
   directory: '',
   busy: {},
+  jobs: {},
   flash: {},
   batches: {},
   notice: null,
@@ -156,7 +170,7 @@ export const useShots = create<ShotsState>((set, get) => ({
 
   apply: (batch) => {
     const state = get()
-    const busy = { ...state.busy }
+    const jobs = { ...state.jobs }
     const flash = { ...state.flash }
     const batches = { ...state.batches }
     const finished: { batchId: string; batch: Batch }[] = []
@@ -165,12 +179,14 @@ export const useShots = create<ShotsState>((set, get) => ({
       const current = batches[event.batchId] ?? { size: event.batchSize, paths: [], failed: 0 }
 
       if (event.state === 'queued' || event.state === 'active') {
-        busy[event.deviceId] = true
+        jobs[event.id] = event.deviceId
         batches[event.batchId] = current
         continue
       }
 
-      delete busy[event.deviceId]
+      // Only this job. Another batch may still have one queued for the same
+      // device, and its spinner has to survive this one landing.
+      delete jobs[event.id]
       const next: Batch = {
         size: event.batchSize,
         paths:
@@ -188,7 +204,7 @@ export const useShots = create<ShotsState>((set, get) => ({
       }
     }
 
-    set({ busy, flash, batches })
+    set({ jobs, busy: busyOf(jobs), flash, batches })
     // One notice per gesture, and the newest one wins: two batches finishing in
     // the same message is a race the user does not need narrated twice.
     for (const { batch: done } of finished) report(set, done)
@@ -219,8 +235,10 @@ export const useShots = create<ShotsState>((set, get) => ({
       const directory = await bridge.invoke('shot:choose-dir')
       // Dismissing the dialog is a decision, not a failure: nothing changes.
       if (directory === null) return
-      persist(set, get, { directory })
-      set({ directory })
+      // Nothing is written back. Main ran the dialog *and* the write — the
+      // folder is its field, and a `store:save` carrying one is ignored (see
+      // `validateScreenshotSettings`). This only reflects what it reported.
+      set({ settings: { ...get().settings, directory }, directory })
     } catch (error) {
       console.error('shot:choose-dir failed', error)
     }
@@ -239,6 +257,13 @@ export const useShots = create<ShotsState>((set, get) => ({
 }))
 
 type Set = (partial: Partial<ShotsState>) => void
+
+/** Which devices have at least one unfinished job. See `ShotsState.jobs`. */
+function busyOf(jobs: Record<string, string>): Record<string, true> {
+  const busy: Record<string, true> = {}
+  for (const deviceId of Object.values(jobs)) busy[deviceId] = true
+  return busy
+}
 
 function clearNoticeTimer(): void {
   if (noticeTimer === null) return

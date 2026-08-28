@@ -591,6 +591,76 @@ describe('CDPController.capture', () => {
     ])
   })
 
+  /**
+   * Hold `Page.captureScreenshot` open until the test releases it.
+   *
+   * The fake resolves every command immediately, and everything this pair of
+   * tests is about happens *during* a slow capture — a full-page shot of a tall
+   * document is the case where the user has time to rotate a device or zoom the
+   * canvas underneath it.
+   */
+  function hangingCapture(target: FakeTarget): (text: string) => void {
+    let release: ((answer: unknown) => void) | null = null
+    target.replies.set(
+      'Page.captureScreenshot',
+      new Promise((resolve) => {
+        release = resolve
+      })
+    )
+    return (text: string) => {
+      release?.({ data: Buffer.from(text).toString('base64') })
+    }
+  }
+
+  it('restores the zoom the view is at now, not the one it started at', async () => {
+    const target = fakeTarget()
+    await controller.attach(target)
+    await controller.applyDevice(target, DESKTOP)
+    target.calls.length = 0
+
+    const release = hangingCapture(target)
+    const capturing = controller.capture(target, { format: 'png', fullPage: true, dpr: 'device' })
+    // The canvas is zoomed out while the document is still rastering.
+    await Promise.resolve()
+    controller.setZoom(target, 0.5)
+
+    release('png')
+    await capturing
+
+    const overrides = target.calls
+      .filter(([method]) => method === 'Emulation.setDeviceMetricsOverride')
+      .map(([, params]) => params as Record<string, unknown>)
+    // The last word on the emulation is the *new* zoom. Restoring the snapshot
+    // taken before the capture would leave the page laying out at twice its
+    // device width — and `setZoom` would never correct it, because as far as it
+    // is concerned the zoom already is 0.5.
+    expect(overrides.at(-1)).toMatchObject({ width: 720, height: 450 })
+  })
+
+  it('leaves the emulation alone when the device changed under the capture', async () => {
+    const target = fakeTarget()
+    await controller.attach(target)
+    await controller.applyDevice(target, DESKTOP)
+    target.calls.length = 0
+
+    const release = hangingCapture(target)
+    const capturing = controller.capture(target, { format: 'png', fullPage: true, dpr: 'device' })
+    await Promise.resolve()
+    // The user rotated the device mid-capture: `applyDevice` has already stated
+    // the landscape metrics, and the restore must not put the old ones back.
+    await controller.applyDevice(target, { ...DESKTOP, width: 900, height: 1440 })
+
+    release('png')
+    await capturing
+
+    const overrides = target.calls
+      .filter(([method]) => method === 'Emulation.setDeviceMetricsOverride')
+      .map(([, params]) => params as Record<string, unknown>)
+    expect(overrides.at(-1)).toMatchObject({ width: 900, height: 1440 })
+    // And nothing was appended after `applyDevice` finished saying it.
+    expect(methods(target).at(-1)).toBe('Network.setUserAgentOverride')
+  })
+
   it('answers with nothing when the page returns no data, or there is no session', async () => {
     const target = fakeTarget()
     await controller.attach(target)

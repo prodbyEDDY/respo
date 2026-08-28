@@ -123,9 +123,25 @@ describe('ViewManager.syncDevices', () => {
     expect(backend.views.get('a')?.applyDevice).toHaveBeenCalledTimes(2)
   })
 
-  it('does not re-emulate a device that only got renamed', () => {
+  it('carries a rename down to the view without reloading the page', () => {
     manager.syncDevices([device('a')])
+    manager.navigateAll('example.com')
     manager.syncDevices([{ ...device('a'), name: 'Renamed' }])
+
+    // No emulation depends on the name, but a screenshot's file name is built
+    // from it: a device renamed mid-session that kept being photographed under
+    // its old name is a rename that only half happened.
+    expect(backend.views.get('a')?.applyDevice).toHaveBeenCalledTimes(2)
+    expect(backend.views.get('a')?.applyDevice).toHaveBeenLastCalledWith(
+      expect.objectContaining({ name: 'Renamed' })
+    )
+    // And the page the user is looking at is not fetched again for it.
+    expect(backend.views.get('a')?.loadUrl).toHaveBeenCalledTimes(1)
+  })
+
+  it('leaves a view alone when the device did not change at all', () => {
+    manager.syncDevices([device('a')])
+    manager.syncDevices([device('a')])
 
     expect(backend.views.get('a')?.applyDevice).toHaveBeenCalledTimes(1)
   })

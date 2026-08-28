@@ -229,6 +229,30 @@ describe('DevtoolsManager', () => {
     expect(factory.panels[1]?.bounds).toBeNull()
   })
 
+  it('keeps a reported strip inside the window it is docked in', () => {
+    const window = { width: 1400, height: 900 }
+    manager = new DevtoolsManager({
+      createPanel: factory.create,
+      contentSize: () => window
+    })
+    manager.registerDevice('phone', phone)
+    manager.openFor('phone')
+
+    // The rect crosses IPC from the renderer, and the validator only knows it
+    // is finite: a panel a hundred screens wide, at a negative origin covering
+    // the toolbar, is a shape the window has to refuse.
+    manager.setBounds({ x: -200, y: -100, width: 90_000, height: 90_000 })
+    expect(factory.panels[0]?.bounds).toEqual({ x: 0, y: 0, width: 1400, height: 900 })
+
+    // An honest strip is passed through untouched...
+    manager.setBounds({ x: 0, y: 580, width: 1400, height: 320 })
+    expect(factory.panels[0]?.bounds).toEqual({ x: 0, y: 580, width: 1400, height: 320 })
+
+    // ...and one that starts inside the window may only reach its edge.
+    manager.setBounds({ x: 1000, y: 800, width: 1400, height: 900 })
+    expect(factory.panels[0]?.bounds).toEqual({ x: 1000, y: 800, width: 400, height: 100 })
+  })
+
   it('reconciles when the user closes a DevTools window from its title bar', () => {
     manager = build('undocked')
     manager.openFor('phone')

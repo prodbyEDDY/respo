@@ -64,6 +64,7 @@ type ShotEvent = {
 type RespoBridge = {
   invoke(channel: 'store:save', patch: unknown): Promise<void>
   invoke(channel: 'shot:get-dir'): Promise<string>
+  invoke(channel: 'shot:choose-dir'): Promise<string | null>
   invoke(
     channel: 'shot:all',
     request: { fullPage: boolean; format?: string; dpr?: string | number }
@@ -115,6 +116,35 @@ async function captureOne(page: Page, deviceId: string): Promise<string> {
   return path
 }
 
+/**
+ * Point main at a folder this spec owns.
+ *
+ * The folder is main's field, not the renderer's: a `store:save` carrying one
+ * is dropped on arrival (`validateScreenshotSettings`), because a renderer that
+ * could set it could point every capture — and the containment check that
+ * guards `shot:reveal` — anywhere on the machine. The only thing that moves it
+ * is the system dialog behind `shot:choose-dir`, so the dialog is stubbed in
+ * the main process and the real channel is called through it.
+ */
+async function chooseFolder(
+  app: ElectronApplication,
+  page: Page,
+  directory: string
+): Promise<void> {
+  await app.evaluate(({ dialog }, folder) => {
+    dialog.showOpenDialog = (async () => ({
+      canceled: false,
+      filePaths: [folder]
+    })) as unknown as typeof dialog.showOpenDialog
+  }, directory)
+
+  expect(
+    await page.evaluate(() =>
+      (window as unknown as { respo: RespoBridge }).respo.invoke('shot:choose-dir')
+    )
+  ).toBe(directory)
+}
+
 function launch(): Promise<ElectronApplication> {
   return electron.launch({
     args: [MAIN_ENTRY, `--user-data-dir=${userDataDir}`],
@@ -144,14 +174,15 @@ test('screenshots: full page, every device, and a batch that fails as a batch', 
       })
     })
 
-    // Point the queue at a folder this spec owns, through the same persistence
-    // channel the settings dialog uses.
-    await page.evaluate(async (directory: string) => {
+    // Point the queue at a folder this spec owns, through the dialog that is
+    // the only thing allowed to move it, and set the rest through persistence.
+    await chooseFolder(app, page, shotsDir)
+    await page.evaluate(async () => {
       const respo = (window as unknown as { respo: RespoBridge }).respo
       await respo.invoke('store:save', {
-        screenshots: { directory, format: 'png', dpr: 1 }
+        screenshots: { directory: '', format: 'png', dpr: 1 }
       })
-    }, shotsDir)
+    })
     expect(
       await page.evaluate(() =>
         (window as unknown as { respo: RespoBridge }).respo.invoke('shot:get-dir')
@@ -221,12 +252,12 @@ test('screenshots: full page, every device, and a batch that fails as a batch', 
     // the batch fails — and the app keeps running.
     const blocked = join(shotsDir, 'blocked')
     writeFileSync(blocked, 'not a folder')
-    await page.evaluate(async (directory: string) => {
+    await chooseFolder(app, page, blocked)
+    await page.evaluate(async () => {
       const respo = (window as unknown as { respo: RespoBridge }).respo
       window.__shotEvents = []
-      await respo.invoke('store:save', { screenshots: { directory, format: 'png', dpr: 1 } })
       await respo.invoke('shot:all', { fullPage: false })
-    }, blocked)
+    })
 
     await expect
       .poll(async () => {
@@ -253,11 +284,11 @@ test('screenshots: full page, every device, and a batch that fails as a batch', 
     ).toBe(false)
 
     // And the queue still works afterwards: a failed batch is not a dead one.
-    await page.evaluate(async (directory: string) => {
+    await chooseFolder(app, page, shotsDir)
+    await page.evaluate(async () => {
       const respo = (window as unknown as { respo: RespoBridge }).respo
-      await respo.invoke('store:save', { screenshots: { directory, format: 'png', dpr: 1 } })
       await respo.invoke('shot:device', 'iphone-15-pro', { fullPage: false })
-    }, shotsDir)
+    })
     await expect.poll(() => shots().filter((name) => name.endsWith('.png')).length).toBe(7)
   } finally {
     await app.close()
@@ -283,17 +314,18 @@ test('the screenshot UI works in both themes, and its settings outlive the app',
       env: { ...(process.env as Record<string, string>), RESPO_START_URL: TALL_URL }
     })
 
-  // Seed the folder into the document and restart, rather than posting it into
-  // a running session: picking a folder is a native dialog no test can drive,
-  // and the settings the renderer *hydrates with* are the ones it writes back.
+  // Seed the folder into the document and restart, rather than picking it in
+  // the running session: the settings the renderer *hydrates with* are the ones
+  // it writes back, and that is the round trip this test is about.
   const seed = await start()
   try {
     const page = await seed.firstWindow()
     await page.waitForFunction(() => 'respo' in window)
-    await page.evaluate(async (directory: string) => {
+    await chooseFolder(seed, page, uiDir)
+    await page.evaluate(async () => {
       const respo = (window as unknown as { respo: RespoBridge }).respo
-      await respo.invoke('store:save', { screenshots: { directory, format: 'png', dpr: 1 } })
-    }, uiDir)
+      await respo.invoke('store:save', { screenshots: { directory: '', format: 'png', dpr: 1 } })
+    })
   } finally {
     // Closing the window is what flushes the debounced write.
     await seed.close()

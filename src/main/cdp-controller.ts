@@ -536,8 +536,26 @@ export class CDPController {
     } finally {
       // Restored after a full-page capture too: it is the call that resized the
       // frame, and re-stating an unchanged override is a no-op in Chromium.
-      if ((override || options.fullPage) && spec !== null && this.live(target)) {
-        await this.send(target, 'Emulation.setDeviceMetricsOverride', metricsOf(spec, zoom))
+      //
+      // From the session as it stands *now*, not from the snapshot above. A
+      // full-page capture of a tall document takes long enough for the user to
+      // rotate a device, edit its metrics or zoom the canvas, and each of those
+      // has already put its own override on this view: restoring the pre-capture
+      // one would silently revert it — and `setZoom`'s "the zoom did not change"
+      // early return means nothing would ever put it back.
+      const current = this.sessions.get(target.id)
+      const device = current?.device ?? null
+      // A different spec means `applyDevice` ran during the capture and has
+      // already stated the emulation for it. Restoring anything here would only
+      // undo that; leaving it alone is what keeps the two from racing.
+      if (device === spec && device !== null && (override || options.fullPage)) {
+        if (this.live(target)) {
+          await this.send(
+            target,
+            'Emulation.setDeviceMetricsOverride',
+            metricsOf(device, current?.zoom ?? zoom)
+          )
+        }
       }
     }
   }

@@ -65,7 +65,15 @@ export type SyncDeviceRegistration = {
  */
 export interface SyncRegistry {
   registerDevice(registration: SyncDeviceRegistration): void
-  updateDevice(deviceId: string, size: { width: number; height: number }): void
+  /**
+   * A rotation, or an edited spec.
+   *
+   * `mobile` travels with the size because it can change for the same reason
+   * the size can: editing a custom device's *type* rewrites its user agent, and
+   * a phone that becomes a desktop stops being under Chromium's mobile
+   * emulation. Left alone when it is omitted — see `SyncDeviceRegistration`.
+   */
+  updateDevice(deviceId: string, device: { width: number; height: number; mobile?: boolean }): void
   /**
    * Tell the engine what zoom factor a view is being shown at.
    *
@@ -231,11 +239,17 @@ export class SyncEngine implements SyncRegistry {
     this.publishCapture()
   }
 
-  updateDevice(deviceId: string, size: { width: number; height: number }): void {
+  updateDevice(
+    deviceId: string,
+    device: { width: number; height: number; mobile?: boolean }
+  ): void {
     const entry = this.byDeviceId.get(deviceId)
     if (entry === undefined) return
-    entry.width = size.width
-    entry.height = size.height
+    entry.width = device.width
+    entry.height = device.height
+    // A mirrored click is read in a different space under mobile emulation, so
+    // a device that stopped being mobile has to stop being treated as one.
+    if (device.mobile !== undefined) entry.mobile = device.mobile
   }
 
   /** Remember the zoom a view is shown at. See `SyncRegistry.setZoom`. */

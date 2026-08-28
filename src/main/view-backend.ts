@@ -202,6 +202,16 @@ export type ElectronViewBackendOptions = {
 const DEVTOOLS_WINDOW_SIZE = { width: 1000, height: 720 }
 
 /**
+ * The panels Respo ever asks a DevTools frontend for.
+ *
+ * A whitelist rather than an escape: this name is interpolated into a script
+ * that runs inside a privileged `devtools://` document, and the only defence
+ * that does not depend on `JSON.stringify` being airtight is never letting an
+ * unexpected string reach it. Both entries are panels Respo's own UI opens.
+ */
+const FRONTEND_PANELS = new Set(['console', 'elements'])
+
+/**
  * Ask a DevTools frontend to bring one of its panels to the front.
  *
  * `DevToolsAPI` is the frontend's embedder interface — the same object Chrome
@@ -214,8 +224,11 @@ const DEVTOOLS_WINDOW_SIZE = { width: 1000, height: 720 }
  * Timing is the subtle part: the frontend is handed to Electron and only *then*
  * starts loading `devtools://`, so the call has to wait for the document that
  * will answer it.
+ *
+ * Exported for its unit test; production code reaches it through the factory.
  */
-function showFrontendPanel(frontend: WebContents, name: string): void {
+export function showFrontendPanel(frontend: WebContents, name: string): void {
+  if (!FRONTEND_PANELS.has(name)) return
   const request = `globalThis.DevToolsAPI?.showPanel(${JSON.stringify(name)})`
   const apply = (): void => {
     if (frontend.isDestroyed()) return
@@ -451,8 +464,14 @@ export function createElectronViewBackend(
         applyDevice(next: DeviceSpec): void {
           if (wc.isDestroyed()) return
           // Rotation and edited metrics change what a normalized coordinate
-          // means here, so the engine has to hear about them too.
-          sync?.updateDevice(device.id, { width: next.width, height: next.height })
+          // means here, so the engine has to hear about them too — including
+          // the mobile flag, which an edited device *type* rewrites along with
+          // the user agent it is derived from.
+          sync?.updateDevice(device.id, {
+            width: next.width,
+            height: next.height,
+            mobile: isMobileDevice(next)
+          })
           // A screenshot's file name carries the viewport it was taken at, so
           // a rotated device has to stop claiming its portrait size.
           shots?.updateDevice(device.id, {

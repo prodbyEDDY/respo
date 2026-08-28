@@ -116,6 +116,16 @@ export type DevtoolsManagerOptions = {
   onState?: (state: DevtoolsStatePayload) => void
   /** Human name for a device, used to title its own DevTools window. */
   deviceName?: (deviceId: string) => string | undefined
+  /**
+   * The window's content area, in the same coordinates `setBounds` speaks.
+   *
+   * The rect the renderer reports is a `getBoundingClientRect` from a page main
+   * does not trust: `validateBounds` only keeps it finite and sanely-scaled,
+   * because a validator cannot know how big the window is. This can, so it is
+   * where a panel is stopped from being placed off-screen or given a size no
+   * window could hold. Absent outside Electron, where there is no window.
+   */
+  contentSize?: () => { width: number; height: number }
 }
 
 /**
@@ -142,6 +152,12 @@ export interface DevtoolsCommands {
 
 const ZERO_RECT: Rect = { x: 0, y: 0, width: 0, height: 0 }
 
+/** `value`, held between `low` and `high`. A junk number becomes `low`. */
+function clamp(value: number, low: number, high: number): number {
+  if (!Number.isFinite(value)) return low
+  return Math.min(high, Math.max(low, value))
+}
+
 type Entry = { panel: DevtoolsPanel; mode: PanelMode }
 
 function sameState(a: DevtoolsStatePayload, b: DevtoolsStatePayload): boolean {
@@ -160,6 +176,7 @@ export class DevtoolsManager implements DevtoolsRegistry {
   private readonly createPanel: CreateDevtoolsPanel
   private readonly onState: ((state: DevtoolsStatePayload) => void) | null
   private readonly deviceName: ((deviceId: string) => string | undefined) | null
+  private readonly contentSize: (() => { width: number; height: number }) | null
 
   private dock: DockPosition
   private dockedDeviceId: string | null = null
@@ -173,6 +190,7 @@ export class DevtoolsManager implements DevtoolsRegistry {
     this.dock = options.dock ?? 'bottom'
     this.onState = options.onState ?? null
     this.deviceName = options.deviceName ?? null
+    this.contentSize = options.contentSize ?? null
   }
 
   state(): DevtoolsStatePayload {
@@ -268,9 +286,35 @@ export class DevtoolsManager implements DevtoolsRegistry {
    */
   setBounds(bounds: Rect): void {
     if (this.disposed) return
-    this.bounds = bounds
+    this.bounds = this.clampToWindow(bounds)
     if (this.dockedDeviceId === null) return
-    this.open.get(this.dockedDeviceId)?.panel.setBounds(bounds)
+    this.open.get(this.dockedDeviceId)?.panel.setBounds(this.bounds)
+  }
+
+  /**
+   * Keep a reported strip inside the window it is docked in.
+   *
+   * The rect crosses IPC from the renderer, and `validateBounds` lets anything
+   * finite and within ±100 000 through — enough for a compromised renderer to
+   * ask for a panel a hundred screens wide, or one placed at a negative origin
+   * so it covers the toolbar. The window is the authority on what fits, so the
+   * clamp lives here rather than in the validator. Without a window (a unit
+   * test, a headless harness) the rect is taken as it came.
+   */
+  private clampToWindow(bounds: Rect): Rect {
+    const size = this.contentSize?.()
+    if (size === undefined) return bounds
+
+    const limitX = Math.max(0, size.width)
+    const limitY = Math.max(0, size.height)
+    const x = clamp(bounds.x, 0, limitX)
+    const y = clamp(bounds.y, 0, limitY)
+    return {
+      x,
+      y,
+      width: clamp(bounds.width, 0, limitX - x),
+      height: clamp(bounds.height, 0, limitY - y)
+    }
   }
 
   /**

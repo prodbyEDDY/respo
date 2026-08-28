@@ -75,6 +75,7 @@ beforeEach(() => {
     settings: { ...DEFAULT_SHOT_SETTINGS },
     directory: '',
     busy: {},
+    jobs: {},
     flash: {},
     batches: {},
     notice: null
@@ -138,6 +139,31 @@ describe('shots store — progress', () => {
     expect(selectIsBusy(useShots.getState(), 'phone')).toBe(true)
 
     shots.apply([event({ state: 'done', path: '/shots/a.png' })])
+    expect(selectIsBusy(useShots.getState(), 'phone')).toBe(false)
+  })
+
+  it('keeps a device busy while another batch still has a job for it', () => {
+    const shots = useShots.getState()
+
+    // The camera on one frame, then "screenshot every device" before it lands:
+    // two jobs, one device, two different batches.
+    shots.apply([event({ state: 'queued', id: 'shot-1-0', batchId: 'shot-1' })])
+    shots.apply([event({ state: 'queued', id: 'shot-2-0', batchId: 'shot-2', batchSize: 5 })])
+
+    shots.apply([event({ state: 'done', id: 'shot-1-0', batchId: 'shot-1', path: '/shots/a.png' })])
+    // The first job finished; the second one is still queued, so the spinner on
+    // that frame stays.
+    expect(selectIsBusy(useShots.getState(), 'phone')).toBe(true)
+
+    shots.apply([
+      event({
+        state: 'done',
+        id: 'shot-2-0',
+        batchId: 'shot-2',
+        batchSize: 5,
+        path: '/shots/b.png'
+      })
+    ])
     expect(selectIsBusy(useShots.getState(), 'phone')).toBe(false)
   })
 
@@ -271,12 +297,25 @@ describe('shots store — settings', () => {
     expect(savePersistedState).toHaveBeenCalledTimes(1)
   })
 
-  it('keeps the folder the user picked in the dialog', async () => {
+  it('reflects the folder main reported, and writes nothing back', async () => {
     await useShots.getState().chooseDirectory()
 
     expect(useShots.getState().settings.directory).toBe('C:\\Users\\me\\Desktop\\shots')
     expect(useShots.getState().directory).toBe('C:\\Users\\me\\Desktop\\shots')
-    expect(savePersistedState).toHaveBeenCalledTimes(1)
+    // Main ran the dialog and the write: the folder is its field, and a patch
+    // carrying one is ignored on arrival (`validateScreenshotSettings`).
+    expect(savePersistedState).not.toHaveBeenCalled()
+  })
+
+  it('never sends a folder of its own in an ordinary settings patch', () => {
+    useShots.getState().hydrate({ directory: 'C:\\shots', format: 'png', dpr: 'device' })
+    useShots.getState().setFormat('jpeg')
+
+    // It still restates what it hydrated with — main drops it — but nothing the
+    // renderer does can *move* the folder.
+    expect(savePersistedState).toHaveBeenCalledWith({
+      screenshots: { directory: 'C:\\shots', format: 'jpeg', dpr: 'device' }
+    })
   })
 
   it('changes nothing when the dialog is dismissed', async () => {

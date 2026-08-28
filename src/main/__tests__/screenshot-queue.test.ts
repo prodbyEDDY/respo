@@ -412,6 +412,67 @@ describe('ScreenshotQueue', () => {
     ])
   })
 
+  it('never runs two captures of the same device at once', async () => {
+    const h = harness({ devices: 2 })
+
+    // Two gestures on one device — the camera button pressed twice, or a
+    // single shot landing inside a "screenshot everything". Both fit inside the
+    // concurrency budget, so nothing but the per-device rule keeps them apart.
+    h.queue.captureDevice('device-0', { fullPage: false })
+    h.queue.captureDevice('device-0', { fullPage: true, dpr: 1 })
+
+    // A capture owns its view's emulation while it runs: the second one would
+    // resize the frame and drop the density under the first one's feet, and the
+    // first one's restore would land in the middle of the second one.
+    expect(h.cdp.calls).toHaveLength(1)
+    expect(h.cdp.inFlight()).toEqual([1])
+
+    h.cdp.settle(1, Buffer.from('one'))
+    await settle()
+
+    // Only once the first has finished.
+    expect(h.cdp.calls).toHaveLength(2)
+    expect(h.cdp.calls[1]?.options).toMatchObject({ fullPage: true, dpr: 1 })
+    h.cdp.settle(1, Buffer.from('two'))
+    await settle()
+
+    expect([...h.fs.files.keys()]).toEqual([
+      '/shots/device-0-400x800-20260828-143005.png',
+      '/shots/device-0-400x800-20260828-143005-2.png'
+    ])
+  })
+
+  it('still runs different devices side by side', async () => {
+    const h = harness({ devices: 2 })
+
+    h.queue.captureDevice('device-0', { fullPage: false })
+    h.queue.captureDevice('device-1', { fullPage: false })
+    // Different views are different CDP sessions; serializing them would make
+    // "screenshot every device" as slow as the slowest page, one at a time.
+    expect(h.cdp.inFlight()).toEqual([1, 2])
+
+    for (const targetId of h.cdp.inFlight()) h.cdp.settle(targetId, Buffer.from('png'))
+    await settle()
+    expect(h.fs.files.size).toBe(2)
+  })
+
+  it('lets the next shot of a device run after one of them failed', async () => {
+    const h = harness({ devices: 1 })
+
+    h.queue.captureDevice('device-0', { fullPage: false })
+    h.queue.captureDevice('device-0', { fullPage: false })
+
+    h.cdp.settle(1, new Error('page is gone'))
+    await settle()
+
+    // A rejected capture must not leave every later shot of that device
+    // hanging off it.
+    expect(h.cdp.calls).toHaveLength(2)
+    h.cdp.settle(1, Buffer.from('png'))
+    await settle()
+    expect(h.fs.files.size).toBe(1)
+  })
+
   it('takes format and density from the request, falling back to the settings', async () => {
     const h = harness({ devices: 1 })
 

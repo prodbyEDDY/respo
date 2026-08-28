@@ -6,6 +6,7 @@ import {
   validateDeviceSpecs,
   validateLeadDeviceId,
   validatePersistedPatch,
+  validateScreenshotDirectory,
   validateShotPath,
   validateShotRequest,
   validateSyncInputBatch,
@@ -365,27 +366,59 @@ describe('validateShotPath', () => {
 })
 
 describe('validatePersistedPatch — screenshots', () => {
-  it('keeps a folder, a format and a density', () => {
+  it('keeps the format and the density', () => {
     const patch = validatePersistedPatch({
-      screenshots: { directory: '/home/me/shots', format: 'jpeg', dpr: 1 }
+      screenshots: { directory: '', format: 'jpeg', dpr: 1 }
     })
-    expect(patch.screenshots).toEqual({ directory: '/home/me/shots', format: 'jpeg', dpr: 1 })
+    expect(patch.screenshots).toMatchObject({ format: 'jpeg', dpr: 1 })
   })
 
-  it('accepts the empty folder that means "wherever main puts them"', () => {
+  it('drops the folder the renderer sent and keeps main’s own', () => {
+    const patch = validatePersistedPatch(
+      { screenshots: { directory: '\\\\attacker\\share', format: 'png', dpr: 'device' } },
+      { screenshotDirectory: '/home/me/shots' }
+    )
+    // The folder is where every capture is written and what `shot:reveal` is
+    // checked against. A renderer that could set it could point both anywhere
+    // — a UNC share included — so the field never comes from the patch.
+    expect(patch.screenshots).toEqual({
+      directory: '/home/me/shots',
+      format: 'png',
+      dpr: 'device'
+    })
+  })
+
+  it('falls back to the default folder when main has none yet', () => {
     const patch = validatePersistedPatch({
-      screenshots: { directory: '', format: 'png', dpr: 'device' }
+      screenshots: { directory: '/tmp/anything', format: 'png', dpr: 'device' }
     })
     expect(patch.screenshots?.directory).toBe('')
   })
 
   it.each([
     ['not an object', 'shots'],
-    ['a relative folder', { directory: 'shots', format: 'png', dpr: 'device' }],
-    ['a folder with a NUL', { directory: '/shots\u0000', format: 'png', dpr: 'device' }],
     ['an unknown format', { directory: '', format: 'gif', dpr: 'device' }],
     ['an arbitrary density', { directory: '', format: 'png', dpr: 3 }]
   ])('rejects %s', (_label, screenshots) => {
     expect(() => validatePersistedPatch({ screenshots })).toThrow(/invalid ipc payload/i)
+  })
+})
+
+describe('validateScreenshotDirectory', () => {
+  it('accepts an absolute folder, and the empty string that means the default', () => {
+    expect(validateScreenshotDirectory('/home/me/shots')).toBe('/home/me/shots')
+    expect(validateScreenshotDirectory('')).toBe('')
+  })
+
+  it.each([
+    ['a relative folder', 'shots'],
+    ['a number', 42],
+    ['null', null],
+    ['a NUL byte', '/shots\u0000'],
+    ['an absurd length', `/${'a'.repeat(2000)}`]
+  ])('rejects %s', (_label, directory) => {
+    // The one door left for this value is the folder dialog in `shot:choose-dir`
+    // — and a path is checked even when it came back out of the OS.
+    expect(() => validateScreenshotDirectory(directory)).toThrow(/invalid ipc payload/i)
   })
 })

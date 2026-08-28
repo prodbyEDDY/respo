@@ -136,14 +136,32 @@ function validateSuites(value: unknown): Suite[] {
 }
 
 /**
+ * The fields main fills in itself when it merges a renderer patch.
+ *
+ * Everything here is a value the renderer may *read* but must never *set*: the
+ * patch it sends carries a copy, and this is the copy that wins.
+ */
+export type PersistedPatchContext = {
+  /**
+   * The screenshots folder main currently holds. The renderer's copy of it is
+   * dropped — see `validateScreenshotSettings`.
+   */
+  screenshotDirectory?: string
+}
+
+/**
  * Validate a `store:save` payload.
  *
  * Unknown keys are *dropped* rather than rejected: a newer renderer talking to
  * an older main should degrade, not fail. `schemaVersion` is dropped with them
  * — main owns the version, and a patch that could set it would let a
- * compromised renderer make the next boot discard the user's document.
+ * compromised renderer make the next boot discard the user's document. The
+ * screenshots folder is dropped for a sharper reason; see below.
  */
-export function validatePersistedPatch(value: unknown): Partial<PersistedState> {
+export function validatePersistedPatch(
+  value: unknown,
+  context: PersistedPatchContext = {}
+): Partial<PersistedState> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     fail('store:save expects a patch object')
   }
@@ -171,7 +189,7 @@ export function validatePersistedPatch(value: unknown): Partial<PersistedState> 
   if (patch['rotated'] !== undefined) out.rotated = validateRotated(patch['rotated'])
   if (patch['devtools'] !== undefined) out.devtools = validateDevtoolsSettings(patch['devtools'])
   if (patch['screenshots'] !== undefined) {
-    out.screenshots = validateScreenshotSettings(patch['screenshots'])
+    out.screenshots = validateScreenshotSettings(patch['screenshots'], context.screenshotDirectory)
   }
 
   return out
@@ -180,25 +198,36 @@ export function validatePersistedPatch(value: unknown): Partial<PersistedState> 
 /**
  * Validate the persisted screenshot settings.
  *
- * The folder is the part that matters: it is the one string in this document
- * that main turns into a path it writes to. `''` (the default folder) and an
- * absolute path are the only two shapes accepted — a relative one would resolve
- * against whatever the process' working directory happens to be.
+ * The folder is *not* taken from the patch at all. It is the one string in this
+ * document main turns into a path it writes to, and a validator is a shape
+ * check, not an authorization: a renderer that could set it could point the
+ * next capture — and, through `shot:reveal`, the folder-containment check that
+ * guards `showItemInFolder` — at any path on the machine, a UNC share included.
+ * So the field is dropped here and main merges the value it already holds
+ * (`current`), which only `shot:choose-dir` can move. Format and density are
+ * ordinary preferences and come from the renderer as before.
  */
-function validateScreenshotSettings(value: unknown): ScreenshotSettings {
+function validateScreenshotSettings(value: unknown, current = ''): ScreenshotSettings {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     fail('store:save screenshots must be an object')
   }
   const shots = value as Record<string, unknown>
 
   return {
-    directory: validateScreenshotDirectory(shots['directory']),
+    directory: current,
     format: validateShotFormat(shots['format']),
     dpr: validateShotDpr(shots['dpr'])
   }
 }
 
-/** A folder to write screenshots into: absolute, sane length, no NUL. */
+/**
+ * A folder to write screenshots into: absolute, sane length, no NUL.
+ *
+ * The one door left for this value is `shot:choose-dir`, where it comes back
+ * out of a system dialog the user drove — and it is checked even there, because
+ * "the OS gave it to us" is a reason to expect a good path, not to skip the
+ * check that keeps a relative one from resolving against the working directory.
+ */
 export function validateScreenshotDirectory(value: unknown): string {
   if (value === '') return ''
   if (typeof value !== 'string' || value.length > MAX_PATH_LENGTH) {

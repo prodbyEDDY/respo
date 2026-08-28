@@ -370,12 +370,30 @@ function sanitizeDevtools(value: unknown): DevtoolsSettings {
 export const MAX_PATH_LENGTH = 1024
 
 /**
+ * Whether a stored path is absolute, on either platform's rules.
+ *
+ * Deliberately not `node:path` — this module is shared with the renderer bundle
+ * and imports nothing — and deliberately platform-independent: a profile
+ * written on Windows and read on macOS should have the same folder accepted or
+ * rejected on both, rather than `C:\shots` silently becoming a relative path
+ * that resolves against the working directory. POSIX roots, drive-absolute
+ * paths and UNC shares are the three shapes a real folder comes in.
+ */
+export function isAbsolutePath(value: string): boolean {
+  if (value.startsWith('/') || value.startsWith('\\')) return true
+  return /^[A-Za-z]:[\\/]/.test(value)
+}
+
+/**
  * Repair the screenshot settings.
  *
  * A field, not a document, and every part of it degrades on its own: a junk
  * folder falls back to the default one rather than costing the user their
  * format. A path containing a NUL is not a path — Node throws on it — so it is
- * dropped here instead of at the first capture.
+ * dropped here instead of at the first capture, and a *relative* one is dropped
+ * for the same reason `main/validate` refuses one: the store file is not a
+ * trusted input either, and "shots" would resolve against wherever the process
+ * happens to have been started.
  */
 function sanitizeScreenshots(value: unknown): ScreenshotSettings {
   const defaults: ScreenshotSettings = { directory: '', format: 'png', dpr: 'device' }
@@ -390,7 +408,8 @@ function sanitizeScreenshots(value: unknown): ScreenshotSettings {
     directory:
       typeof directory === 'string' &&
       directory.length <= MAX_PATH_LENGTH &&
-      !directory.includes('\0')
+      !directory.includes('\0') &&
+      isAbsolutePath(directory)
         ? directory
         : defaults.directory,
     format: format === 'png' || format === 'jpeg' ? format : defaults.format,

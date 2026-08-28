@@ -211,6 +211,18 @@ export class ScreenshotQueue implements ShotRegistry {
    * exist yet when the second one looks.
    */
   private readonly claimed = new Set<string>()
+  /**
+   * The last job admitted for each device, so the next one waits for it.
+   *
+   * Two captures of the *same* view cannot overlap: a capture temporarily owns
+   * that view's emulation — `dpr: 1` replaces the density override, a full-page
+   * shot resizes the frame — and both put it back when they finish. Run two at
+   * once and the first one's restore lands in the middle of the second one's
+   * capture, so one of the two images comes out at the wrong density or the
+   * wrong size. Different devices are different sessions and still run in
+   * parallel, up to the global budget.
+   */
+  private readonly deviceTails = new Map<string, Promise<void>>()
 
   private cancelFlush: (() => void) | null = null
   private running = 0
@@ -325,6 +337,7 @@ export class ScreenshotQueue implements ShotRegistry {
     this.queued.length = 0
     this.pending.clear()
     this.claimed.clear()
+    this.deviceTails.clear()
     this.cancelFlush?.()
     this.cancelFlush = null
     this.devices.clear()
@@ -369,8 +382,33 @@ export class ScreenshotQueue implements ShotRegistry {
       const job = this.queued.shift()
       if (job === undefined) return
       this.running += 1
-      void this.run(job)
+      this.run(job)
     }
+  }
+
+  /**
+   * Admit one job to the pool, behind whatever is already running on its device.
+   *
+   * The concurrency slot is taken for the whole wait, which is the honest
+   * accounting: the job *is* in flight from here on, and the alternative —
+   * releasing the slot while it waits — would let a device with a queue of its
+   * own start an unbounded number of captures. See `deviceTails`.
+   */
+  private run(job: Job): void {
+    const tail = this.deviceTails.get(job.deviceId)
+    // Started here and now when the device is free — a shot the user just asked
+    // for should not wait a turn of the event loop for no reason. `capture`
+    // never rejects, so neither does the chain: one device's failure must not
+    // leave every later shot of it hanging off a rejected promise.
+    const next = tail === undefined ? this.capture(job) : tail.then(() => this.capture(job))
+    this.deviceTails.set(job.deviceId, next)
+
+    void next.then(() => {
+      // Only if nothing else queued behind us in the meantime.
+      if (this.deviceTails.get(job.deviceId) === next) this.deviceTails.delete(job.deviceId)
+      this.running -= 1
+      this.pump()
+    })
   }
 
   /**
@@ -380,7 +418,8 @@ export class ScreenshotQueue implements ShotRegistry {
    * renderer is told which device did not make it and why (spec: "one failure
    * does not drop the batch").
    */
-  private async run(job: Job): Promise<void> {
+  private async capture(job: Job): Promise<void> {
+    if (this.disposed) return
     this.report(job, 'active')
 
     try {
@@ -400,9 +439,6 @@ export class ScreenshotQueue implements ShotRegistry {
       this.report(job, 'done', { path })
     } catch (error) {
       this.report(job, 'failed', { error: messageOf(error) })
-    } finally {
-      this.running -= 1
-      this.pump()
     }
   }
 

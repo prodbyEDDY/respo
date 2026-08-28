@@ -122,8 +122,14 @@ export class ViewManager {
     for (const device of devices) {
       const existing = this.entries.get(device.id)
       if (existing !== undefined) {
-        // Same id, different metrics — the catalog entry was edited under us.
-        if (!sameEmulation(existing.device, device)) existing.view.applyDevice(device)
+        // Same id, different spec — the catalog entry was edited under us. The
+        // *name* counts as a change even though no emulation depends on it: it
+        // is what a screenshot's file name is built from, and a device renamed
+        // mid-session that kept being photographed under its old name would be
+        // a rename that only half happened.
+        if (!sameEmulation(existing.device, device) || existing.device.name !== device.name) {
+          existing.view.applyDevice(device)
+        }
         existing.device = device
         continue
       }

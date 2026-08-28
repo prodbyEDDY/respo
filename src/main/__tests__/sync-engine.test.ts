@@ -208,6 +208,31 @@ describe('SyncEngine', () => {
       const onTablet = h.mouse.find((c) => c.id === 2 && c.params.type === 'mousePressed')
       expect(onTablet?.params).toMatchObject({ x: 500, y: 250 })
     })
+
+    it('follows a device that stopped being mobile', () => {
+      // Editing a custom device's type rewrites its user agent, and the tablet
+      // above is now emulated as a desktop. At 50% canvas zoom that changes what
+      // a dispatched coordinate means: the mobile reading divides by the zoom,
+      // the desktop one does not (see `SyncDeviceRegistration.mobile`).
+      h.engine.setZoom('tablet', 0.5)
+      h.engine.updateDevice('tablet', { width: 800, height: 1000, mobile: false })
+
+      h.engine.handleInput(1, [mouseDown(0.5, 0.5)])
+      expect(
+        h.mouse.find((c) => c.id === 2 && c.params.type === 'mousePressed')?.params
+      ).toMatchObject({ x: 400, y: 500 })
+    })
+
+    it('leaves the mobile flag alone when an update does not mention it', () => {
+      h.engine.setZoom('tablet', 0.5)
+      h.engine.updateDevice('tablet', { width: 800, height: 1000 })
+
+      h.engine.handleInput(1, [mouseDown(0.5, 0.5)])
+      // Still mobile, so still divided by the zoom.
+      expect(
+        h.mouse.find((c) => c.id === 2 && c.params.type === 'mousePressed')?.params
+      ).toMatchObject({ x: 800, y: 1000 })
+    })
   })
 
   describe('routing', () => {

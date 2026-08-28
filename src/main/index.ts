@@ -27,6 +27,7 @@ import {
   validateLeadDeviceId,
   validateOptionalDeviceId,
   validatePersistedPatch,
+  validateScreenshotDirectory,
   validateShotPath,
   validateShotRequest,
   validateSyncInputBatch,
@@ -142,6 +143,15 @@ function createWindow(): void {
     createPanel: createDevtoolsPanelFactory(mainWindow),
     dock: persistence?.load().devtools.dock ?? 'bottom',
     deviceName: (deviceId) => deviceNames.get(deviceId),
+    // The window is what says how big a docked strip may be; the rect the
+    // renderer reports is only a measurement (`DevtoolsManagerOptions`).
+    contentSize: () => {
+      // A window that is tearing down has no content area, and nothing is left
+      // to place inside it either.
+      if (mainWindow.isDestroyed()) return { width: 0, height: 0 }
+      const [width, height] = mainWindow.getContentSize()
+      return { width: width ?? 0, height: height ?? 0 }
+    },
     onState: (state) => {
       sendMainEvent(mainWindow.webContents, { type: 'devtools-state', payload: state })
     }
@@ -283,7 +293,12 @@ function registerIpcHandlers(): void {
   registerHandler('store:load', () => persistence?.load() ?? defaultPersistedState())
 
   registerHandler('store:save', (_event, patch) => {
-    persistence?.save(validatePersistedPatch(patch))
+    // The screenshots folder is main's field, not the renderer's: the patch's
+    // copy is dropped and this one merged back in its place (`validate.ts`).
+    const store = persistence
+    const context =
+      store === null ? {} : { screenshotDirectory: store.load().screenshots.directory }
+    store?.save(validatePersistedPatch(patch, context))
   })
 
   // Import and export are the only paths to a file the *user* names, and both
@@ -413,8 +428,12 @@ function registerIpcHandlers(): void {
 
   registerHandler('shot:get-dir', () => screenshotDirectory())
 
-  // The folder dialog runs here, like the backup ones: the renderer names no
-  // paths of its own, it only persists what the user picked (CLAUDE.md §7).
+  // The folder dialog runs here, like the backup ones — and so does the write.
+  //
+  // The renderer names no paths of its own (CLAUDE.md §7) and it does not
+  // persist this one either: a folder the user chose in a system dialog is the
+  // only way the screenshots directory ever moves, so the write belongs on this
+  // side of the boundary. The renderer is told what landed and reflects it.
   registerHandler('shot:choose-dir', async (event) => {
     const window = BrowserWindow.fromWebContents(event.sender)
     const options = {
@@ -425,7 +444,19 @@ function registerIpcHandlers(): void {
     const result = await (window === null
       ? dialog.showOpenDialog(options)
       : dialog.showOpenDialog(window, options))
-    return result.canceled ? null : (result.filePaths[0] ?? null)
+    if (result.canceled) return null
+
+    const chosen = result.filePaths[0]
+    if (chosen === undefined || chosen === '') return null
+    // Checked even though it came from the OS: `validateScreenshotDirectory` is
+    // what says this is an absolute path of a sane length, and it is about to
+    // become the folder every capture writes into.
+    const directory = validateScreenshotDirectory(chosen)
+
+    const store = persistence
+    if (store === null) return directory
+    store.save({ screenshots: { ...store.load().screenshots, directory } })
+    return directory
   })
 
   // The one-way stream from the device views. Its sender is an untrusted page,
