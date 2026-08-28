@@ -67,6 +67,14 @@ test('a suite decides which devices are on the canvas, and in what order', async
     await page.getByLabel('Remove iPhone SE from the suite').click()
     await expect(page.locator('[data-suite-device-id]')).toHaveCount(5)
 
+    // Escape belongs to the topmost surface: the dialog closes, the library
+    // behind it stays open.
+    await page.getByRole('button', { name: 'New suite' }).click()
+    await expect(page.getByLabel('Suite name')).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(page.getByLabel('Suite name')).toBeHidden()
+    await expect(page.getByTestId('device-manager')).toBeVisible()
+
     // Reorder by dragging the first chip past the second.
     const first = page.locator(`[data-suite-device-id="${before[0]}"]`)
     const second = page.locator(`[data-suite-device-id="${before[1]}"]`)

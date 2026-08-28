@@ -80,6 +80,10 @@ export function DeviceManagerView(): React.JSX.Element {
     if (blocked) return
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key !== 'Escape') return
+      // Asked of the DOM rather than tracked in state: dialogs of our own are
+      // in `blocked`, but the suites panel owns three more, and one Escape must
+      // never dismiss two surfaces at once.
+      if (document.querySelector('[data-slot="dialog-content"]') !== null) return
       setView('canvas')
     }
     window.addEventListener('keydown', onKeyDown)
