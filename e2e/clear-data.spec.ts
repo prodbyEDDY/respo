@@ -10,6 +10,16 @@ const MAIN_ENTRY = resolve(ROOT, 'out', 'main', 'index.js')
 const userDataDir = ownProfile('clear-data')
 
 /**
+ * The toolbar's one-line notice.
+ *
+ * Not `getByRole('status')`: every loading device frame carries a spinner with
+ * the same role, so once a clear reloads the views — which is the whole point
+ * of a clear — that role matches six elements and the query is ambiguous.
+ * `data-tone` is the notice's own marker.
+ */
+const NOTICE = '[role="status"][data-tone]'
+
+/**
  * The clears, end to end — over a `file:` page, which is the honest offline
  * fixture and also the interesting case.
  *
@@ -45,11 +55,11 @@ test('clearing says whose data it can and cannot take', async () => {
 
     await window.getByRole('menuitem', { name: 'Cookies' }).click()
     // There is no site here, so nothing was touched — and it says so.
-    await expect(window.getByRole('status')).toContainText('no site here', { timeout: 10_000 })
+    await expect(window.locator(NOTICE)).toContainText('no site here', { timeout: 10_000 })
 
     // The cache is the session's, not an origin's, so this one goes through.
     await window.keyboard.press('Control+Alt+z')
-    await expect(window.getByRole('status')).toContainText('Cleared the cache', {
+    await expect(window.locator(NOTICE)).toContainText('Cleared the cache', {
       timeout: 10_000
     })
 

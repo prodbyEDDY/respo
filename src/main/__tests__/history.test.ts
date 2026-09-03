@@ -91,19 +91,18 @@ describe('createHistory', () => {
     expect(history.query('')[0]?.title).toBe('Example')
   })
 
-  it('records the same page again once something else has been visited', () => {
+  it('offers a revisited page once, at its newest position', () => {
     const history = createHistory(memoryBackend())
     history.record('https://a.test/', 'A')
     history.record('https://b.test/', 'B')
     history.record('https://a.test/', 'A')
 
-    // Newest first, and the older visit to `a` is still behind `b`.
-    expect(history.query('').map((row) => row.url)).toEqual([
-      'https://a.test/',
-      'https://b.test/',
-      'https://a.test/'
-    ])
-    // ...but the suggestion list only offers it once.
+    // `query` answers with a *suggestion list*, not the visit log: a second
+    // visit to `a` is a second entry behind the scenes, but a list that offered
+    // the same url twice would be a worse list. Newest first, once each — so
+    // `a` is back in front of `b` because it was just visited again.
+    expect(history.query('').map((row) => row.url)).toEqual(['https://a.test/', 'https://b.test/'])
+    // The same rule, reached through a filter rather than an empty query.
     expect(history.query('a.test')).toHaveLength(1)
   })
 

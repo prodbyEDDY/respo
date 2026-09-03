@@ -11,8 +11,13 @@ type Invoke = ReturnType<typeof vi.fn>
 /**
  * Install a fake `window.respo`. The store degrades to a no-op without one, so
  * the calls it *makes* are only observable with a bridge in place.
+ *
+ * The answer defaults to a whole state because that is what main answers with:
+ * every `permissions:*` channel except `respond`/`dismiss` returns the current
+ * picture, and a fake that resolved `undefined` would be testing a contract
+ * that does not exist.
  */
-function installBridge(answer: PermissionStatePayload | null = null): Invoke {
+function installBridge(answer: PermissionStatePayload = state()): Invoke {
   const invoke = vi.fn(() => Promise.resolve(answer))
   const bridge: Partial<RespoApi> = { invoke: invoke as unknown as RespoApi['invoke'] }
   ;(window as unknown as { respo?: Partial<RespoApi> }).respo = bridge
