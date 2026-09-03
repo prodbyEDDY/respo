@@ -3,6 +3,7 @@ import type { DeviceSpec } from '@shared/types'
 import {
   validateBoolean,
   validateBookmarks,
+  validateClearTarget,
   validateDeviceId,
   validateDeviceSpecs,
   validateHistoryQuery,
@@ -571,5 +572,20 @@ describe('validateHistoryQuery', () => {
 
   it('refuses a payload big enough to be an attack on the matcher', () => {
     expect(() => validateHistoryQuery('x'.repeat(3000))).toThrow(/too long/i)
+  })
+})
+
+describe('validateClearTarget', () => {
+  it.each(['storage', 'cookies', 'cache', 'all'])('accepts %s', (target) => {
+    expect(validateClearTarget(target)).toBe(target)
+  })
+
+  it.each([
+    ['a target this build has never heard of', 'everything-everywhere'],
+    ['an empty string', ''],
+    ['null', null],
+    ['an object', {}]
+  ])('rejects %s', (_label, value) => {
+    expect(() => validateClearTarget(value)).toThrow(/invalid ipc payload/i)
   })
 })

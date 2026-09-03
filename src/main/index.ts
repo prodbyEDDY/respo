@@ -14,6 +14,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { normalizeUrl, type DevtoolsStatePayload } from '@shared/ipc'
 import { defaultPersistedState } from '@shared/persistence-types'
 import { CDPController } from './cdp-controller'
+import { clearBrowsingData } from './clear-data'
 import { DevtoolsManager } from './devtools-manager'
 import { createFaviconFetcher } from './favicons'
 import { createHistory, type History } from './history'
@@ -35,6 +36,7 @@ import { SyncEngine } from './sync-engine'
 import {
   validateBoolean,
   validateBounds,
+  validateClearTarget,
   validateDeviceId,
   validateDeviceSpecs,
   validateDockPosition,
@@ -542,6 +544,22 @@ function registerIpcHandlers(): void {
     // OS gave it to us" is a reason to expect a good path, not to skip the
     // check (spec §7a).
     return normalizeUrl(pathToFileURL(chosen).href)
+  })
+
+  // Clears. The renderer names a *kind*; the origin comes from what main knows
+  // the views are showing, never from the payload (`clear-data.ts`).
+  registerHandler('data:clear', async (_event, target) => {
+    const kind = validateClearTarget(target)
+    const result = await clearBrowsingData(
+      session.fromPartition(DEVICE_PARTITION),
+      kind,
+      lead?.url() ?? null
+    )
+    // A page that outlives its own storage is showing state that no longer
+    // exists — service workers especially, which keep answering until the
+    // document that registered them is replaced.
+    if (result.ok) viewManager?.reload()
+    return result
   })
 
   // The one-way stream from the device views. Its sender is an untrusted page,

@@ -51,6 +51,7 @@ import { usePanels } from '@renderer/stores/panels'
 import { useSettings } from '@renderer/stores/settings'
 import { useSync } from '@renderer/stores/sync'
 import { AddressBar } from './AddressBar'
+import { ClearMenu } from './ClearMenu'
 import { NavControls } from './NavControls'
 import { Notice } from './Notice'
 import { ShotAllButton, ShotNotice } from './ShotControls'
@@ -428,6 +429,7 @@ export function TopBar(): React.JSX.Element {
       {/* Everything else worth one line of feedback: a bookmark, a clear. */}
       <Notice />
       <div className="flex items-center gap-1">
+        <ClearMenu />
         <SuiteSelector />
         <DeviceLibraryButton />
         <SyncChip />

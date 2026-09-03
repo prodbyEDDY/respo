@@ -5,6 +5,7 @@ import { Canvas } from '@renderer/components/previewer/Canvas'
 import { TopBar } from '@renderer/components/toolbar/TopBar'
 import { TooltipProvider } from '@renderer/components/ui/tooltip'
 import { useAddressHotkeys } from '@renderer/hooks/useAddressHotkeys'
+import { useClearHotkeys } from '@renderer/hooks/useClearHotkeys'
 import { useInspectHotkeys } from '@renderer/hooks/useInspectHotkeys'
 import { useLayoutHotkeys } from '@renderer/hooks/useLayoutHotkeys'
 import { useShotHotkeys } from '@renderer/hooks/useShotHotkeys'
@@ -138,6 +139,8 @@ function App(): React.JSX.Element {
   useLayoutHotkeys()
   // mod+d saves the page, mod+l goes to the address bar, mod+o opens a file.
   useAddressHotkeys()
+  // mod+alt+q/a/z/del forget this site's storage, cookies or cache.
+  useClearHotkeys()
 
   // Hand main the device set. Runs again whenever the selection changes; the
   // view manager reuses the views that stayed and loads the current url into

@@ -9,6 +9,7 @@
 
 import {
   normalizeUrl,
+  type ClearTarget,
   type DockPosition,
   type InputEventPayload,
   type ShotRequest,
@@ -274,6 +275,14 @@ export function validateHomeUrl(value: unknown): string {
 export function validateHistoryQuery(value: unknown): string {
   if (typeof value !== 'string') fail('history:query expects a string')
   if (value.length > MAX_URL_LENGTH) fail('history:query prefix is too long')
+  return value
+}
+
+/** Validate a `data:clear` target. */
+export function validateClearTarget(value: unknown): ClearTarget {
+  if (value !== 'storage' && value !== 'cookies' && value !== 'cache' && value !== 'all') {
+    fail("data:clear expects 'storage', 'cookies', 'cache' or 'all'")
+  }
   return value
 }
 

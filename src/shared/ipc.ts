@@ -143,6 +143,21 @@ export type HistorySuggestion = {
   favicon?: string
 }
 
+/** What one "Clear…" gesture asks to be forgotten. */
+export type ClearTarget = 'storage' | 'cookies' | 'cache' | 'all'
+
+/**
+ * The answer to a clear.
+ *
+ * `no-origin` is not a failure so much as a question that has no subject: a
+ * blank canvas, or a `file://` page, has no site whose storage could be cleared.
+ * The cache is the exception — it is the session's, not an origin's.
+ */
+export type ClearResult =
+  | { ok: true; target: ClearTarget; origin: string | null }
+  | { ok: false; reason: 'no-origin' }
+  | { ok: false; reason: 'failed'; message: string }
+
 export type LoadState = 'loading' | 'ready' | 'failed'
 
 export type LoadStatePayload = {
@@ -387,6 +402,16 @@ export type IpcInvokeMap = {
    * normalized — rather than a path it could then do something else with.
    */
   'file:open': { args: []; result: string | null }
+  /**
+   * Forget storage, cookies or the cache.
+   *
+   * The renderer names the *kind*, never the origin: main is the side that
+   * knows what the views are actually showing, and an origin taken from the
+   * renderer would be a renderer choosing whose data to delete. Every view is
+   * reloaded afterwards, because a page that outlives its own storage is a page
+   * showing state that no longer exists.
+   */
+  'data:clear': { args: [ClearTarget]; result: ClearResult }
 }
 
 export type IpcChannel = keyof IpcInvokeMap
@@ -425,7 +450,8 @@ const CHANNEL_REGISTRY: Record<IpcChannel, true> = {
   'shot:choose-dir': true,
   'history:query': true,
   'history:clear': true,
-  'file:open': true
+  'file:open': true,
+  'data:clear': true
 }
 
 export const IPC_CHANNELS: readonly IpcChannel[] = Object.keys(CHANNEL_REGISTRY) as IpcChannel[]
