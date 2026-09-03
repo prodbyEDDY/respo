@@ -1,22 +1,36 @@
-import { app, BrowserWindow, clipboard, ClipboardItem, dialog, nativeTheme, shell } from 'electron'
+import {
+  app,
+  BrowserWindow,
+  clipboard,
+  ClipboardItem,
+  dialog,
+  nativeTheme,
+  session,
+  shell
+} from 'electron'
 import { join } from 'path'
+import { pathToFileURL } from 'node:url'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { normalizeUrl, type DevtoolsStatePayload } from '@shared/ipc'
 import { defaultPersistedState } from '@shared/persistence-types'
 import { CDPController } from './cdp-controller'
 import { DevtoolsManager } from './devtools-manager'
+import { createFaviconFetcher } from './favicons'
+import { createHistory, type History } from './history'
 import { Inspector } from './inspector'
 import { registerHandler, registerInputListener, sendMainEvent } from './ipc'
+import { createLeadTracker, type LeadTracker } from './lead-tracker'
 import {
   createBackupFileIO,
   createElectronStoreBackend,
   createPersistence,
   exportBackup,
   importBackup,
-  type Persistence
+  type Persistence,
+  type PersistenceBackend
 } from './persistence'
 import { createNodeShotFileSystem, ScreenshotQueue } from './screenshot-queue'
-import { installDevicePermissionHandlers, openExternalSafe } from './security'
+import { DEVICE_PARTITION, installDevicePermissionHandlers, openExternalSafe } from './security'
 import { SyncEngine } from './sync-engine'
 import {
   validateBoolean,
@@ -24,6 +38,7 @@ import {
   validateDeviceId,
   validateDeviceSpecs,
   validateDockPosition,
+  validateHistoryQuery,
   validateLeadDeviceId,
   validateOptionalDeviceId,
   validatePersistedPatch,
@@ -44,7 +59,10 @@ let viewManager: ViewManager | null = null
 let loadStates: LoadStateBatcher | null = null
 let perf: PerfMonitor | null = null
 let stopSpike: (() => void) | null = null
+let storeBackend: PersistenceBackend | null = null
 let persistence: Persistence | null = null
+let history: History | null = null
+let lead: LeadTracker | null = null
 let syncEngine: SyncEngine | null = null
 let devtools: DevtoolsManager | null = null
 let inspector: Inspector | null = null
@@ -58,7 +76,7 @@ let shots: ScreenshotQueue | null = null
  */
 const deviceNames = new Map<string, string>()
 
-/** Until the address bar lands, every session opens here. */
+/** Where a session opens when nothing else has an opinion. */
 const DEFAULT_START_URL = 'https://example.com'
 
 /** The folder under `Pictures` a fresh install writes screenshots into. */
@@ -79,19 +97,34 @@ function screenshotDirectory(): string {
 }
 
 /**
- * The url the views open on. `RESPO_START_URL` is the seam the e2e suite (and,
- * later, the CLI/deep-link entry point) uses; it goes through the same
+ * The url the views open on, in order of who gets to decide.
+ *
+ * `RESPO_START_URL` is the seam the e2e suite (and, later, the CLI/deep-link
+ * entry point) uses and it wins outright: someone who launched Respo *at* a url
+ * asked for that url. The home page comes next — it is a standing preference,
+ * which is exactly what a launch argument overrides. Both go through the same
  * validation as anything else main is asked to load (spec §7a).
+ *
+ * The home page is resolved here and not in the renderer on purpose: views are
+ * created and pointed somewhere before the renderer finishes hydrating, so a
+ * home page applied from that side would show as the default page loading and
+ * then being replaced.
  */
 function resolveStartUrl(): string {
   const requested = process.env['RESPO_START_URL']
-  if (requested === undefined || requested.trim() === '') return DEFAULT_START_URL
-  const normalized = normalizeUrl(requested)
-  if (normalized === null) {
+  if (requested !== undefined && requested.trim() !== '') {
+    const normalized = normalizeUrl(requested)
+    if (normalized !== null) return normalized
     console.error(`ignoring unloadable RESPO_START_URL: ${requested}`)
-    return DEFAULT_START_URL
   }
-  return normalized
+
+  const home = persistence?.load().homeUrl ?? ''
+  if (home !== '') {
+    const normalized = normalizeUrl(home)
+    if (normalized !== null) return normalized
+  }
+
+  return DEFAULT_START_URL
 }
 
 function createWindow(): void {
@@ -115,10 +148,16 @@ function createWindow(): void {
     }
   })
 
+  // Which page the session is on, folded out of the same batch: history records
+  // one visit for five viewports, and a clear knows whose data it would delete.
+  lead = createLeadTracker()
+
   // Every device's load events collapse into one `load-state` message per turn
   // of the event loop — there is no per-event IPC (CLAUDE.md §4).
   loadStates = createLoadStateBatcher((payload) => {
     sendMainEvent(mainWindow.webContents, { type: 'load-state', payload })
+    const page = lead?.apply(payload) ?? null
+    if (page !== null) history?.record(page.url, page.title)
   })
 
   // One CDP controller for the window's views, shared with the sync engine:
@@ -198,7 +237,8 @@ function createWindow(): void {
       sync: syncEngine,
       devtools,
       inspect: inspector,
-      shots
+      shots,
+      onFavicon: (pageUrl, icons) => history?.noteFavicon(pageUrl, icons)
     }),
     { onLoadState: (payload) => loadStates?.report(payload) }
   )
@@ -211,6 +251,10 @@ function createWindow(): void {
     // The window is where every patch comes from, so its last one has to land
     // now — `before-quit` is not guaranteed to run before the process goes.
     persistence?.flush()
+    // Same reasoning: the pages visited in the last second of the session are
+    // sitting behind the history debounce.
+    history?.flush()
+    lead = null
     syncEngine?.dispose()
     syncEngine = null
     // Before the views: a DevTools window outliving the canvas it belongs to
@@ -327,6 +371,9 @@ function registerIpcHandlers(): void {
     devtools?.retain(live)
     inspector?.retain(live)
     shots?.retain(live)
+    // A lead that left the canvas must not keep deciding what gets recorded —
+    // or whose cookies a clear would take (`lead-tracker.ts`).
+    lead?.retain(specs.map((spec) => spec.id))
   })
 
   // The hot path: one call per animation frame, applied synchronously so every
@@ -459,6 +506,44 @@ function registerIpcHandlers(): void {
     return directory
   })
 
+  // History. The renderer asks for the handful of rows that match what is being
+  // typed rather than holding a copy of two thousand of them; the call arrives
+  // on a debounce behind the address bar, which is typing rate (CLAUDE.md §4).
+  registerHandler(
+    'history:query',
+    (_event, query) => history?.query(validateHistoryQuery(query)) ?? []
+  )
+
+  registerHandler('history:clear', () => {
+    history?.clear()
+  })
+
+  // The other file dialog that runs here, like the backup ones: the renderer
+  // names no paths (CLAUDE.md §7) and is handed a url, already normalized, so
+  // what comes back is the same kind of value the address bar produces.
+  registerHandler('file:open', async (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender)
+    const options = {
+      title: 'Open a local page',
+      properties: ['openFile' as const],
+      filters: [
+        { name: 'Web pages', extensions: ['html', 'htm', 'xhtml', 'shtml'] },
+        { name: 'All files', extensions: ['*'] }
+      ]
+    }
+    const result = await (window === null
+      ? dialog.showOpenDialog(options)
+      : dialog.showOpenDialog(window, options))
+    if (result.canceled) return null
+
+    const chosen = result.filePaths[0]
+    if (chosen === undefined || chosen === '') return null
+    // Through the same filter as anything else a view is told to load — "the
+    // OS gave it to us" is a reason to expect a good path, not to skip the
+    // check (spec §7a).
+    return normalizeUrl(pathToFileURL(chosen).href)
+  })
+
   // The one-way stream from the device views. Its sender is an untrusted page,
   // so the batch is validated (and clamped) before the engine sees any of it;
   // anything malformed is dropped rather than thrown back at the page.
@@ -484,7 +569,20 @@ app.whenReady().then(() => {
   if (is.dev) perf = startPerfMonitor()
 
   // Before the first handler can be called, and before the window asks.
-  persistence = createPersistence(createElectronStoreBackend())
+  //
+  // One backend for both documents: `electron-store` caches the file it owns,
+  // and two instances over the same file would each be writing back a copy that
+  // predates the other's last write.
+  storeBackend = createElectronStoreBackend()
+  persistence = createPersistence(storeBackend)
+  // History is the same file under its own key, and deliberately not part of
+  // the settings document: it is large, it is written on every navigation, and
+  // the renderer only ever wants a few rows of it (`history.ts`).
+  history = createHistory(storeBackend, {
+    // The site's own icon, over the session the page was loaded in — never a
+    // third-party favicon service (`favicons.ts`).
+    fetchFavicon: createFaviconFetcher((url) => session.fromPartition(DEVICE_PARTITION).fetch(url))
+  })
   // Restore the native chrome the user left the app on; the renderer applies
   // the same value to the DOM once it has hydrated.
   nativeTheme.themeSource = persistence.load().ui.theme
@@ -517,6 +615,10 @@ app.on('before-quit', () => {
   // reach disk before anything else starts tearing down.
   persistence?.dispose()
   persistence = null
+  history?.dispose()
+  history = null
+  storeBackend = null
+  lead = null
   syncEngine?.dispose()
   syncEngine = null
   inspector?.dispose()

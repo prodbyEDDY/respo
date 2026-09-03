@@ -4,6 +4,7 @@ import { DevtoolsDock } from '@renderer/components/devtools/DevtoolsDock'
 import { Canvas } from '@renderer/components/previewer/Canvas'
 import { TopBar } from '@renderer/components/toolbar/TopBar'
 import { TooltipProvider } from '@renderer/components/ui/tooltip'
+import { useAddressHotkeys } from '@renderer/hooks/useAddressHotkeys'
 import { useInspectHotkeys } from '@renderer/hooks/useInspectHotkeys'
 import { useLayoutHotkeys } from '@renderer/hooks/useLayoutHotkeys'
 import { useShotHotkeys } from '@renderer/hooks/useShotHotkeys'
@@ -11,6 +12,7 @@ import { ipcBridge } from '@renderer/lib/ipc'
 import { createLayoutTelemetry, type LayoutTelemetry } from '@renderer/lib/layout-telemetry'
 import { loadPersistedState } from '@renderer/lib/persistence'
 import { cn } from '@renderer/lib/utils'
+import { useBookmarks } from '@renderer/stores/bookmarks'
 import { useDevices } from '@renderer/stores/devices'
 import { applyRotation, useLayout } from '@renderer/stores/layout'
 import { attachNavigationBridge, useNavigation } from '@renderer/stores/navigation'
@@ -71,6 +73,9 @@ function usePersistedState(): boolean {
         useLayout.getState().hydrateLayout(state.layout)
         usePanels.getState().hydrate(state.devtools)
         useShots.getState().hydrate(state.screenshots)
+        // The home page itself is main's to apply — it decides the start url
+        // before the renderer has hydrated — so this only mirrors it.
+        useBookmarks.getState().hydrate(state)
       }
       setHydrated(true)
     })
@@ -131,6 +136,8 @@ function App(): React.JSX.Element {
   useShotHotkeys()
   // mod+shift+l cycles the canvas layout, Escape leaves individual mode.
   useLayoutHotkeys()
+  // mod+d saves the page, mod+l goes to the address bar, mod+o opens a file.
+  useAddressHotkeys()
 
   // Hand main the device set. Runs again whenever the selection changes; the
   // view manager reuses the views that stayed and loads the current url into

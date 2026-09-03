@@ -9,7 +9,13 @@
 
 import { slugify } from './custom-devices'
 import { DEFAULT_ACTIVE_DEVICE_IDS } from './deviceCatalog'
-import type { DockPosition, ShotDpr, ShotFormat, ThemeSource } from './ipc'
+import {
+  normalizeUrl,
+  type DockPosition,
+  type ShotDpr,
+  type ShotFormat,
+  type ThemeSource
+} from './ipc'
 import type { DeviceSpec } from './types'
 
 /** Bumped whenever a stored document stops being readable by this code. */
@@ -109,6 +115,34 @@ export type ScreenshotSettings = {
   dpr: ShotDpr
 }
 
+/**
+ * One saved page.
+ *
+ * `title` is the page's own `<title>` at the moment it was starred, and it is
+ * editable afterwards: a bookmark is the user's label for a place, not a mirror
+ * of whatever that place currently calls itself. `id` exists because both of
+ * the other two are editable — a list keyed by url could not survive the user
+ * fixing a typo in one.
+ */
+export type Bookmark = {
+  id: string
+  title: string
+  url: string
+  /** Epoch milliseconds. What the list is ordered by, newest first. */
+  addedAt: number
+}
+
+/** More saved pages than a toolbar menu could ever be a way into. */
+export const MAX_BOOKMARKS = 500
+/**
+ * Longest url worth storing. Chromium's own limit is 2MB and browsers stop
+ * displaying past ~32k; this is past any url a person types and far short of
+ * something worth writing to a settings file.
+ */
+export const MAX_URL_LENGTH = 2048
+/** A page title is a label. Longer ones are truncated, never rejected. */
+export const MAX_TITLE_LENGTH = 300
+
 /** Bounds on the dock strip, shared by the renderer's drag and main's repair. */
 export const MIN_DOCK_SIZE = 160
 export const MAX_DOCK_SIZE = 2000
@@ -139,6 +173,17 @@ export type PersistedState = {
   devtools: DevtoolsSettings
   /** Where screenshots go and what they look like. See `ScreenshotSettings`. */
   screenshots: ScreenshotSettings
+  /** Saved pages, newest first. See `Bookmark`. */
+  bookmarks: Bookmark[]
+  /**
+   * The page every session opens on, or `''` for "no home page".
+   *
+   * Read by *main* at boot rather than applied by the renderer: the views are
+   * created and pointed somewhere before the renderer has finished hydrating,
+   * and a home page that arrived a round trip late would show as the default
+   * page loading and then being replaced.
+   */
+  homeUrl: string
 }
 
 export const DEFAULT_SUITE_ID = 'default'
@@ -194,7 +239,11 @@ export function defaultPersistedState(): PersistedState {
     devtools: { dock: 'bottom', size: DEFAULT_DOCK_SIZE },
     // PNG at the device's own density: the truthful screenshot, which is the
     // one someone comparing two viewports came for.
-    screenshots: { directory: '', format: 'png', dpr: 'device' }
+    screenshots: { directory: '', format: 'png', dpr: 'device' },
+    // Nothing saved and nowhere to call home: both are the user's to fill in,
+    // and a starter bookmark would be an advertisement.
+    bookmarks: [],
+    homeUrl: ''
   }
 }
 
@@ -222,6 +271,8 @@ export function mergePersistedState(
     layout: { ...(patch.layout ?? base.layout) },
     devtools: { ...(patch.devtools ?? base.devtools) },
     screenshots: { ...(patch.screenshots ?? base.screenshots) },
+    bookmarks: (patch.bookmarks ?? base.bookmarks).map(cloneBookmark),
+    homeUrl: patch.homeUrl ?? base.homeUrl,
     schemaVersion: SCHEMA_VERSION
   }
   return next
@@ -280,7 +331,9 @@ export function migratePersistedState(raw: unknown): MigrationResult {
       rotated: sanitizeRotated(doc['rotated']),
       layout: sanitizeLayout(doc['layout']),
       devtools: sanitizeDevtools(doc['devtools']),
-      screenshots: sanitizeScreenshots(doc['screenshots'])
+      screenshots: sanitizeScreenshots(doc['screenshots']),
+      bookmarks: sanitizeBookmarks(doc['bookmarks']),
+      homeUrl: sanitizeHomeUrl(doc['homeUrl'])
     },
     backup: null
   }
@@ -288,6 +341,60 @@ export function migratePersistedState(raw: unknown): MigrationResult {
 
 function cloneSuite(suite: Suite): Suite {
   return { id: suite.id, name: suite.name, deviceIds: [...suite.deviceIds] }
+}
+
+function cloneBookmark(bookmark: Bookmark): Bookmark {
+  return {
+    id: bookmark.id,
+    title: bookmark.title,
+    url: bookmark.url,
+    addedAt: bookmark.addedAt
+  }
+}
+
+/**
+ * Repair the bookmark list.
+ *
+ * Entry by entry, like the device list: one bookmark whose url stopped being
+ * loadable — a document hand-edited, a build that narrowed the allowed schemes
+ * — must not cost the user the other forty. The url is *normalized* rather than
+ * merely checked, so what comes back is exactly what a view could be told to
+ * load; a title is truncated rather than dropped, because a long one is still
+ * the user's label for the page.
+ */
+function sanitizeBookmarks(value: unknown): Bookmark[] {
+  if (!Array.isArray(value)) return []
+
+  const out: Bookmark[] = []
+  const seen = new Set<string>()
+  for (const entry of value.slice(0, MAX_BOOKMARKS)) {
+    if (typeof entry !== 'object' || entry === null) continue
+    const bookmark = entry as Record<string, unknown>
+    if (!isFilledString(bookmark['id']) || seen.has(bookmark['id'])) continue
+
+    const rawUrl = bookmark['url']
+    if (typeof rawUrl !== 'string' || rawUrl.length > MAX_URL_LENGTH) continue
+    const url = normalizeUrl(rawUrl)
+    if (url === null) continue
+
+    const title = bookmark['title']
+    const addedAt = bookmark['addedAt']
+
+    seen.add(bookmark['id'])
+    out.push({
+      id: bookmark['id'],
+      title: typeof title === 'string' ? title.slice(0, MAX_TITLE_LENGTH) : '',
+      url,
+      addedAt: typeof addedAt === 'number' && Number.isFinite(addedAt) && addedAt >= 0 ? addedAt : 0
+    })
+  }
+  return out
+}
+
+/** Repair the home page: a loadable url, or none at all. */
+function sanitizeHomeUrl(value: unknown): string {
+  if (typeof value !== 'string' || value === '' || value.length > MAX_URL_LENGTH) return ''
+  return normalizeUrl(value) ?? ''
 }
 
 function cloneSync(sync: SyncSettings): SyncSettings {

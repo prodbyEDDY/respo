@@ -7,11 +7,21 @@
  * back at its caller instead of reaching `ViewManager` or `nativeTheme`.
  */
 
-import type { DockPosition, InputEventPayload, ShotRequest, ThemeSource } from '@shared/ipc'
+import {
+  normalizeUrl,
+  type DockPosition,
+  type InputEventPayload,
+  type ShotRequest,
+  type ThemeSource
+} from '@shared/ipc'
 import {
   clampDockSize,
   isCanvasLayoutMode,
+  MAX_BOOKMARKS,
   MAX_PATH_LENGTH,
+  MAX_TITLE_LENGTH,
+  MAX_URL_LENGTH,
+  type Bookmark,
   type DevtoolsSettings,
   type LayoutSettings,
   type PersistedState,
@@ -194,8 +204,77 @@ export function validatePersistedPatch(
   if (patch['screenshots'] !== undefined) {
     out.screenshots = validateScreenshotSettings(patch['screenshots'], context.screenshotDirectory)
   }
+  if (patch['bookmarks'] !== undefined) out.bookmarks = validateBookmarks(patch['bookmarks'])
+  if (patch['homeUrl'] !== undefined) out.homeUrl = validateHomeUrl(patch['homeUrl'])
 
   return out
+}
+
+/**
+ * Validate the persisted bookmark list.
+ *
+ * Every url is put through `normalizeUrl` and the *normalized* one is stored:
+ * this list is a set of things a view will later be told to load, so "it
+ * parsed" is not the bar — it has to be a url a device view is allowed to open
+ * at all (spec §7a). A junk entry throws rather than being skipped, unlike the
+ * disk-repair path: this payload comes from code, not from a file someone
+ * edited, and a renderer sending one is a bug worth surfacing.
+ */
+export function validateBookmarks(value: unknown): Bookmark[] {
+  if (!Array.isArray(value)) fail('store:save bookmarks must be an array')
+  if (value.length > MAX_BOOKMARKS) {
+    fail(`store:save accepts at most ${MAX_BOOKMARKS} bookmarks`)
+  }
+
+  return value.map((entry) => {
+    if (typeof entry !== 'object' || entry === null) fail('bookmark must be an object')
+    const bookmark = entry as Record<string, unknown>
+
+    if (!isFilledString(bookmark['id']) || bookmark['id'].length > MAX_NAME_LENGTH) {
+      fail('bookmark.id must be a non-empty string')
+    }
+    const title = bookmark['title']
+    if (typeof title !== 'string' || title.length > MAX_TITLE_LENGTH) {
+      fail(`bookmark.title must be a string of at most ${MAX_TITLE_LENGTH} characters`)
+    }
+    const rawUrl = bookmark['url']
+    if (!isFilledString(rawUrl) || rawUrl.length > MAX_URL_LENGTH) {
+      fail(`bookmark.url must be a non-empty string of at most ${MAX_URL_LENGTH} characters`)
+    }
+    const url = normalizeUrl(rawUrl)
+    if (url === null) fail('bookmark.url is not a url a device view could load')
+
+    const addedAt = bookmark['addedAt']
+    if (typeof addedAt !== 'number' || !Number.isFinite(addedAt) || addedAt < 0) {
+      fail('bookmark.addedAt must be a non-negative timestamp')
+    }
+
+    return { id: bookmark['id'], title, url, addedAt }
+  })
+}
+
+/** Validate the persisted home page: a loadable url, or `''` for none. */
+export function validateHomeUrl(value: unknown): string {
+  if (value === '') return ''
+  if (typeof value !== 'string' || value.length > MAX_URL_LENGTH) {
+    fail(`store:save homeUrl must be a string of at most ${MAX_URL_LENGTH} characters`)
+  }
+  const url = normalizeUrl(value)
+  if (url === null) fail('store:save homeUrl is not a url a device view could load')
+  return url
+}
+
+/**
+ * Validate a `history:query` prefix.
+ *
+ * Nothing is looked up by it and nothing is executed with it — it is matched
+ * against strings — so the only thing worth refusing is a payload big enough to
+ * be an attack on the matcher itself.
+ */
+export function validateHistoryQuery(value: unknown): string {
+  if (typeof value !== 'string') fail('history:query expects a string')
+  if (value.length > MAX_URL_LENGTH) fail('history:query prefix is too long')
+  return value
 }
 
 /**

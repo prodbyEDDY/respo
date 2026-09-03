@@ -119,6 +119,30 @@ export type ShotStartResult = {
   queued: number
 }
 
+/**
+ * One row of the address bar's suggestion list.
+ *
+ * Built in main, where the history lives: the renderer asks for the few entries
+ * that match what is being typed rather than holding a copy of two thousand of
+ * them (`history:query`).
+ */
+export type HistorySuggestion = {
+  url: string
+  /** The page's own `<title>` as it was when it was visited. May be empty. */
+  title: string
+  /** When it was last visited, in epoch milliseconds. */
+  ts: number
+  /**
+   * The site's own icon as a `data:` url, when one was captured.
+   *
+   * A `data:` url and not a remote one: rendering `<img src="https://…">` in
+   * the toolbar would be Respo fetching a third-party asset from the *chrome*,
+   * outside the device session and outside anything the user asked for. Main
+   * downloads it once through the device session and caches it by origin.
+   */
+  favicon?: string
+}
+
 export type LoadState = 'loading' | 'ready' | 'failed'
 
 export type LoadStatePayload = {
@@ -342,6 +366,27 @@ export type IpcInvokeMap = {
    * of its own (CLAUDE.md §7).
    */
   'shot:choose-dir': { args: []; result: string | null }
+  /**
+   * The few history entries that match what is being typed.
+   *
+   * History lives in main — it is durable, it is capped at two thousand entries
+   * and it carries icons — so the renderer asks rather than holds. Called on a
+   * ~100ms debounce behind the address bar, which is typing rate and not an
+   * event stream (CLAUDE.md §4). An empty query answers with the most recent
+   * pages, which is what a freshly focused address bar should offer.
+   */
+  'history:query': { args: [string]; result: HistorySuggestion[] }
+  /** Forget every visited page, and the icons cached alongside them. */
+  'history:clear': { args: []; result: void }
+  /**
+   * Pick a local page through a system dialog. Answers with a `file:` url, or
+   * `null` when the user dismissed it.
+   *
+   * The dialog lives here for the same reason the backup ones do: the renderer
+   * names no paths of its own (CLAUDE.md §7), and it receives a url — already
+   * normalized — rather than a path it could then do something else with.
+   */
+  'file:open': { args: []; result: string | null }
 }
 
 export type IpcChannel = keyof IpcInvokeMap
@@ -377,7 +422,10 @@ const CHANNEL_REGISTRY: Record<IpcChannel, true> = {
   'shot:copy': true,
   'shot:reveal': true,
   'shot:get-dir': true,
-  'shot:choose-dir': true
+  'shot:choose-dir': true,
+  'history:query': true,
+  'history:clear': true,
+  'file:open': true
 }
 
 export const IPC_CHANNELS: readonly IpcChannel[] = Object.keys(CHANNEL_REGISTRY) as IpcChannel[]

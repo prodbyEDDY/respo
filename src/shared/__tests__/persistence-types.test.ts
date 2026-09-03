@@ -358,3 +358,96 @@ describe('the canvas layout slice', () => {
     expect(base.layout.mode).toBe('flex')
   })
 })
+
+describe('bookmarks and the home page', () => {
+  const bookmark = { id: 'bm-1', title: 'Example', url: 'https://example.com/', addedAt: 5 }
+
+  function stored(over: Record<string, unknown>): PersistedState {
+    return migratePersistedState({ ...defaultPersistedState(), ...over }).state
+  }
+
+  it('starts with nothing saved and nowhere to call home', () => {
+    const state = defaultPersistedState()
+    expect(state.bookmarks).toEqual([])
+    expect(state.homeUrl).toBe('')
+  })
+
+  it('reads back what was saved', () => {
+    expect(stored({ bookmarks: [bookmark], homeUrl: 'https://home.test/' })).toMatchObject({
+      bookmarks: [bookmark],
+      homeUrl: 'https://home.test/'
+    })
+  })
+
+  it('normalizes a stored url rather than trusting the file', () => {
+    expect(stored({ homeUrl: 'example.com' }).homeUrl).toBe('https://example.com/')
+    expect(stored({ bookmarks: [{ ...bookmark, url: 'example.com' }] }).bookmarks[0]?.url).toBe(
+      'https://example.com/'
+    )
+  })
+
+  it('drops one broken bookmark rather than the whole list', () => {
+    const state = stored({
+      bookmarks: [
+        bookmark,
+        { ...bookmark, id: 'bm-2', url: 'javascript:alert(1)' },
+        'not a bookmark',
+        { ...bookmark, id: 'bm-3', url: 'https://kept.test/' }
+      ]
+    })
+
+    expect(state.bookmarks.map((item) => item.id)).toEqual(['bm-1', 'bm-3'])
+  })
+
+  it('repairs the fields around a good url instead of dropping the row', () => {
+    const state = stored({ bookmarks: [{ id: 'bm-1', url: 'https://a.test/', title: 7 }] })
+
+    expect(state.bookmarks[0]).toEqual({
+      id: 'bm-1',
+      title: '',
+      url: 'https://a.test/',
+      addedAt: 0
+    })
+  })
+
+  it('keeps only the first of two bookmarks sharing an id', () => {
+    const state = stored({
+      bookmarks: [bookmark, { ...bookmark, url: 'https://second.test/' }]
+    })
+
+    expect(state.bookmarks).toHaveLength(1)
+  })
+
+  it.each([
+    ['a home page no view may load', 'javascript:alert(1)'],
+    ['a home page that is not a string', 7],
+    ['a home page longer than any url', `https://a.test/${'x'.repeat(3000)}`]
+  ])('reads %s as no home page', (_label, homeUrl) => {
+    expect(stored({ homeUrl }).homeUrl).toBe('')
+  })
+
+  it.each([
+    ['not an array', {}],
+    ['a string', 'bookmarks']
+  ])('reads a bookmark list that is %s as an empty one', (_label, bookmarks) => {
+    expect(stored({ bookmarks }).bookmarks).toEqual([])
+  })
+
+  it('merges both like every other slice — a value, not something to append to', () => {
+    const base = defaultPersistedState()
+    const merged = mergePersistedState(base, { bookmarks: [bookmark], homeUrl: 'https://h.test/' })
+
+    expect(merged.bookmarks).toEqual([bookmark])
+    // A clone, not the caller's array: the store keeps mutating its own copy.
+    expect(merged.bookmarks[0]).not.toBe(bookmark)
+    expect(merged.homeUrl).toBe('https://h.test/')
+  })
+
+  it('leaves both alone when a patch does not mention them', () => {
+    const base = { ...defaultPersistedState(), bookmarks: [bookmark], homeUrl: 'https://h.test/' }
+    const merged = mergePersistedState(base, { activeSuiteId: DEFAULT_SUITE_ID })
+
+    expect(merged.bookmarks).toEqual([bookmark])
+    expect(merged.homeUrl).toBe('https://h.test/')
+  })
+})

@@ -70,6 +70,8 @@ export function handleLayoutKey(event: KeyboardEvent): void {
   if (typeof document !== 'undefined') {
     if (document.querySelector('[data-slot="dialog-content"]') !== null) return
     if (document.querySelector('[data-slot="dropdown-menu-content"]') !== null) return
+    // The bookmark editor is a popover, and Escape is how it is dismissed.
+    if (document.querySelector('[data-slot="popover-content"]') !== null) return
   }
   if (usePanels.getState().inspecting) return
   if (isEditing(event.target)) return

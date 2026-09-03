@@ -129,6 +129,18 @@ export function selectCanGoForward(state: NavigationState): boolean {
   return Object.values(state.perDevice).some((payload) => payload.canGoForward === true)
 }
 
+/**
+ * What the page currently calls itself, or `''` before one has loaded.
+ *
+ * The *leading* view's title, for the same reason the address bar shows its
+ * url: there is one page here, and five viewports reporting it. It is what a
+ * new bookmark is named after.
+ */
+export function selectPageTitle(state: NavigationState): string {
+  if (state.leadDeviceId === null) return ''
+  return state.perDevice[state.leadDeviceId]?.title ?? ''
+}
+
 let unsubscribe: (() => void) | null = null
 let subscribers = 0
 
