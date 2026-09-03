@@ -43,6 +43,15 @@ export function AddressBar(): React.JSX.Element {
   const [invalid, setInvalid] = useState(false)
   const [listOpen, setListOpen] = useState(false)
   const [activeIndex, setActiveIndex] = useState(-1)
+  /**
+   * Whether the draft is something the user typed.
+   *
+   * Focus fills the field with the current url and selects it, so the text
+   * sitting there is not yet a query — filtering by it would answer "where do
+   * you want to go?" with "here". Until a key lands, the list offers everything
+   * it has, which is what main was asked for too (an empty `history:query`).
+   */
+  const [typed, setTyped] = useState(false)
   const invalidTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Derived, not synchronised: the field mirrors the store until the user takes
@@ -53,8 +62,8 @@ export function AddressBar(): React.JSX.Element {
   // zustand selector that built a new array every call would never compare
   // equal to itself and would re-render this until React gave up (error #185).
   const suggestions = useMemo(
-    () => mergeSuggestions(editing ? draft : '', bookmarks, historyRows),
-    [editing, draft, bookmarks, historyRows]
+    () => mergeSuggestions(typed ? draft : '', bookmarks, historyRows),
+    [typed, draft, bookmarks, historyRows]
   )
   const open = listOpen && suggestions.length > 0
   const active = open && activeIndex >= 0 ? suggestions[activeIndex] : undefined
@@ -142,6 +151,7 @@ export function AddressBar(): React.JSX.Element {
         )}
         onChange={(event) => {
           setDraft(event.target.value)
+          setTyped(true)
           setActiveIndex(-1)
           setListOpen(true)
           // Debounced inside the store: a keystroke is not a message, a pause
@@ -153,6 +163,7 @@ export function AddressBar(): React.JSX.Element {
         onFocus={(event) => {
           setDraft(url)
           setEditing(true)
+          setTyped(false)
           setListOpen(true)
           setActiveIndex(-1)
           // An empty query answers with the most recent pages, which is what a
