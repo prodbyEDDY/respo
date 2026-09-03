@@ -9,7 +9,10 @@ import {
   validateHistoryQuery,
   validateHomeUrl,
   validateLeadDeviceId,
+  validatePermissionDecision,
+  validatePermissionType,
   validatePersistedPatch,
+  validatePromptId,
   validateScreenshotDirectory,
   validateShotPath,
   validateShotRequest,
@@ -587,5 +590,70 @@ describe('validateClearTarget', () => {
     ['an object', {}]
   ])('rejects %s', (_label, value) => {
     expect(() => validateClearTarget(value)).toThrow(/invalid ipc payload/i)
+  })
+})
+
+describe('permission payloads', () => {
+  it.each([
+    'camera',
+    'microphone',
+    'geolocation',
+    'notifications',
+    'clipboard-read',
+    'fullscreen',
+    'midi',
+    'pointerLock'
+  ])('accepts the %s capability', (type) => {
+    expect(validatePermissionType(type)).toBe(type)
+  })
+
+  it.each([
+    ['a capability this build has no row for', 'display-capture'],
+    ['a prototype key', 'toString'],
+    ['null', null],
+    ['an object', {}]
+  ])('rejects %s as a capability', (_label, value) => {
+    expect(() => validatePermissionType(value)).toThrow(/invalid ipc payload/i)
+  })
+
+  it.each(['allow', 'block', 'ask'])('accepts the %s decision', (decision) => {
+    expect(validatePermissionDecision(decision)).toBe(decision)
+  })
+
+  it.each([
+    ['a decision this build does not know', 'maybe'],
+    ['a boolean', true],
+    ['null', null]
+  ])('rejects %s as a decision', (_label, value) => {
+    expect(() => validatePermissionDecision(value)).toThrow(/invalid ipc payload/i)
+  })
+
+  it('accepts a prompt id of the shape main mints', () => {
+    expect(validatePromptId('perm-7', 'permissions:respond')).toBe('perm-7')
+  })
+
+  it.each([
+    ['an empty string', ''],
+    ['a number', 7],
+    ['null', null],
+    ['a payload longer than any id', 'x'.repeat(200)]
+  ])('rejects %s as a prompt id', (_label, value) => {
+    expect(() => validatePromptId(value, 'permissions:respond')).toThrow(/invalid ipc payload/i)
+  })
+
+  /**
+   * The important one. `permissions` is main's field: a renderer that could
+   * patch it would skip the question entirely and write itself a camera on any
+   * site. The patch validator rebuilds what it accepts, so the key simply is
+   * not there on the other side.
+   */
+  it('drops a permissions slice out of a store:save patch', () => {
+    const patch = validatePersistedPatch({
+      permissions: { 'https://evil.example': { camera: 'allow' } },
+      homeUrl: 'example.com'
+    })
+
+    expect(patch).toEqual({ homeUrl: 'https://example.com/' })
+    expect('permissions' in patch).toBe(false)
   })
 })

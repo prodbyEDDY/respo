@@ -18,6 +18,7 @@ import { useDevices } from '@renderer/stores/devices'
 import { applyRotation, useLayout } from '@renderer/stores/layout'
 import { attachNavigationBridge, useNavigation } from '@renderer/stores/navigation'
 import { attachPanelsBridge, selectDockVisible, usePanels } from '@renderer/stores/panels'
+import { attachPermissionsBridge } from '@renderer/stores/permissions'
 import { useSettings } from '@renderer/stores/settings'
 import { attachShotsBridge, useShots } from '@renderer/stores/shots'
 import { useSync } from '@renderer/stores/sync'
@@ -130,6 +131,10 @@ function App(): React.JSX.Element {
 
   // Screenshot progress and results, batched the same way load events are.
   useEffect(() => attachShotsBridge(), [])
+
+  // What each site may do, and what one is asking for right now. Main is the
+  // authority — it hears the questions and owns the answers.
+  useEffect(() => attachPermissionsBridge(), [])
 
   // mod+i arms the element picker, Escape puts it away.
   useInspectHotkeys()

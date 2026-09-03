@@ -451,3 +451,80 @@ describe('bookmarks and the home page', () => {
     expect(merged.homeUrl).toBe('https://h.test/')
   })
 })
+
+describe('site permissions', () => {
+  function stored(over: Record<string, unknown>): PersistedState {
+    return migratePersistedState({ ...defaultPersistedState(), ...over }).state
+  }
+
+  it('starts with no site decided about', () => {
+    expect(defaultPersistedState().permissions).toEqual({})
+  })
+
+  it('reads back the decisions it was given', () => {
+    const permissions = {
+      'https://a.dev': { camera: 'allow', geolocation: 'block' },
+      'http://localhost:5173': { midi: 'allow' }
+    }
+    expect(stored({ permissions }).permissions).toEqual(permissions)
+  })
+
+  it.each([
+    ['a trailing slash', 'https://a.dev/'],
+    ['a path', 'https://a.dev/app'],
+    ['upper case', 'HTTPS://A.DEV'],
+    ['a file url', 'file:///C:/x.html'],
+    ['a scheme with no site behind it', 'about:blank'],
+    ['junk', 'not-an-origin'],
+    ['an empty key', '']
+  ])('drops an entry keyed by %s — only a canonical origin is a site', (_label, origin) => {
+    expect(stored({ permissions: { [origin]: { camera: 'allow' } } }).permissions).toEqual({})
+  })
+
+  it('drops one junk capability without costing the site the others', () => {
+    const permissions = {
+      'https://a.dev': { camera: 'allow', 'display-capture': 'allow', geolocation: 'maybe' }
+    }
+    expect(stored({ permissions }).permissions).toEqual({
+      'https://a.dev': { camera: 'allow' }
+    })
+  })
+
+  it('never stores "ask" — the absence of a row is what ask means', () => {
+    const permissions = { 'https://a.dev': { camera: 'ask' } }
+    expect(stored({ permissions }).permissions).toEqual({})
+  })
+
+  it('caps the number of sites it keeps decisions for', () => {
+    const permissions: Record<string, unknown> = {}
+    for (let n = 0; n < 250; n += 1) permissions[`https://s${n}.dev`] = { camera: 'allow' }
+
+    expect(Object.keys(stored({ permissions }).permissions)).toHaveLength(200)
+  })
+
+  it.each([
+    ['not an object', []],
+    ['a string', 'permissions'],
+    ['null', null]
+  ])('reads a permissions document that is %s as an empty one', (_label, permissions) => {
+    expect(stored({ permissions }).permissions).toEqual({})
+  })
+
+  it('merges like every other slice, and clones what it keeps', () => {
+    const permissions = { 'https://a.dev': { camera: 'allow' as const } }
+    const merged = mergePersistedState(defaultPersistedState(), { permissions })
+
+    expect(merged.permissions).toEqual(permissions)
+    expect(merged.permissions['https://a.dev']).not.toBe(permissions['https://a.dev'])
+  })
+
+  it('leaves it alone when a patch does not mention it', () => {
+    const base = {
+      ...defaultPersistedState(),
+      permissions: { 'https://a.dev': { camera: 'allow' as const } }
+    }
+    const merged = mergePersistedState(base, { homeUrl: '' })
+
+    expect(merged.permissions).toEqual(base.permissions)
+  })
+})

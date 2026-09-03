@@ -11,7 +11,13 @@ import {
 import { join } from 'path'
 import { pathToFileURL } from 'node:url'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
-import { normalizeUrl, type DevtoolsStatePayload } from '@shared/ipc'
+import {
+  DEFAULT_PERMISSION_DECISIONS,
+  normalizeUrl,
+  type DevtoolsStatePayload,
+  type MainEvent,
+  type PermissionStatePayload
+} from '@shared/ipc'
 import { defaultPersistedState } from '@shared/persistence-types'
 import { CDPController } from './cdp-controller'
 import { clearBrowsingData } from './clear-data'
@@ -30,6 +36,7 @@ import {
   type Persistence,
   type PersistenceBackend
 } from './persistence'
+import { createPermissionsManager, type PermissionsManager } from './permissions'
 import { createNodeShotFileSystem, ScreenshotQueue } from './screenshot-queue'
 import { DEVICE_PARTITION, installDevicePermissionHandlers, openExternalSafe } from './security'
 import { SyncEngine } from './sync-engine'
@@ -43,7 +50,10 @@ import {
   validateHistoryQuery,
   validateLeadDeviceId,
   validateOptionalDeviceId,
+  validatePermissionDecision,
+  validatePermissionType,
   validatePersistedPatch,
+  validatePromptId,
   validateScreenshotDirectory,
   validateShotPath,
   validateShotRequest,
@@ -70,6 +80,14 @@ let devtools: DevtoolsManager | null = null
 let inspector: Inspector | null = null
 let shots: ScreenshotQueue | null = null
 /**
+ * Who may use a camera, and which questions are waiting.
+ *
+ * Created before the window, unlike everything else above: the permission
+ * handlers have to be installed before any view exists, so no page can ask for
+ * anything before there is a policy to ask (`app.whenReady`).
+ */
+let permissions: PermissionsManager | null = null
+/**
  * Device names, by id, as the renderer last reported them.
  *
  * Main has no device catalog of its own — `views:sync-devices` is the whole
@@ -77,6 +95,22 @@ let shots: ScreenshotQueue | null = null
  * `iPhone 15` is a worse window.
  */
 const deviceNames = new Map<string, string>()
+
+/**
+ * The window main pushes events to, or `null` while there is none.
+ *
+ * Held rather than looked up: DevTools panels get `BrowserWindow`s of their own
+ * (`createDevtoolsPanelFactory`), so "the first window" is not a reliable name
+ * for Respo's own. Managers created before the window — the permission policy —
+ * push through this, and do nothing while it is null.
+ */
+let appWindow: BrowserWindow | null = null
+
+/** Send one main event to Respo's window, if it is there to receive it. */
+function pushToWindow(event: MainEvent): void {
+  if (appWindow === null || appWindow.isDestroyed()) return
+  sendMainEvent(appWindow.webContents, event)
+}
 
 /** Where a session opens when nothing else has an opinion. */
 const DEFAULT_START_URL = 'https://example.com'
@@ -150,6 +184,10 @@ function createWindow(): void {
     }
   })
 
+  // Managers created before the window (the permission policy) push through
+  // this; it is cleared again on `closed`.
+  appWindow = mainWindow
+
   // Which page the session is on, folded out of the same batch: history records
   // one visit for five viewports, and a clear knows whose data it would delete.
   lead = createLeadTracker()
@@ -160,6 +198,10 @@ function createWindow(): void {
     sendMainEvent(mainWindow.webContents, { type: 'load-state', payload })
     const page = lead?.apply(payload) ?? null
     if (page !== null) history?.record(page.url, page.title)
+    // The canvas may have moved to another site, and the permission panel is
+    // about *this* site. Costs nothing when it did not: the manager pushes only
+    // when the picture it would send actually changed.
+    permissions?.refresh()
   })
 
   // One CDP controller for the window's views, shared with the sync engine:
@@ -276,6 +318,7 @@ function createWindow(): void {
     loadStates = null
     stopSpike?.()
     stopSpike = null
+    appWindow = null
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
@@ -319,6 +362,14 @@ function emptyDevtoolsState(): DevtoolsStatePayload {
     dock: persistence?.load().devtools.dock ?? 'bottom',
     detachedDeviceIds: []
   }
+}
+
+/**
+ * What the permission channels answer with before the policy exists. Nobody has
+ * been asked anything, and no site has been decided about.
+ */
+function emptyPermissionState(): PermissionStatePayload {
+  return { origin: null, decisions: { ...DEFAULT_PERMISSION_DECISIONS }, prompts: [] }
 }
 
 /**
@@ -562,6 +613,31 @@ function registerIpcHandlers(): void {
     return result
   })
 
+  // Permissions. The renderer answers a *question* by id and sets a capability
+  // by type; it never names an origin, for the same reason a clear does not
+  // (`permissions.ts`). Reads answer with the whole picture, so the panel never
+  // has to reconcile a delta against what it was pushed.
+  registerHandler('permissions:get', () => permissions?.state() ?? emptyPermissionState())
+
+  registerHandler('permissions:respond', (_event, id, allow) => {
+    permissions?.respond(
+      validatePromptId(id, 'permissions:respond'),
+      validateBoolean(allow, 'permissions:respond')
+    )
+  })
+
+  registerHandler('permissions:dismiss', (_event, id) => {
+    permissions?.dismiss(validatePromptId(id, 'permissions:dismiss'))
+  })
+
+  registerHandler('permissions:set', (_event, type, decision) => {
+    const capability = validatePermissionType(type)
+    const answer = validatePermissionDecision(decision)
+    return permissions?.setDecision(capability, answer) ?? emptyPermissionState()
+  })
+
+  registerHandler('permissions:reset', () => permissions?.resetOrigin() ?? emptyPermissionState())
+
   // The one-way stream from the device views. Its sender is an untrusted page,
   // so the batch is validated (and clamped) before the engine sees any of it;
   // anything malformed is dropped rather than thrown back at the page.
@@ -605,8 +681,23 @@ app.whenReady().then(() => {
   // the same value to the DOM once it has hydrated.
   nativeTheme.themeSource = persistence.load().ui.theme
 
+  // The policy behind the permission handlers. It reads and writes the
+  // `permissions` slice of the document *directly*, without going through
+  // `store:save`: that slice is main's field, and the renderer's patches never
+  // carry it (`validate.ts`).
+  permissions = createPermissionsManager({
+    store: {
+      read: () => persistence?.load().permissions ?? {},
+      write: (next) => persistence?.save({ permissions: next })
+    },
+    // The site the *canvas* is on — what the panel is about. A request always
+    // carries its own requesting origin and never consults this.
+    currentOrigin: () => lead?.url() ?? null,
+    onState: (payload) => pushToWindow({ type: 'permission-state', payload })
+  })
+
   // Before the first view exists, so no page can ask for anything first.
-  installDevicePermissionHandlers()
+  installDevicePermissionHandlers(permissions)
 
   registerIpcHandlers()
 
@@ -629,6 +720,11 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  // Before the store is flushed: a question answered in the last moment of the
+  // session is a decision that still has to reach disk. Everything left waiting
+  // is denied — nothing may be left holding a callback nobody can answer.
+  permissions?.dispose()
+  permissions = null
   // Flush first: a debounced patch from the last second of the session must
   // reach disk before anything else starts tearing down.
   persistence?.dispose()

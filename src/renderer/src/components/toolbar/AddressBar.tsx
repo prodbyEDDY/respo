@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { GlobeAltIcon, HomeIcon } from '@heroicons/react/24/outline'
+import { HomeIcon } from '@heroicons/react/24/outline'
 import { normalizeUrl } from '@shared/ipc'
 import { Button } from '@renderer/components/ui/button'
 import { Input } from '@renderer/components/ui/input'
@@ -11,6 +11,7 @@ import { useHistory } from '@renderer/stores/history'
 import { useNavigation } from '@renderer/stores/navigation'
 import { AddressSuggestions, type AddressSuggestion } from './AddressSuggestions'
 import { BookmarkStar } from './BookmarkStar'
+import { SiteShield } from './SitePermissions'
 
 /** Long enough to be seen, short enough not to be an error state. */
 const INVALID_HINT_MS = 1500
@@ -120,10 +121,15 @@ export function AddressBar(): React.JSX.Element {
 
   return (
     <div className="relative flex min-w-0 flex-1 items-center">
-      <GlobeAltIcon
-        aria-hidden="true"
-        className="pointer-events-none absolute left-2.5 size-4 text-muted-foreground"
-      />
+      {/*
+        Where a browser puts the padlock, and for the same reason: what this
+        site is allowed to do belongs beside its address, not in a settings
+        dialog three clicks away. It is also where a permission question
+        appears, anchored to the thing it is about.
+      */}
+      <div className="absolute left-1 flex items-center">
+        <SiteShield />
+      </div>
       <Input
         ref={inputRef}
         type="text"
@@ -142,7 +148,7 @@ export function AddressBar(): React.JSX.Element {
         data-invalid={invalid ? 'true' : undefined}
         aria-invalid={invalid || undefined}
         className={cn(
-          'h-8 rounded-full pl-8 text-caption',
+          'h-8 rounded-full pl-9 text-caption',
           // Room for the star, and for the home button when there is one.
           homeUrl === '' ? 'pr-9' : 'pr-16',
           // Colour only, 150ms — the field must not move (DESIGN-SYSTEM.md).

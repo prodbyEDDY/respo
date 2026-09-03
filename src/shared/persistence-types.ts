@@ -10,8 +10,10 @@
 import { slugify } from './custom-devices'
 import { DEFAULT_ACTIVE_DEVICE_IDS } from './deviceCatalog'
 import {
+  isPermissionType,
   normalizeUrl,
   type DockPosition,
+  type PermissionType,
   type ShotDpr,
   type ShotFormat,
   type ThemeSource
@@ -132,6 +134,35 @@ export type Bookmark = {
   addedAt: number
 }
 
+/**
+ * What one origin is allowed to do.
+ *
+ * Only the *decisions* are stored. `ask` is the absence of an entry, so a user
+ * who resets a permission leaves nothing behind, and the document does not grow
+ * by eight rows for every site ever visited.
+ */
+export type OriginPermissions = Partial<Record<PermissionType, 'allow' | 'block'>>
+
+/**
+ * Every site decision, keyed by origin (`https://example.com`).
+ *
+ * Written by *main* and never by the renderer: a `store:save` carrying this key
+ * is dropped at the boundary (`main/validate.ts`), because a compromised
+ * renderer that could patch it could grant itself a camera on any site. The only
+ * doors in are answering a prompt and the permission panel, both of which go
+ * through `permissions:*` where main supplies the origin.
+ */
+export type PermissionsDocument = Record<string, OriginPermissions>
+
+/**
+ * More sites than anyone reviews by hand. A document past this is not a list of
+ * decisions any more, and the oldest entries are the ones nobody remembers.
+ */
+export const MAX_PERMISSION_ORIGINS = 200
+
+/** An origin string is `scheme://host[:port]`; longer than this is not one. */
+export const MAX_ORIGIN_LENGTH = 260
+
 /** More saved pages than a toolbar menu could ever be a way into. */
 export const MAX_BOOKMARKS = 500
 /**
@@ -175,6 +206,8 @@ export type PersistedState = {
   screenshots: ScreenshotSettings
   /** Saved pages, newest first. See `Bookmark`. */
   bookmarks: Bookmark[]
+  /** What each site is allowed to do. Main's field. See `PermissionsDocument`. */
+  permissions: PermissionsDocument
   /**
    * The page every session opens on, or `''` for "no home page".
    *
@@ -243,6 +276,9 @@ export function defaultPersistedState(): PersistedState {
     // Nothing saved and nowhere to call home: both are the user's to fill in,
     // and a starter bookmark would be an advertisement.
     bookmarks: [],
+    // No site has been given anything, and no site has been refused: every
+    // capability starts at its default (`DEFAULT_PERMISSION_DECISIONS`).
+    permissions: {},
     homeUrl: ''
   }
 }
@@ -272,6 +308,7 @@ export function mergePersistedState(
     devtools: { ...(patch.devtools ?? base.devtools) },
     screenshots: { ...(patch.screenshots ?? base.screenshots) },
     bookmarks: (patch.bookmarks ?? base.bookmarks).map(cloneBookmark),
+    permissions: clonePermissions(patch.permissions ?? base.permissions),
     homeUrl: patch.homeUrl ?? base.homeUrl,
     schemaVersion: SCHEMA_VERSION
   }
@@ -333,6 +370,7 @@ export function migratePersistedState(raw: unknown): MigrationResult {
       devtools: sanitizeDevtools(doc['devtools']),
       screenshots: sanitizeScreenshots(doc['screenshots']),
       bookmarks: sanitizeBookmarks(doc['bookmarks']),
+      permissions: sanitizePermissions(doc['permissions']),
       homeUrl: sanitizeHomeUrl(doc['homeUrl'])
     },
     backup: null
@@ -387,6 +425,68 @@ function sanitizeBookmarks(value: unknown): Bookmark[] {
       url,
       addedAt: typeof addedAt === 'number' && Number.isFinite(addedAt) && addedAt >= 0 ? addedAt : 0
     })
+  }
+  return out
+}
+
+/**
+ * Whether a string is an origin this document is willing to key a decision by.
+ *
+ * Canonical or nothing: `url.origin` has to come back *identical*, so
+ * `https://example.com/` and `HTTPS://EXAMPLE.COM` never become second entries
+ * that silently disagree with the first about what a site may do. Only http(s)
+ * — a `file:` page has no origin (Chromium calls it `"null"`), and one shared by
+ * every local file is not a site anyone can make a decision about.
+ */
+export function isStorableOrigin(value: unknown): value is string {
+  if (typeof value !== 'string' || value === '' || value.length > MAX_ORIGIN_LENGTH) return false
+  try {
+    const url = new URL(value)
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return false
+    return url.origin === value
+  } catch {
+    return false
+  }
+}
+
+function clonePermissions(document: PermissionsDocument): PermissionsDocument {
+  const out: PermissionsDocument = {}
+  for (const [origin, decisions] of Object.entries(document)) out[origin] = { ...decisions }
+  return out
+}
+
+/**
+ * Repair the site decisions.
+ *
+ * Entry by entry, and *pair* by pair inside an entry: a hand-edited document
+ * with one junk capability must not cost the user the camera they allowed on
+ * the same site. Anything that is not a canonical origin, a known type and a
+ * decision worth storing is simply not there — which lands the affected
+ * capability back on its default, the safe reading in every case.
+ */
+function sanitizePermissions(value: unknown): PermissionsDocument {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return {}
+
+  const out: PermissionsDocument = {}
+  let origins = 0
+  for (const [origin, entry] of Object.entries(value)) {
+    if (origins >= MAX_PERMISSION_ORIGINS) break
+    if (!isStorableOrigin(origin)) continue
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) continue
+
+    const decisions: OriginPermissions = {}
+    let kept = false
+    for (const [type, decision] of Object.entries(entry)) {
+      if (!isPermissionType(type)) continue
+      if (decision !== 'allow' && decision !== 'block') continue
+      decisions[type] = decision
+      kept = true
+    }
+    // An origin with nothing left to say is not an entry; storing it would grow
+    // the document by a row that means "the defaults", which is what no row means.
+    if (!kept) continue
+    out[origin] = decisions
+    origins += 1
   }
   return out
 }

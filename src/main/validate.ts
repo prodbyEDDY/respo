@@ -8,10 +8,14 @@
  */
 
 import {
+  isPermissionDecision,
+  isPermissionType,
   normalizeUrl,
   type ClearTarget,
   type DockPosition,
   type InputEventPayload,
+  type PermissionDecision,
+  type PermissionType,
   type ShotRequest,
   type ThemeSource
 } from '@shared/ipc'
@@ -207,6 +211,12 @@ export function validatePersistedPatch(
   }
   if (patch['bookmarks'] !== undefined) out.bookmarks = validateBookmarks(patch['bookmarks'])
   if (patch['homeUrl'] !== undefined) out.homeUrl = validateHomeUrl(patch['homeUrl'])
+  // `permissions` is deliberately absent, and it is not an oversight: it is
+  // main's field, like the screenshots folder above. A patch that could set it
+  // would be a renderer writing `{"https://evil.example": {"camera": "allow"}}`
+  // into the document and skipping the question entirely. The only doors into
+  // that slice are answering a prompt and the permission panel, and both of
+  // them go through `permissions:*`, where main supplies the origin.
 
   return out
 }
@@ -275,6 +285,38 @@ export function validateHomeUrl(value: unknown): string {
 export function validateHistoryQuery(value: unknown): string {
   if (typeof value !== 'string') fail('history:query expects a string')
   if (value.length > MAX_URL_LENGTH) fail('history:query prefix is too long')
+  return value
+}
+
+/**
+ * The longest correlation id main ever mints (`perm-…`, `auth-…`). An argument
+ * past this is not one of ours and there is nothing to look up.
+ */
+const MAX_PROMPT_ID_LENGTH = 64
+
+/**
+ * Validate a prompt id — a `permissions:respond` or `auth:respond` argument.
+ *
+ * Shape only. Whether it names a *live* question is the manager's answer, and
+ * an id it does not know is ignored rather than refused: a prompt settled a
+ * frame before the click is a race, not an attack.
+ */
+export function validatePromptId(value: unknown, what: string): string {
+  if (!isFilledString(value) || value.length > MAX_PROMPT_ID_LENGTH) {
+    fail(`${what} expects a prompt id`)
+  }
+  return value
+}
+
+/** Validate a `permissions:set` capability. */
+export function validatePermissionType(value: unknown): PermissionType {
+  if (!isPermissionType(value)) fail('permissions:set expects a known capability')
+  return value
+}
+
+/** Validate a `permissions:set` decision. */
+export function validatePermissionDecision(value: unknown): PermissionDecision {
+  if (!isPermissionDecision(value)) fail("permissions:set expects 'allow', 'block' or 'ask'")
   return value
 }
 

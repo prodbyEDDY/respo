@@ -158,6 +158,118 @@ export type ClearResult =
   | { ok: false; reason: 'no-origin' }
   | { ok: false; reason: 'failed'; message: string }
 
+/**
+ * The site capabilities Respo is willing to talk about.
+ *
+ * Eight, and deliberately not "whatever Chromium supports": every entry here is
+ * something a person can be asked a yes/no question about and answer without
+ * knowing what a permission is. Anything else a page asks for — display capture,
+ * idle detection, window management, storage access — has no row in the panel
+ * and is refused without a prompt, because a dialog nobody can evaluate is worse
+ * than a no (`mapPermission` in `main/permissions.ts`).
+ *
+ * `camera` and `microphone` are one Electron permission (`media`) split by the
+ * media types the page asked for; a request for both carries both.
+ */
+export type PermissionType =
+  | 'camera'
+  | 'microphone'
+  | 'geolocation'
+  | 'notifications'
+  | 'clipboard-read'
+  | 'fullscreen'
+  | 'midi'
+  | 'pointerLock'
+
+/** Every permission type, in the order the panel lists them. */
+export const PERMISSION_TYPES: readonly PermissionType[] = [
+  'camera',
+  'microphone',
+  'geolocation',
+  'notifications',
+  'clipboard-read',
+  'fullscreen',
+  'midi',
+  'pointerLock'
+]
+
+export function isPermissionType(value: unknown): value is PermissionType {
+  return PERMISSION_TYPES.includes(value as PermissionType)
+}
+
+/**
+ * What an origin is allowed to do with one capability.
+ *
+ * `ask` is the absence of a decision, not a third stored value: only `allow` and
+ * `block` are written to disk, and a permission *check* — the silent question
+ * Chromium asks before it even reaches the request handler — answers `false` for
+ * `ask`, because "we would have asked" is not consent.
+ */
+export type PermissionDecision = 'allow' | 'block' | 'ask'
+
+export function isPermissionDecision(value: unknown): value is PermissionDecision {
+  return value === 'allow' || value === 'block' || value === 'ask'
+}
+
+/**
+ * What an origin may do before anyone has said anything about it.
+ *
+ * `ask` everywhere except fullscreen, and that exception is a UX call rather
+ * than a security one: fullscreen is what a video player requests the instant
+ * someone clicks play, it is visible the moment it happens, it is undone with
+ * Escape, and it reveals nothing. Prompting for it would put a dialog between
+ * the user and every video on the web. Every other row here reaches a camera, a
+ * location, a clipboard or a notification tray, and none of those may start on.
+ *
+ * The panel can still set fullscreen to `ask` or `block` per origin — this is
+ * the default, not a floor.
+ */
+export const DEFAULT_PERMISSION_DECISIONS: Readonly<Record<PermissionType, PermissionDecision>> = {
+  camera: 'ask',
+  microphone: 'ask',
+  geolocation: 'ask',
+  notifications: 'ask',
+  'clipboard-read': 'ask',
+  fullscreen: 'allow',
+  midi: 'ask',
+  pointerLock: 'ask'
+}
+
+/**
+ * One question waiting for an answer.
+ *
+ * `types` is usually a single entry. `getUserMedia({ video: true, audio: true })`
+ * is the exception: one Electron request covering two of Respo's types, and both
+ * have to be granted for it to be granted at all.
+ */
+export type PermissionPrompt = {
+  /**
+   * Correlation id. The renderer answers *this* question — never "the pending
+   * one" — so a second request arriving between render and click cannot be
+   * answered by a button the user pressed for the first.
+   */
+  id: string
+  /** The site that asked, as main derived it. Never taken from the renderer. */
+  origin: string
+  types: PermissionType[]
+}
+
+/**
+ * Everything the permission UI draws, in one payload.
+ *
+ * `origin` is the site the canvas is on — computed in main, from the url the
+ * views are actually showing, for the same reason a clear's origin is
+ * (`main/clear-data.ts`): a renderer that could name an origin could grant a
+ * capability to any site on the machine.
+ */
+export type PermissionStatePayload = {
+  origin: string | null
+  /** The decision for every type at `origin`, defaults already applied. */
+  decisions: Record<PermissionType, PermissionDecision>
+  /** Questions waiting for an answer, oldest first. */
+  prompts: PermissionPrompt[]
+}
+
 export type LoadState = 'loading' | 'ready' | 'failed'
 
 export type LoadStatePayload = {
@@ -196,6 +308,15 @@ export type MainEvent =
    * job, not fifteen (CLAUDE.md §4).
    */
   | { type: 'shot-state'; payload: ShotStatePayload[] }
+  /**
+   * The whole permission picture: the canvas's origin, its decisions, and every
+   * question waiting for an answer.
+   *
+   * One message rather than an event per request — five viewports asking for the
+   * microphone at once is one prompt and one push (CLAUDE.md §4) — and the whole
+   * state rather than a delta, so the renderer never has to reconcile.
+   */
+  | { type: 'permission-state'; payload: PermissionStatePayload }
 
 /**
  * One interaction captured in a device view, in device-independent terms.
@@ -412,6 +533,43 @@ export type IpcInvokeMap = {
    * showing state that no longer exists.
    */
   'data:clear': { args: [ClearTarget]; result: ClearResult }
+  /**
+   * The permission state for the site the canvas is on.
+   *
+   * Asked when the panel opens rather than mirrored continuously: main pushes
+   * `permission-state` whenever something changes, and this is the answer for a
+   * renderer that has just started and has not been pushed anything yet.
+   */
+  'permissions:get': { args: []; result: PermissionStatePayload }
+  /**
+   * Answer one prompt: `(id, allow)`.
+   *
+   * The id is the whole point — see `PermissionPrompt.id`. Every callback that
+   * was coalesced behind that question is resolved, and the answer is *kept* for
+   * the origin, the way a browser keeps it: the panel is where it is changed
+   * back.
+   */
+  'permissions:respond': { args: [string, boolean]; result: void }
+  /**
+   * Put one prompt away without answering it.
+   *
+   * What clicking outside the bubble means, and it is deliberately *not* a
+   * block: dismissing a question is "not now", and turning an accidental click
+   * on the canvas into a decision remembered forever would be a trap. The
+   * request is refused this time and the page is free to ask again.
+   */
+  'permissions:dismiss': { args: [string]; result: void }
+  /**
+   * Set one capability for the site the canvas is on.
+   *
+   * The renderer names the type and the decision, never the origin: main is the
+   * side that knows which site the views are showing, and an origin taken from
+   * a payload would be a compromised renderer granting the camera to any site
+   * on the machine.
+   */
+  'permissions:set': { args: [PermissionType, PermissionDecision]; result: PermissionStatePayload }
+  /** Forget every decision for the site the canvas is on. */
+  'permissions:reset': { args: []; result: PermissionStatePayload }
 }
 
 export type IpcChannel = keyof IpcInvokeMap
@@ -451,7 +609,12 @@ const CHANNEL_REGISTRY: Record<IpcChannel, true> = {
   'history:query': true,
   'history:clear': true,
   'file:open': true,
-  'data:clear': true
+  'data:clear': true,
+  'permissions:get': true,
+  'permissions:respond': true,
+  'permissions:dismiss': true,
+  'permissions:set': true,
+  'permissions:reset': true
 }
 
 export const IPC_CHANNELS: readonly IpcChannel[] = Object.keys(CHANNEL_REGISTRY) as IpcChannel[]
