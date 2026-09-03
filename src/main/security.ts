@@ -6,7 +6,7 @@
  * same in both cases: nothing the page asks for is granted implicitly.
  */
 
-import { session, shell } from 'electron'
+import { session, shell, type WebContents } from 'electron'
 
 /**
  * The session every device view shares. Declared here so the permission policy
@@ -95,4 +95,50 @@ export function installDevicePermissionHandlers(gate: PermissionGate | null = nu
     const mediaType = details.mediaType === 'unknown' ? undefined : details.mediaType
     return gate.check(requestingOrigin, permission, mediaType)
   })
+}
+
+/**
+ * Whether this `webContents` is one of the device views.
+ *
+ * The question behind two app-level events — a certificate error and an
+ * authentication challenge — where the answer decides whether a relaxation
+ * applies. Respo's own window and the DevTools frontends live in the default
+ * session; only device views are on `DEVICE_PARTITION`, and
+ * `session.fromPartition` returns the same `Session` object every time, so
+ * identity is the whole check.
+ *
+ * Deliberately not "is it not the main window": new surfaces get added over
+ * time, and a check that lists what to exclude eventually forgets one. This one
+ * names what to *include*.
+ */
+export function isDeviceWebContents(target: WebContents | null | undefined): boolean {
+  if (target === null || target === undefined) return false
+  try {
+    if (target.isDestroyed()) return false
+    return target.session === session.fromPartition(DEVICE_PARTITION)
+  } catch {
+    // A `webContents` tearing down mid-event is not a device view any more.
+    return false
+  }
+}
+
+/**
+ * Whether a certificate Chromium refused should be accepted anyway.
+ *
+ * Both halves are required, and the second one is not negotiable. "Allow
+ * invalid certificates" is a setting about the *pages being developed* — a
+ * staging box with a self-signed certificate, a local server with a name
+ * Chromium does not like — and it must never reach Respo's own window, its
+ * DevTools frontends, or anything else in the default session. A tool that
+ * relaxed TLS everywhere because someone wanted to open `https://localhost`
+ * would be a tool that quietly downgraded everything it touches.
+ *
+ * A named function, and a trivial one, because it is the security invariant of
+ * this feature and it should be impossible to change without a test noticing.
+ */
+export function shouldTrustCertificate(options: {
+  allowInsecure: boolean
+  isDeviceView: boolean
+}): boolean {
+  return options.allowInsecure && options.isDeviceView
 }

@@ -270,6 +270,43 @@ export type PermissionStatePayload = {
   prompts: PermissionPrompt[]
 }
 
+/**
+ * One HTTP authentication challenge, as the renderer hears about it.
+ *
+ * Coalesced in main: five viewports loading the same protected page produce
+ * five `login` events and exactly one of these.
+ */
+export type AuthPrompt = {
+  /**
+   * Correlation id, for the same reason a permission prompt has one — and here
+   * it carries more weight: an answer that reached the *wrong* challenge would
+   * send one site's password to another server. Every reply names the challenge
+   * it belongs to; nothing here answers "the pending one".
+   */
+  id: string
+  /** `host` or `host:port`, as a person would read it back. */
+  host: string
+  /** A proxy asking, rather than the site. Worth saying out loud. */
+  isProxy: boolean
+  /**
+   * The realm the server named, when it named one.
+   *
+   * Server-controlled text, shown to the user, so main truncates it before it
+   * travels — a "realm" a kilobyte long is not a realm.
+   */
+  realm?: string
+}
+
+/**
+ * A username and password on their way to one challenge.
+ *
+ * They travel once and are never written to disk, never logged, and dropped
+ * from the renderer's own state the moment they are sent. Respo has no password
+ * store and is not going to grow one: the OS and the browser the user already
+ * trusts are better at that than a development tool.
+ */
+export type AuthCredentials = { username: string; password: string }
+
 export type LoadState = 'loading' | 'ready' | 'failed'
 
 export type LoadStatePayload = {
@@ -317,6 +354,12 @@ export type MainEvent =
    * state rather than a delta, so the renderer never has to reconcile.
    */
   | { type: 'permission-state'; payload: PermissionStatePayload }
+  /**
+   * Authentication challenges waiting for an answer, oldest first. The whole
+   * list, coalesced the same way everything else is — a page with a protected
+   * image on every viewport is one message, not ten.
+   */
+  | { type: 'auth-state'; payload: AuthPrompt[] }
 
 /**
  * One interaction captured in a device view, in device-independent terms.
@@ -570,6 +613,15 @@ export type IpcInvokeMap = {
   'permissions:set': { args: [PermissionType, PermissionDecision]; result: PermissionStatePayload }
   /** Forget every decision for the site the canvas is on. */
   'permissions:reset': { args: []; result: PermissionStatePayload }
+  /**
+   * Answer one authentication challenge: `(id, credentials)`, or `null` to
+   * cancel.
+   *
+   * Cancelling is a decision, not an error: the request goes on without
+   * credentials and the server answers with whatever it answers — usually a
+   * 401 page, which is a perfectly good thing to be looking at.
+   */
+  'auth:respond': { args: [string, AuthCredentials | null]; result: void }
 }
 
 export type IpcChannel = keyof IpcInvokeMap
@@ -614,7 +666,8 @@ const CHANNEL_REGISTRY: Record<IpcChannel, true> = {
   'permissions:respond': true,
   'permissions:dismiss': true,
   'permissions:set': true,
-  'permissions:reset': true
+  'permissions:reset': true,
+  'auth:respond': true
 }
 
 export const IPC_CHANNELS: readonly IpcChannel[] = Object.keys(CHANNEL_REGISTRY) as IpcChannel[]

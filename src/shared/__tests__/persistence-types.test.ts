@@ -528,3 +528,48 @@ describe('site permissions', () => {
     expect(merged.permissions).toEqual(base.permissions)
   })
 })
+
+describe('the safety switches', () => {
+  function stored(over: Record<string, unknown>): PersistedState {
+    return migratePersistedState({ ...defaultPersistedState(), ...over }).state
+  }
+
+  it('starts with certificates enforced', () => {
+    expect(defaultPersistedState().security).toEqual({ allowInsecureCertificates: false })
+  })
+
+  it('reads back an explicit true', () => {
+    expect(stored({ security: { allowInsecureCertificates: true } }).security).toEqual({
+      allowInsecureCertificates: true
+    })
+  })
+
+  it.each([
+    ['a truthy string', { allowInsecureCertificates: 'true' }],
+    ['a number', { allowInsecureCertificates: 1 }],
+    ['null', { allowInsecureCertificates: null }],
+    ['nothing at all', {}]
+  ])('reads %s as certificates staying enforced', (_label, security) => {
+    expect(stored({ security }).security.allowInsecureCertificates).toBe(false)
+  })
+
+  it.each([
+    ['not an object', 'yes'],
+    ['an array', []],
+    ['null', null]
+  ])('reads a slice that is %s as the strict default', (_label, security) => {
+    expect(stored({ security }).security).toEqual({ allowInsecureCertificates: false })
+  })
+
+  it('merges like every other slice', () => {
+    const merged = mergePersistedState(defaultPersistedState(), {
+      security: { allowInsecureCertificates: true }
+    })
+    expect(merged.security.allowInsecureCertificates).toBe(true)
+  })
+
+  it('leaves it alone when a patch does not mention it', () => {
+    const base = { ...defaultPersistedState(), security: { allowInsecureCertificates: true } }
+    expect(mergePersistedState(base, { homeUrl: '' }).security).toEqual(base.security)
+  })
+})

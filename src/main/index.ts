@@ -19,6 +19,7 @@ import {
   type PermissionStatePayload
 } from '@shared/ipc'
 import { defaultPersistedState } from '@shared/persistence-types'
+import { authHostLabel, authRealmLabel, createAuthManager, type AuthManager } from './auth'
 import { CDPController } from './cdp-controller'
 import { clearBrowsingData } from './clear-data'
 import { DevtoolsManager } from './devtools-manager'
@@ -38,9 +39,16 @@ import {
 } from './persistence'
 import { createPermissionsManager, type PermissionsManager } from './permissions'
 import { createNodeShotFileSystem, ScreenshotQueue } from './screenshot-queue'
-import { DEVICE_PARTITION, installDevicePermissionHandlers, openExternalSafe } from './security'
+import {
+  DEVICE_PARTITION,
+  installDevicePermissionHandlers,
+  isDeviceWebContents,
+  openExternalSafe,
+  shouldTrustCertificate
+} from './security'
 import { SyncEngine } from './sync-engine'
 import {
+  validateAuthCredentials,
   validateBoolean,
   validateBounds,
   validateClearTarget,
@@ -87,6 +95,14 @@ let shots: ScreenshotQueue | null = null
  * anything before there is a policy to ask (`app.whenReady`).
  */
 let permissions: PermissionsManager | null = null
+/**
+ * The HTTP authentication challenges waiting for an answer.
+ *
+ * App-scoped like the permission policy, and for the same reason: `login` is an
+ * `app` event, and a challenge can arrive before the renderer has finished
+ * hydrating.
+ */
+let auth: AuthManager | null = null
 /**
  * Device names, by id, as the renderer last reported them.
  *
@@ -373,6 +389,47 @@ function emptyPermissionState(): PermissionStatePayload {
 }
 
 /**
+ * The two app-level events where a *server* gets to interrupt the user.
+ *
+ * Both are scoped to the device views, and the scoping is the point. Respo's
+ * own window has nothing to authenticate to and no certificate to forgive, and
+ * a relaxation that reached it would be a relaxation of the tool rather than of
+ * the pages under development (`security.ts`).
+ */
+function installNetworkPrompts(): void {
+  app.on('login', (event, webContents, _details, authInfo, callback) => {
+    // Not a device view: leave Electron's default in place, which is to cancel
+    // the request. Nothing in Respo's own chrome should ever be logging in.
+    if (auth === null || !isDeviceWebContents(webContents)) return
+
+    // Taking the callback over. From here the request waits for us, so every
+    // path below has to end in the callback being called exactly once — which
+    // is what `AuthManager` guarantees, including on dispose.
+    event.preventDefault()
+    auth.challenge(
+      authHostLabel(authInfo.scheme, authInfo.host, authInfo.port),
+      authInfo.isProxy,
+      authRealmLabel(authInfo.realm),
+      callback
+    )
+  })
+
+  app.on('certificate-error', (event, webContents, _url, _error, _certificate, callback) => {
+    const trust = shouldTrustCertificate({
+      allowInsecure: persistence?.load().security.allowInsecureCertificates === true,
+      isDeviceView: isDeviceWebContents(webContents)
+    })
+    if (!trust) {
+      // The documented shape of a refusal: no `preventDefault`, and `false`.
+      callback(false)
+      return
+    }
+    event.preventDefault()
+    callback(true)
+  })
+}
+
+/**
  * Every handler is attached through `registerHandler`, so `@shared/ipc` stays
  * the only place a channel can be introduced.
  */
@@ -638,6 +695,14 @@ function registerIpcHandlers(): void {
 
   registerHandler('permissions:reset', () => permissions?.resetOrigin() ?? emptyPermissionState())
 
+  // Authentication. The reply names the challenge it answers — never "the
+  // pending one" — and the credentials are handed straight to the Electron
+  // callbacks waiting behind it. Nothing about this payload is logged, here or
+  // anywhere below it (`auth.ts`).
+  registerHandler('auth:respond', (_event, id, credentials) => {
+    auth?.respond(validatePromptId(id, 'auth:respond'), validateAuthCredentials(credentials))
+  })
+
   // The one-way stream from the device views. Its sender is an untrusted page,
   // so the batch is validated (and clamped) before the engine sees any of it;
   // anything malformed is dropped rather than thrown back at the page.
@@ -699,6 +764,14 @@ app.whenReady().then(() => {
   // Before the first view exists, so no page can ask for anything first.
   installDevicePermissionHandlers(permissions)
 
+  // The other two things a *server* — rather than a page — can put in front of
+  // the user. Both are `app` events, and both are installed before any view
+  // exists, so nothing can slip past while the window is still coming up.
+  auth = createAuthManager({
+    onState: (payload) => pushToWindow({ type: 'auth-state', payload })
+  })
+  installNetworkPrompts()
+
   registerIpcHandlers()
 
   createWindow()
@@ -725,6 +798,10 @@ app.on('before-quit', () => {
   // is denied — nothing may be left holding a callback nobody can answer.
   permissions?.dispose()
   permissions = null
+  // Every unanswered challenge is cancelled: a request whose callback is never
+  // called holds its connection open for as long as the process lives.
+  auth?.dispose()
+  auth = null
   // Flush first: a debounced patch from the last second of the session must
   // reach disk before anything else starts tearing down.
   persistence?.dispose()

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { DeviceManagerView } from '@renderer/components/device-manager/DeviceManagerView'
 import { DevtoolsDock } from '@renderer/components/devtools/DevtoolsDock'
 import { Canvas } from '@renderer/components/previewer/Canvas'
+import { AuthDialog } from '@renderer/components/toolbar/AuthDialog'
 import { TopBar } from '@renderer/components/toolbar/TopBar'
 import { TooltipProvider } from '@renderer/components/ui/tooltip'
 import { useAddressHotkeys } from '@renderer/hooks/useAddressHotkeys'
@@ -13,6 +14,7 @@ import { ipcBridge } from '@renderer/lib/ipc'
 import { createLayoutTelemetry, type LayoutTelemetry } from '@renderer/lib/layout-telemetry'
 import { loadPersistedState } from '@renderer/lib/persistence'
 import { cn } from '@renderer/lib/utils'
+import { attachAuthBridge } from '@renderer/stores/auth'
 import { useBookmarks } from '@renderer/stores/bookmarks'
 import { useDevices } from '@renderer/stores/devices'
 import { applyRotation, useLayout } from '@renderer/stores/layout'
@@ -69,6 +71,7 @@ function usePersistedState(): boolean {
       if (!live) return
       if (state !== null) {
         useSettings.getState().hydrate(state.ui.theme)
+        useSettings.getState().hydrateSecurity(state.security)
         useDevices.getState().hydrate(state)
         useSync.getState().hydrate(state.sync)
         useLayout.getState().hydrateRotation(state.rotated)
@@ -135,6 +138,10 @@ function App(): React.JSX.Element {
   // What each site may do, and what one is asking for right now. Main is the
   // authority — it hears the questions and owns the answers.
   useEffect(() => attachPermissionsBridge(), [])
+
+  // Servers asking for a username and password. Coalesced in main, so this is
+  // one dialog however many viewports hit the same host.
+  useEffect(() => attachAuthBridge(), [])
 
   // mod+i arms the element picker, Escape puts it away.
   useInspectHotkeys()
@@ -212,6 +219,13 @@ function App(): React.JSX.Element {
           </div>
           {showDock && dockedDeviceId !== null ? <DevtoolsDock deviceId={dockedDeviceId} /> : null}
         </div>
+
+        {/*
+          Outside the canvas, and modal: a 401 is not something the page behind
+          it can be worked with until it is answered. It renders nothing at all
+          while no server is asking.
+        */}
+        <AuthDialog />
       </div>
     </TooltipProvider>
   )

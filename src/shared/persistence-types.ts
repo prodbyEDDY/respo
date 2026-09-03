@@ -155,6 +155,18 @@ export type OriginPermissions = Partial<Record<PermissionType, 'allow' | 'block'
 export type PermissionsDocument = Record<string, OriginPermissions>
 
 /**
+ * The switches that trade safety for reach.
+ *
+ * One so far, and it is off: turning it on makes every *device view* accept a
+ * certificate Chromium refused — expired, self-signed, wrong host — which is
+ * exactly what someone pointing Respo at a staging box needs, and exactly what
+ * nobody should have on by accident. It never applies to Respo's own window.
+ */
+export type SecuritySettings = {
+  allowInsecureCertificates: boolean
+}
+
+/**
  * More sites than anyone reviews by hand. A document past this is not a list of
  * decisions any more, and the oldest entries are the ones nobody remembers.
  */
@@ -208,6 +220,8 @@ export type PersistedState = {
   bookmarks: Bookmark[]
   /** What each site is allowed to do. Main's field. See `PermissionsDocument`. */
   permissions: PermissionsDocument
+  /** The switches that trade safety for reach. See `SecuritySettings`. */
+  security: SecuritySettings
   /**
    * The page every session opens on, or `''` for "no home page".
    *
@@ -279,6 +293,9 @@ export function defaultPersistedState(): PersistedState {
     // No site has been given anything, and no site has been refused: every
     // capability starts at its default (`DEFAULT_PERMISSION_DECISIONS`).
     permissions: {},
+    // Off. A browser that accepts a broken certificate out of the box is a
+    // browser that lies about what it is showing you.
+    security: { allowInsecureCertificates: false },
     homeUrl: ''
   }
 }
@@ -309,6 +326,7 @@ export function mergePersistedState(
     screenshots: { ...(patch.screenshots ?? base.screenshots) },
     bookmarks: (patch.bookmarks ?? base.bookmarks).map(cloneBookmark),
     permissions: clonePermissions(patch.permissions ?? base.permissions),
+    security: { ...(patch.security ?? base.security) },
     homeUrl: patch.homeUrl ?? base.homeUrl,
     schemaVersion: SCHEMA_VERSION
   }
@@ -371,6 +389,7 @@ export function migratePersistedState(raw: unknown): MigrationResult {
       screenshots: sanitizeScreenshots(doc['screenshots']),
       bookmarks: sanitizeBookmarks(doc['bookmarks']),
       permissions: sanitizePermissions(doc['permissions']),
+      security: sanitizeSecurity(doc['security']),
       homeUrl: sanitizeHomeUrl(doc['homeUrl'])
     },
     backup: null
@@ -489,6 +508,24 @@ function sanitizePermissions(value: unknown): PermissionsDocument {
     origins += 1
   }
   return out
+}
+
+/**
+ * Repair the safety switches.
+ *
+ * Missing or malformed means *off*, and only a literal `true` means on. This is
+ * the one field where the repaired reading has to be the strict one: every
+ * other slice degrades toward the product working, and this one degrades toward
+ * certificate errors still being errors. A hand-edited `"true"` is not consent.
+ */
+function sanitizeSecurity(value: unknown): SecuritySettings {
+  const defaults: SecuritySettings = { allowInsecureCertificates: false }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return defaults
+
+  return {
+    allowInsecureCertificates:
+      (value as Record<string, unknown>)['allowInsecureCertificates'] === true
+  }
 }
 
 /** Repair the home page: a loadable url, or none at all. */

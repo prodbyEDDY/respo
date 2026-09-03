@@ -13,7 +13,13 @@ vi.mock('electron', () => ({
   session: { fromPartition }
 }))
 
-import { DEVICE_PARTITION, installDevicePermissionHandlers, openExternalSafe } from '../security'
+import {
+  DEVICE_PARTITION,
+  installDevicePermissionHandlers,
+  isDeviceWebContents,
+  openExternalSafe,
+  shouldTrustCertificate
+} from '../security'
 
 describe('openExternalSafe', () => {
   beforeEach(() => {
@@ -137,5 +143,63 @@ describe('installDevicePermissionHandlers', () => {
 
     handlers().check(null, 'media', 'https://a.dev', { mediaType: 'audio' })
     expect(gate.check).toHaveBeenLastCalledWith('https://a.dev', 'media', 'audio')
+  })
+})
+
+describe('isDeviceWebContents', () => {
+  const deviceSession = { id: 'device' }
+
+  beforeEach(() => {
+    fromPartition.mockReset()
+    fromPartition.mockReturnValue(deviceSession)
+  })
+
+  it('recognises a view on the device partition', () => {
+    const wc = { isDestroyed: () => false, session: deviceSession }
+    expect(isDeviceWebContents(wc as never)).toBe(true)
+    expect(fromPartition).toHaveBeenCalledWith(DEVICE_PARTITION)
+  })
+
+  it('does not recognise anything else — the window, a DevTools frontend', () => {
+    const wc = { isDestroyed: () => false, session: { id: 'default' } }
+    expect(isDeviceWebContents(wc as never)).toBe(false)
+  })
+
+  it.each([
+    ['null', null],
+    ['undefined', undefined]
+  ])('answers no for %s', (_label, value) => {
+    expect(isDeviceWebContents(value as never)).toBe(false)
+  })
+
+  it('answers no for a view that is tearing down', () => {
+    const destroyed = { isDestroyed: () => true, session: deviceSession }
+    expect(isDeviceWebContents(destroyed as never)).toBe(false)
+
+    const throwing = {
+      isDestroyed: () => false,
+      get session(): unknown {
+        throw new Error('gone')
+      }
+    }
+    expect(isDeviceWebContents(throwing as never)).toBe(false)
+  })
+})
+
+/**
+ * The security invariant of "allow invalid certificates": it is a setting about
+ * the pages under development, and it must never reach Respo's own window.
+ */
+describe('shouldTrustCertificate', () => {
+  it('trusts only a device view, and only when the switch is on', () => {
+    expect(shouldTrustCertificate({ allowInsecure: true, isDeviceView: true })).toBe(true)
+  })
+
+  it.each([
+    ['the switch is off', { allowInsecure: false, isDeviceView: true }],
+    ['it is not a device view', { allowInsecure: true, isDeviceView: false }],
+    ['neither holds', { allowInsecure: false, isDeviceView: false }]
+  ])('refuses when %s', (_label, options) => {
+    expect(shouldTrustCertificate(options)).toBe(false)
   })
 })

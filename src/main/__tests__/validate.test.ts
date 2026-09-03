@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { DeviceSpec } from '@shared/types'
 import {
+  validateAuthCredentials,
   validateBoolean,
   validateBookmarks,
   validateClearTarget,
@@ -655,5 +656,63 @@ describe('permission payloads', () => {
 
     expect(patch).toEqual({ homeUrl: 'https://example.com/' })
     expect('permissions' in patch).toBe(false)
+  })
+})
+
+describe('validateAuthCredentials', () => {
+  it('accepts a pair and rebuilds it', () => {
+    const credentials = { username: 'ada', password: 'hunter2', extra: 'x' }
+    const validated = validateAuthCredentials(credentials)
+
+    expect(validated).toEqual({ username: 'ada', password: 'hunter2' })
+    expect(validated).not.toBe(credentials)
+  })
+
+  it('accepts empty strings — some servers want exactly that', () => {
+    expect(validateAuthCredentials({ username: '', password: '' })).toEqual({
+      username: '',
+      password: ''
+    })
+  })
+
+  it('accepts null, which is how a cancel travels', () => {
+    expect(validateAuthCredentials(null)).toBeNull()
+  })
+
+  it.each([
+    ['a string', 'ada:hunter2'],
+    ['an array', []],
+    ['undefined', undefined],
+    ['a missing password', { username: 'ada' }],
+    ['a numeric username', { username: 7, password: 'x' }],
+    ['a username past the cap', { username: 'x'.repeat(257), password: 'x' }],
+    ['a password past the cap', { username: 'ada', password: 'x'.repeat(1025) }]
+  ])('rejects %s', (_label, value) => {
+    expect(() => validateAuthCredentials(value)).toThrow(/invalid ipc payload/i)
+  })
+})
+
+describe('the security slice of store:save', () => {
+  it('carries the certificate switch through', () => {
+    expect(validatePersistedPatch({ security: { allowInsecureCertificates: true } })).toEqual({
+      security: { allowInsecureCertificates: true }
+    })
+  })
+
+  it('drops anything else the slice carries', () => {
+    expect(
+      validatePersistedPatch({
+        security: { allowInsecureCertificates: false, disableWebSecurity: true }
+      })
+    ).toEqual({ security: { allowInsecureCertificates: false } })
+  })
+
+  it.each([
+    ['a truthy string instead of a boolean', { security: { allowInsecureCertificates: 'true' } }],
+    ['a missing field', { security: {} }],
+    ['a non-object slice', { security: true }],
+    ['an array', { security: [] }]
+  ])('rejects %s', (_label, payload) => {
+    expect(() => validatePersistedPatch(payload)).toThrow(/invalid ipc payload/i)
   })
 })

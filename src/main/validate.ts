@@ -11,6 +11,7 @@ import {
   isPermissionDecision,
   isPermissionType,
   normalizeUrl,
+  type AuthCredentials,
   type ClearTarget,
   type DockPosition,
   type InputEventPayload,
@@ -31,6 +32,7 @@ import {
   type LayoutSettings,
   type PersistedState,
   type ScreenshotSettings,
+  type SecuritySettings,
   type Suite,
   type SyncSettings
 } from '@shared/persistence-types'
@@ -211,6 +213,7 @@ export function validatePersistedPatch(
   }
   if (patch['bookmarks'] !== undefined) out.bookmarks = validateBookmarks(patch['bookmarks'])
   if (patch['homeUrl'] !== undefined) out.homeUrl = validateHomeUrl(patch['homeUrl'])
+  if (patch['security'] !== undefined) out.security = validateSecuritySettings(patch['security'])
   // `permissions` is deliberately absent, and it is not an oversight: it is
   // main's field, like the screenshots folder above. A patch that could set it
   // would be a renderer writing `{"https://evil.example": {"camera": "allow"}}`
@@ -306,6 +309,62 @@ export function validatePromptId(value: unknown, what: string): string {
     fail(`${what} expects a prompt id`)
   }
   return value
+}
+
+/**
+ * Longest username and password `auth:respond` will carry.
+ *
+ * Generous — a token pasted into a password field is legitimately long — and
+ * still far short of a payload. These strings go into an `Authorization`
+ * header, not into a parser, so length is the only thing worth bounding.
+ */
+const MAX_USERNAME_LENGTH = 256
+const MAX_PASSWORD_LENGTH = 1024
+
+/**
+ * Validate an `auth:respond` credential pair, or `null` for a cancel.
+ *
+ * Note what is *not* here: no logging of any kind, in this function or in its
+ * failure path. A validator that printed its argument would print a password.
+ * The pair is rebuilt rather than passed through for the usual reason — nothing
+ * from the renderer is handed onward with extra keys attached.
+ */
+export function validateAuthCredentials(value: unknown): AuthCredentials | null {
+  if (value === null) return null
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    fail('auth:respond expects credentials or null')
+  }
+
+  const credentials = value as Record<string, unknown>
+  const username = credentials['username']
+  const password = credentials['password']
+  if (typeof username !== 'string' || username.length > MAX_USERNAME_LENGTH) {
+    fail(`auth:respond username must be a string of at most ${MAX_USERNAME_LENGTH} characters`)
+  }
+  if (typeof password !== 'string' || password.length > MAX_PASSWORD_LENGTH) {
+    fail(`auth:respond password must be a string of at most ${MAX_PASSWORD_LENGTH} characters`)
+  }
+
+  return { username, password }
+}
+
+/**
+ * Validate the persisted safety switches.
+ *
+ * Only a literal `true` turns one on. This one *is* the renderer's to set — it
+ * is a setting with a toggle in front of it, unlike `permissions` — but a junk
+ * value must read as off, never as on.
+ */
+function validateSecuritySettings(value: unknown): SecuritySettings {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    fail('store:save security must be an object')
+  }
+  const security = value as Record<string, unknown>
+  const allow = security['allowInsecureCertificates']
+  if (typeof allow !== 'boolean') {
+    fail('store:save security.allowInsecureCertificates must be a boolean')
+  }
+  return { allowInsecureCertificates: allow }
 }
 
 /** Validate a `permissions:set` capability. */
