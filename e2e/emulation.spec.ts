@@ -1,9 +1,13 @@
 import { test, expect, _electron as electron } from '@playwright/test'
 import { resolve } from 'node:path'
+import { ownProfile } from './profile'
 import { probes, PROBE_URL, type Probe } from './probe'
 
 const ROOT = resolve(__dirname, '..')
 const MAIN_ENTRY = resolve(ROOT, 'out', 'main', 'index.js')
+
+/** This spec's own state, not the machine's (see `ownProfile`). */
+const userDataDir = ownProfile('emulation')
 
 /**
  * One launch, one set of assertions: a failed test restarts the Playwright
@@ -12,7 +16,7 @@ const MAIN_ENTRY = resolve(ROOT, 'out', 'main', 'index.js')
  */
 test('CDP emulation reaches the page in every device view', async () => {
   const app = await electron.launch({
-    args: [MAIN_ENTRY],
+    args: [MAIN_ENTRY, `--user-data-dir=${userDataDir}`],
     env: {
       ...(process.env as Record<string, string>),
       // Keep the suite offline and deterministic: the views open a local

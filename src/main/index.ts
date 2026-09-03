@@ -1,32 +1,67 @@
-import { app, BrowserWindow, clipboard, ClipboardItem, dialog, nativeTheme, shell } from 'electron'
+import {
+  app,
+  BrowserWindow,
+  clipboard,
+  ClipboardItem,
+  dialog,
+  nativeTheme,
+  session,
+  shell
+} from 'electron'
 import { join } from 'path'
+import { pathToFileURL } from 'node:url'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
-import { normalizeUrl, type DevtoolsStatePayload } from '@shared/ipc'
+import {
+  DEFAULT_PERMISSION_DECISIONS,
+  normalizeUrl,
+  type DevtoolsStatePayload,
+  type MainEvent,
+  type PermissionStatePayload
+} from '@shared/ipc'
 import { defaultPersistedState } from '@shared/persistence-types'
+import { authHostLabel, authRealmLabel, createAuthManager, type AuthManager } from './auth'
 import { CDPController } from './cdp-controller'
+import { clearBrowsingData } from './clear-data'
 import { DevtoolsManager } from './devtools-manager'
+import { createFaviconFetcher } from './favicons'
+import { createHistory, type History } from './history'
 import { Inspector } from './inspector'
 import { registerHandler, registerInputListener, sendMainEvent } from './ipc'
+import { createLeadTracker, type LeadTracker } from './lead-tracker'
 import {
   createBackupFileIO,
   createElectronStoreBackend,
   createPersistence,
   exportBackup,
   importBackup,
-  type Persistence
+  type Persistence,
+  type PersistenceBackend
 } from './persistence'
+import { createPermissionsManager, type PermissionsManager } from './permissions'
 import { createNodeShotFileSystem, ScreenshotQueue } from './screenshot-queue'
-import { installDevicePermissionHandlers, openExternalSafe } from './security'
+import {
+  DEVICE_PARTITION,
+  installDevicePermissionHandlers,
+  isDeviceWebContents,
+  openExternalSafe,
+  shouldTrustCertificate
+} from './security'
 import { SyncEngine } from './sync-engine'
 import {
+  validateAuthCredentials,
   validateBoolean,
   validateBounds,
+  validateClearTarget,
   validateDeviceId,
   validateDeviceSpecs,
   validateDockPosition,
+  validateHistoryQuery,
   validateLeadDeviceId,
   validateOptionalDeviceId,
+  validatePermissionDecision,
+  validatePermissionType,
   validatePersistedPatch,
+  validatePromptId,
   validateScreenshotDirectory,
   validateShotPath,
   validateShotRequest,
@@ -44,11 +79,30 @@ let viewManager: ViewManager | null = null
 let loadStates: LoadStateBatcher | null = null
 let perf: PerfMonitor | null = null
 let stopSpike: (() => void) | null = null
+let storeBackend: PersistenceBackend | null = null
 let persistence: Persistence | null = null
+let history: History | null = null
+let lead: LeadTracker | null = null
 let syncEngine: SyncEngine | null = null
 let devtools: DevtoolsManager | null = null
 let inspector: Inspector | null = null
 let shots: ScreenshotQueue | null = null
+/**
+ * Who may use a camera, and which questions are waiting.
+ *
+ * Created before the window, unlike everything else above: the permission
+ * handlers have to be installed before any view exists, so no page can ask for
+ * anything before there is a policy to ask (`app.whenReady`).
+ */
+let permissions: PermissionsManager | null = null
+/**
+ * The HTTP authentication challenges waiting for an answer.
+ *
+ * App-scoped like the permission policy, and for the same reason: `login` is an
+ * `app` event, and a challenge can arrive before the renderer has finished
+ * hydrating.
+ */
+let auth: AuthManager | null = null
 /**
  * Device names, by id, as the renderer last reported them.
  *
@@ -58,7 +112,23 @@ let shots: ScreenshotQueue | null = null
  */
 const deviceNames = new Map<string, string>()
 
-/** Until the address bar lands, every session opens here. */
+/**
+ * The window main pushes events to, or `null` while there is none.
+ *
+ * Held rather than looked up: DevTools panels get `BrowserWindow`s of their own
+ * (`createDevtoolsPanelFactory`), so "the first window" is not a reliable name
+ * for Respo's own. Managers created before the window — the permission policy —
+ * push through this, and do nothing while it is null.
+ */
+let appWindow: BrowserWindow | null = null
+
+/** Send one main event to Respo's window, if it is there to receive it. */
+function pushToWindow(event: MainEvent): void {
+  if (appWindow === null || appWindow.isDestroyed()) return
+  sendMainEvent(appWindow.webContents, event)
+}
+
+/** Where a session opens when nothing else has an opinion. */
 const DEFAULT_START_URL = 'https://example.com'
 
 /** The folder under `Pictures` a fresh install writes screenshots into. */
@@ -79,19 +149,34 @@ function screenshotDirectory(): string {
 }
 
 /**
- * The url the views open on. `RESPO_START_URL` is the seam the e2e suite (and,
- * later, the CLI/deep-link entry point) uses; it goes through the same
+ * The url the views open on, in order of who gets to decide.
+ *
+ * `RESPO_START_URL` is the seam the e2e suite (and, later, the CLI/deep-link
+ * entry point) uses and it wins outright: someone who launched Respo *at* a url
+ * asked for that url. The home page comes next — it is a standing preference,
+ * which is exactly what a launch argument overrides. Both go through the same
  * validation as anything else main is asked to load (spec §7a).
+ *
+ * The home page is resolved here and not in the renderer on purpose: views are
+ * created and pointed somewhere before the renderer finishes hydrating, so a
+ * home page applied from that side would show as the default page loading and
+ * then being replaced.
  */
 function resolveStartUrl(): string {
   const requested = process.env['RESPO_START_URL']
-  if (requested === undefined || requested.trim() === '') return DEFAULT_START_URL
-  const normalized = normalizeUrl(requested)
-  if (normalized === null) {
+  if (requested !== undefined && requested.trim() !== '') {
+    const normalized = normalizeUrl(requested)
+    if (normalized !== null) return normalized
     console.error(`ignoring unloadable RESPO_START_URL: ${requested}`)
-    return DEFAULT_START_URL
   }
-  return normalized
+
+  const home = persistence?.load().homeUrl ?? ''
+  if (home !== '') {
+    const normalized = normalizeUrl(home)
+    if (normalized !== null) return normalized
+  }
+
+  return DEFAULT_START_URL
 }
 
 function createWindow(): void {
@@ -115,10 +200,24 @@ function createWindow(): void {
     }
   })
 
+  // Managers created before the window (the permission policy) push through
+  // this; it is cleared again on `closed`.
+  appWindow = mainWindow
+
+  // Which page the session is on, folded out of the same batch: history records
+  // one visit for five viewports, and a clear knows whose data it would delete.
+  lead = createLeadTracker()
+
   // Every device's load events collapse into one `load-state` message per turn
   // of the event loop — there is no per-event IPC (CLAUDE.md §4).
   loadStates = createLoadStateBatcher((payload) => {
     sendMainEvent(mainWindow.webContents, { type: 'load-state', payload })
+    const page = lead?.apply(payload) ?? null
+    if (page !== null) history?.record(page.url, page.title)
+    // The canvas may have moved to another site, and the permission panel is
+    // about *this* site. Costs nothing when it did not: the manager pushes only
+    // when the picture it would send actually changed.
+    permissions?.refresh()
   })
 
   // One CDP controller for the window's views, shared with the sync engine:
@@ -198,7 +297,8 @@ function createWindow(): void {
       sync: syncEngine,
       devtools,
       inspect: inspector,
-      shots
+      shots,
+      onFavicon: (pageUrl, icons) => history?.noteFavicon(pageUrl, icons)
     }),
     { onLoadState: (payload) => loadStates?.report(payload) }
   )
@@ -211,6 +311,10 @@ function createWindow(): void {
     // The window is where every patch comes from, so its last one has to land
     // now — `before-quit` is not guaranteed to run before the process goes.
     persistence?.flush()
+    // Same reasoning: the pages visited in the last second of the session are
+    // sitting behind the history debounce.
+    history?.flush()
+    lead = null
     syncEngine?.dispose()
     syncEngine = null
     // Before the views: a DevTools window outliving the canvas it belongs to
@@ -230,6 +334,7 @@ function createWindow(): void {
     loadStates = null
     stopSpike?.()
     stopSpike = null
+    appWindow = null
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
@@ -273,6 +378,55 @@ function emptyDevtoolsState(): DevtoolsStatePayload {
     dock: persistence?.load().devtools.dock ?? 'bottom',
     detachedDeviceIds: []
   }
+}
+
+/**
+ * What the permission channels answer with before the policy exists. Nobody has
+ * been asked anything, and no site has been decided about.
+ */
+function emptyPermissionState(): PermissionStatePayload {
+  return { origin: null, decisions: { ...DEFAULT_PERMISSION_DECISIONS }, prompts: [] }
+}
+
+/**
+ * The two app-level events where a *server* gets to interrupt the user.
+ *
+ * Both are scoped to the device views, and the scoping is the point. Respo's
+ * own window has nothing to authenticate to and no certificate to forgive, and
+ * a relaxation that reached it would be a relaxation of the tool rather than of
+ * the pages under development (`security.ts`).
+ */
+function installNetworkPrompts(): void {
+  app.on('login', (event, webContents, _details, authInfo, callback) => {
+    // Not a device view: leave Electron's default in place, which is to cancel
+    // the request. Nothing in Respo's own chrome should ever be logging in.
+    if (auth === null || !isDeviceWebContents(webContents)) return
+
+    // Taking the callback over. From here the request waits for us, so every
+    // path below has to end in the callback being called exactly once — which
+    // is what `AuthManager` guarantees, including on dispose.
+    event.preventDefault()
+    auth.challenge(
+      authHostLabel(authInfo.scheme, authInfo.host, authInfo.port),
+      authInfo.isProxy,
+      authRealmLabel(authInfo.realm),
+      callback
+    )
+  })
+
+  app.on('certificate-error', (event, webContents, _url, _error, _certificate, callback) => {
+    const trust = shouldTrustCertificate({
+      allowInsecure: persistence?.load().security.allowInsecureCertificates === true,
+      isDeviceView: isDeviceWebContents(webContents)
+    })
+    if (!trust) {
+      // The documented shape of a refusal: no `preventDefault`, and `false`.
+      callback(false)
+      return
+    }
+    event.preventDefault()
+    callback(true)
+  })
 }
 
 /**
@@ -327,6 +481,9 @@ function registerIpcHandlers(): void {
     devtools?.retain(live)
     inspector?.retain(live)
     shots?.retain(live)
+    // A lead that left the canvas must not keep deciding what gets recorded —
+    // or whose cookies a clear would take (`lead-tracker.ts`).
+    lead?.retain(specs.map((spec) => spec.id))
   })
 
   // The hot path: one call per animation frame, applied synchronously so every
@@ -459,6 +616,93 @@ function registerIpcHandlers(): void {
     return directory
   })
 
+  // History. The renderer asks for the handful of rows that match what is being
+  // typed rather than holding a copy of two thousand of them; the call arrives
+  // on a debounce behind the address bar, which is typing rate (CLAUDE.md §4).
+  registerHandler(
+    'history:query',
+    (_event, query) => history?.query(validateHistoryQuery(query)) ?? []
+  )
+
+  registerHandler('history:clear', () => {
+    history?.clear()
+  })
+
+  // The other file dialog that runs here, like the backup ones: the renderer
+  // names no paths (CLAUDE.md §7) and is handed a url, already normalized, so
+  // what comes back is the same kind of value the address bar produces.
+  registerHandler('file:open', async (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender)
+    const options = {
+      title: 'Open a local page',
+      properties: ['openFile' as const],
+      filters: [
+        { name: 'Web pages', extensions: ['html', 'htm', 'xhtml', 'shtml'] },
+        { name: 'All files', extensions: ['*'] }
+      ]
+    }
+    const result = await (window === null
+      ? dialog.showOpenDialog(options)
+      : dialog.showOpenDialog(window, options))
+    if (result.canceled) return null
+
+    const chosen = result.filePaths[0]
+    if (chosen === undefined || chosen === '') return null
+    // Through the same filter as anything else a view is told to load — "the
+    // OS gave it to us" is a reason to expect a good path, not to skip the
+    // check (spec §7a).
+    return normalizeUrl(pathToFileURL(chosen).href)
+  })
+
+  // Clears. The renderer names a *kind*; the origin comes from what main knows
+  // the views are showing, never from the payload (`clear-data.ts`).
+  registerHandler('data:clear', async (_event, target) => {
+    const kind = validateClearTarget(target)
+    const result = await clearBrowsingData(
+      session.fromPartition(DEVICE_PARTITION),
+      kind,
+      lead?.url() ?? null
+    )
+    // A page that outlives its own storage is showing state that no longer
+    // exists — service workers especially, which keep answering until the
+    // document that registered them is replaced.
+    if (result.ok) viewManager?.reload()
+    return result
+  })
+
+  // Permissions. The renderer answers a *question* by id and sets a capability
+  // by type; it never names an origin, for the same reason a clear does not
+  // (`permissions.ts`). Reads answer with the whole picture, so the panel never
+  // has to reconcile a delta against what it was pushed.
+  registerHandler('permissions:get', () => permissions?.state() ?? emptyPermissionState())
+
+  registerHandler('permissions:respond', (_event, id, allow) => {
+    permissions?.respond(
+      validatePromptId(id, 'permissions:respond'),
+      validateBoolean(allow, 'permissions:respond')
+    )
+  })
+
+  registerHandler('permissions:dismiss', (_event, id) => {
+    permissions?.dismiss(validatePromptId(id, 'permissions:dismiss'))
+  })
+
+  registerHandler('permissions:set', (_event, type, decision) => {
+    const capability = validatePermissionType(type)
+    const answer = validatePermissionDecision(decision)
+    return permissions?.setDecision(capability, answer) ?? emptyPermissionState()
+  })
+
+  registerHandler('permissions:reset', () => permissions?.resetOrigin() ?? emptyPermissionState())
+
+  // Authentication. The reply names the challenge it answers — never "the
+  // pending one" — and the credentials are handed straight to the Electron
+  // callbacks waiting behind it. Nothing about this payload is logged, here or
+  // anywhere below it (`auth.ts`).
+  registerHandler('auth:respond', (_event, id, credentials) => {
+    auth?.respond(validatePromptId(id, 'auth:respond'), validateAuthCredentials(credentials))
+  })
+
   // The one-way stream from the device views. Its sender is an untrusted page,
   // so the batch is validated (and clamped) before the engine sees any of it;
   // anything malformed is dropped rather than thrown back at the page.
@@ -484,13 +728,49 @@ app.whenReady().then(() => {
   if (is.dev) perf = startPerfMonitor()
 
   // Before the first handler can be called, and before the window asks.
-  persistence = createPersistence(createElectronStoreBackend())
+  //
+  // One backend for both documents: `electron-store` caches the file it owns,
+  // and two instances over the same file would each be writing back a copy that
+  // predates the other's last write.
+  storeBackend = createElectronStoreBackend()
+  persistence = createPersistence(storeBackend)
+  // History is the same file under its own key, and deliberately not part of
+  // the settings document: it is large, it is written on every navigation, and
+  // the renderer only ever wants a few rows of it (`history.ts`).
+  history = createHistory(storeBackend, {
+    // The site's own icon, over the session the page was loaded in — never a
+    // third-party favicon service (`favicons.ts`).
+    fetchFavicon: createFaviconFetcher((url) => session.fromPartition(DEVICE_PARTITION).fetch(url))
+  })
   // Restore the native chrome the user left the app on; the renderer applies
   // the same value to the DOM once it has hydrated.
   nativeTheme.themeSource = persistence.load().ui.theme
 
+  // The policy behind the permission handlers. It reads and writes the
+  // `permissions` slice of the document *directly*, without going through
+  // `store:save`: that slice is main's field, and the renderer's patches never
+  // carry it (`validate.ts`).
+  permissions = createPermissionsManager({
+    store: {
+      read: () => persistence?.load().permissions ?? {},
+      write: (next) => persistence?.save({ permissions: next })
+    },
+    // The site the *canvas* is on — what the panel is about. A request always
+    // carries its own requesting origin and never consults this.
+    currentOrigin: () => lead?.url() ?? null,
+    onState: (payload) => pushToWindow({ type: 'permission-state', payload })
+  })
+
   // Before the first view exists, so no page can ask for anything first.
-  installDevicePermissionHandlers()
+  installDevicePermissionHandlers(permissions)
+
+  // The other two things a *server* — rather than a page — can put in front of
+  // the user. Both are `app` events, and both are installed before any view
+  // exists, so nothing can slip past while the window is still coming up.
+  auth = createAuthManager({
+    onState: (payload) => pushToWindow({ type: 'auth-state', payload })
+  })
+  installNetworkPrompts()
 
   registerIpcHandlers()
 
@@ -513,10 +793,23 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  // Before the store is flushed: a question answered in the last moment of the
+  // session is a decision that still has to reach disk. Everything left waiting
+  // is denied — nothing may be left holding a callback nobody can answer.
+  permissions?.dispose()
+  permissions = null
+  // Every unanswered challenge is cancelled: a request whose callback is never
+  // called holds its connection open for as long as the process lives.
+  auth?.dispose()
+  auth = null
   // Flush first: a debounced patch from the last second of the session must
   // reach disk before anything else starts tearing down.
   persistence?.dispose()
   persistence = null
+  history?.dispose()
+  history = null
+  storeBackend = null
+  lead = null
   syncEngine?.dispose()
   syncEngine = null
   inspector?.dispose()

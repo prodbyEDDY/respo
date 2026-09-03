@@ -6,7 +6,7 @@
  * same in both cases: nothing the page asks for is granted implicitly.
  */
 
-import { session, shell } from 'electron'
+import { session, shell, type WebContents } from 'electron'
 
 /**
  * The session every device view shares. Declared here so the permission policy
@@ -38,17 +38,107 @@ export function openExternalSafe(url: string): void {
 }
 
 /**
- * Deny every permission the device session asks for.
+ * The half of `PermissionsManager` this module needs.
+ *
+ * Narrow on purpose: the policy — who may use a camera, and whether anyone was
+ * asked — is a decision, and decisions do not belong in the file whose job is to
+ * hand Chromium a callback (`permissions.ts`).
+ */
+export interface PermissionGate {
+  request(
+    origin: string | null,
+    permission: string,
+    mediaTypes: readonly string[] | undefined,
+    callback: (granted: boolean) => void
+  ): void
+  check(origin: string | null, permission: string, mediaType?: string): boolean
+}
+
+/**
+ * Route the device session's permission questions through Respo's own policy.
  *
  * Without a handler Chromium's defaults apply and some permissions are granted
- * without anyone being asked. Respo grants nothing silently; the ask-UI that
- * lets the user say yes per origin arrives in a later wave, and until then
- * "no" is the only correct answer.
+ * without anyone being asked, so a handler is mandatory. `gate` is `null` only
+ * when there is no policy to consult — before the store exists, or in a test —
+ * and then the answer is the W1 one: no, to everything.
+ *
+ * Note which side names the origin. Chromium reports the *requesting* url with
+ * every question, and that — not whatever the toolbar happens to be showing —
+ * is what a decision is remembered under: a third-party frame asking for a
+ * location is asking on its own behalf.
  */
-export function installDevicePermissionHandlers(): void {
+export function installDevicePermissionHandlers(gate: PermissionGate | null = null): void {
   const devices = session.fromPartition(DEVICE_PARTITION)
-  devices.setPermissionRequestHandler((_webContents, _permission, callback) => {
-    callback(false)
+
+  devices.setPermissionRequestHandler((webContents, permission, callback, details) => {
+    if (gate === null) {
+      callback(false)
+      return
+    }
+    // Electron's details type is a union — only a media request carries media
+    // types — and a build where a member lacks `requestingUrl` must degrade to
+    // the page's own url rather than fail to compile.
+    const requestingUrl: string | undefined = details.requestingUrl
+    const mediaTypes: readonly string[] | undefined =
+      'mediaTypes' in details ? details.mediaTypes : undefined
+    const requesting =
+      requestingUrl === undefined || requestingUrl === ''
+        ? (webContents?.getURL() ?? null)
+        : requestingUrl
+    gate.request(requesting, permission, mediaTypes, callback)
   })
-  devices.setPermissionCheckHandler(() => false)
+
+  devices.setPermissionCheckHandler((_webContents, permission, requestingOrigin, details) => {
+    if (gate === null) return false
+    // `unknown` is Chromium saying it does not know which stream is being asked
+    // about, which is not a question `media` can be answered from.
+    const mediaType = details.mediaType === 'unknown' ? undefined : details.mediaType
+    return gate.check(requestingOrigin, permission, mediaType)
+  })
+}
+
+/**
+ * Whether this `webContents` is one of the device views.
+ *
+ * The question behind two app-level events — a certificate error and an
+ * authentication challenge — where the answer decides whether a relaxation
+ * applies. Respo's own window and the DevTools frontends live in the default
+ * session; only device views are on `DEVICE_PARTITION`, and
+ * `session.fromPartition` returns the same `Session` object every time, so
+ * identity is the whole check.
+ *
+ * Deliberately not "is it not the main window": new surfaces get added over
+ * time, and a check that lists what to exclude eventually forgets one. This one
+ * names what to *include*.
+ */
+export function isDeviceWebContents(target: WebContents | null | undefined): boolean {
+  if (target === null || target === undefined) return false
+  try {
+    if (target.isDestroyed()) return false
+    return target.session === session.fromPartition(DEVICE_PARTITION)
+  } catch {
+    // A `webContents` tearing down mid-event is not a device view any more.
+    return false
+  }
+}
+
+/**
+ * Whether a certificate Chromium refused should be accepted anyway.
+ *
+ * Both halves are required, and the second one is not negotiable. "Allow
+ * invalid certificates" is a setting about the *pages being developed* — a
+ * staging box with a self-signed certificate, a local server with a name
+ * Chromium does not like — and it must never reach Respo's own window, its
+ * DevTools frontends, or anything else in the default session. A tool that
+ * relaxed TLS everywhere because someone wanted to open `https://localhost`
+ * would be a tool that quietly downgraded everything it touches.
+ *
+ * A named function, and a trivial one, because it is the security invariant of
+ * this feature and it should be impossible to change without a test noticing.
+ */
+export function shouldTrustCertificate(options: {
+  allowInsecure: boolean
+  isDeviceView: boolean
+}): boolean {
+  return options.allowInsecure && options.isDeviceView
 }

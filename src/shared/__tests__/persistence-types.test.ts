@@ -290,3 +290,286 @@ describe('screenshot settings', () => {
     expect(base.screenshots.directory).toBe('')
   })
 })
+
+describe('the canvas layout slice', () => {
+  it('opens on wrapping rows, with no device singled out', () => {
+    expect(defaultPersistedState().layout).toEqual({ mode: 'flex', individualDeviceId: null })
+  })
+
+  it('reads back a layout the user left behind', () => {
+    const stored: Record<string, unknown> = {
+      ...defaultPersistedState(),
+      layout: { mode: 'individual', individualDeviceId: 'ipad-mini' }
+    }
+    const { state } = migratePersistedState(stored)
+
+    expect(state.layout).toEqual({ mode: 'individual', individualDeviceId: 'ipad-mini' })
+  })
+
+  it('falls back to the default for a document written before this build', () => {
+    const stored = { ...defaultPersistedState() } as Record<string, unknown>
+    delete stored['layout']
+    const { state, backup } = migratePersistedState(stored)
+
+    // A missing field is repaired, not a reason to reset the whole document.
+    expect(state.layout).toEqual({ mode: 'flex', individualDeviceId: null })
+    expect(backup).toBeNull()
+    expect(state.suites).toHaveLength(1)
+  })
+
+  it('repairs a mode this build does not know, keeping the device', () => {
+    const stored: Record<string, unknown> = {
+      ...defaultPersistedState(),
+      layout: { mode: 'kaleidoscope', individualDeviceId: 'pixel-8' }
+    }
+    const { state } = migratePersistedState(stored)
+
+    expect(state.layout).toEqual({ mode: 'flex', individualDeviceId: 'pixel-8' })
+  })
+
+  it.each([
+    ['a junk device id', { mode: 'column', individualDeviceId: 7 }],
+    ['an empty device id', { mode: 'column', individualDeviceId: '' }]
+  ])('drops %s without costing the mode', (_label, layout) => {
+    const stored: Record<string, unknown> = { ...defaultPersistedState(), layout }
+    const { state } = migratePersistedState(stored)
+
+    expect(state.layout).toEqual({ mode: 'column', individualDeviceId: null })
+  })
+
+  it.each([
+    ['an array', []],
+    ['a string', 'masonry'],
+    ['null', null]
+  ])('falls back whole when the slice is %s', (_label, layout) => {
+    const stored: Record<string, unknown> = { ...defaultPersistedState(), layout }
+    const { state } = migratePersistedState(stored)
+
+    expect(state.layout).toEqual({ mode: 'flex', individualDeviceId: null })
+  })
+
+  it('replaces the slice wholesale on a patch', () => {
+    const base = defaultPersistedState()
+    const next = mergePersistedState(base, {
+      layout: { mode: 'masonry', individualDeviceId: 'pixel-8' }
+    })
+
+    expect(next.layout).toEqual({ mode: 'masonry', individualDeviceId: 'pixel-8' })
+    expect(base.layout.mode).toBe('flex')
+  })
+})
+
+describe('bookmarks and the home page', () => {
+  const bookmark = { id: 'bm-1', title: 'Example', url: 'https://example.com/', addedAt: 5 }
+
+  function stored(over: Record<string, unknown>): PersistedState {
+    return migratePersistedState({ ...defaultPersistedState(), ...over }).state
+  }
+
+  it('starts with nothing saved and nowhere to call home', () => {
+    const state = defaultPersistedState()
+    expect(state.bookmarks).toEqual([])
+    expect(state.homeUrl).toBe('')
+  })
+
+  it('reads back what was saved', () => {
+    expect(stored({ bookmarks: [bookmark], homeUrl: 'https://home.test/' })).toMatchObject({
+      bookmarks: [bookmark],
+      homeUrl: 'https://home.test/'
+    })
+  })
+
+  it('normalizes a stored url rather than trusting the file', () => {
+    expect(stored({ homeUrl: 'example.com' }).homeUrl).toBe('https://example.com/')
+    expect(stored({ bookmarks: [{ ...bookmark, url: 'example.com' }] }).bookmarks[0]?.url).toBe(
+      'https://example.com/'
+    )
+  })
+
+  it('drops one broken bookmark rather than the whole list', () => {
+    const state = stored({
+      bookmarks: [
+        bookmark,
+        { ...bookmark, id: 'bm-2', url: 'javascript:alert(1)' },
+        'not a bookmark',
+        { ...bookmark, id: 'bm-3', url: 'https://kept.test/' }
+      ]
+    })
+
+    expect(state.bookmarks.map((item) => item.id)).toEqual(['bm-1', 'bm-3'])
+  })
+
+  it('repairs the fields around a good url instead of dropping the row', () => {
+    const state = stored({ bookmarks: [{ id: 'bm-1', url: 'https://a.test/', title: 7 }] })
+
+    expect(state.bookmarks[0]).toEqual({
+      id: 'bm-1',
+      title: '',
+      url: 'https://a.test/',
+      addedAt: 0
+    })
+  })
+
+  it('keeps only the first of two bookmarks sharing an id', () => {
+    const state = stored({
+      bookmarks: [bookmark, { ...bookmark, url: 'https://second.test/' }]
+    })
+
+    expect(state.bookmarks).toHaveLength(1)
+  })
+
+  it.each([
+    ['a home page no view may load', 'javascript:alert(1)'],
+    ['a home page that is not a string', 7],
+    ['a home page longer than any url', `https://a.test/${'x'.repeat(3000)}`]
+  ])('reads %s as no home page', (_label, homeUrl) => {
+    expect(stored({ homeUrl }).homeUrl).toBe('')
+  })
+
+  it.each([
+    ['not an array', {}],
+    ['a string', 'bookmarks']
+  ])('reads a bookmark list that is %s as an empty one', (_label, bookmarks) => {
+    expect(stored({ bookmarks }).bookmarks).toEqual([])
+  })
+
+  it('merges both like every other slice — a value, not something to append to', () => {
+    const base = defaultPersistedState()
+    const merged = mergePersistedState(base, { bookmarks: [bookmark], homeUrl: 'https://h.test/' })
+
+    expect(merged.bookmarks).toEqual([bookmark])
+    // A clone, not the caller's array: the store keeps mutating its own copy.
+    expect(merged.bookmarks[0]).not.toBe(bookmark)
+    expect(merged.homeUrl).toBe('https://h.test/')
+  })
+
+  it('leaves both alone when a patch does not mention them', () => {
+    const base = { ...defaultPersistedState(), bookmarks: [bookmark], homeUrl: 'https://h.test/' }
+    const merged = mergePersistedState(base, { activeSuiteId: DEFAULT_SUITE_ID })
+
+    expect(merged.bookmarks).toEqual([bookmark])
+    expect(merged.homeUrl).toBe('https://h.test/')
+  })
+})
+
+describe('site permissions', () => {
+  function stored(over: Record<string, unknown>): PersistedState {
+    return migratePersistedState({ ...defaultPersistedState(), ...over }).state
+  }
+
+  it('starts with no site decided about', () => {
+    expect(defaultPersistedState().permissions).toEqual({})
+  })
+
+  it('reads back the decisions it was given', () => {
+    const permissions = {
+      'https://a.dev': { camera: 'allow', geolocation: 'block' },
+      'http://localhost:5173': { midi: 'allow' }
+    }
+    expect(stored({ permissions }).permissions).toEqual(permissions)
+  })
+
+  it.each([
+    ['a trailing slash', 'https://a.dev/'],
+    ['a path', 'https://a.dev/app'],
+    ['upper case', 'HTTPS://A.DEV'],
+    ['a file url', 'file:///C:/x.html'],
+    ['a scheme with no site behind it', 'about:blank'],
+    ['junk', 'not-an-origin'],
+    ['an empty key', '']
+  ])('drops an entry keyed by %s — only a canonical origin is a site', (_label, origin) => {
+    expect(stored({ permissions: { [origin]: { camera: 'allow' } } }).permissions).toEqual({})
+  })
+
+  it('drops one junk capability without costing the site the others', () => {
+    const permissions = {
+      'https://a.dev': { camera: 'allow', 'display-capture': 'allow', geolocation: 'maybe' }
+    }
+    expect(stored({ permissions }).permissions).toEqual({
+      'https://a.dev': { camera: 'allow' }
+    })
+  })
+
+  it('never stores "ask" — the absence of a row is what ask means', () => {
+    const permissions = { 'https://a.dev': { camera: 'ask' } }
+    expect(stored({ permissions }).permissions).toEqual({})
+  })
+
+  it('caps the number of sites it keeps decisions for', () => {
+    const permissions: Record<string, unknown> = {}
+    for (let n = 0; n < 250; n += 1) permissions[`https://s${n}.dev`] = { camera: 'allow' }
+
+    expect(Object.keys(stored({ permissions }).permissions)).toHaveLength(200)
+  })
+
+  it.each([
+    ['not an object', []],
+    ['a string', 'permissions'],
+    ['null', null]
+  ])('reads a permissions document that is %s as an empty one', (_label, permissions) => {
+    expect(stored({ permissions }).permissions).toEqual({})
+  })
+
+  it('merges like every other slice, and clones what it keeps', () => {
+    const permissions = { 'https://a.dev': { camera: 'allow' as const } }
+    const merged = mergePersistedState(defaultPersistedState(), { permissions })
+
+    expect(merged.permissions).toEqual(permissions)
+    expect(merged.permissions['https://a.dev']).not.toBe(permissions['https://a.dev'])
+  })
+
+  it('leaves it alone when a patch does not mention it', () => {
+    const base = {
+      ...defaultPersistedState(),
+      permissions: { 'https://a.dev': { camera: 'allow' as const } }
+    }
+    const merged = mergePersistedState(base, { homeUrl: '' })
+
+    expect(merged.permissions).toEqual(base.permissions)
+  })
+})
+
+describe('the safety switches', () => {
+  function stored(over: Record<string, unknown>): PersistedState {
+    return migratePersistedState({ ...defaultPersistedState(), ...over }).state
+  }
+
+  it('starts with certificates enforced', () => {
+    expect(defaultPersistedState().security).toEqual({ allowInsecureCertificates: false })
+  })
+
+  it('reads back an explicit true', () => {
+    expect(stored({ security: { allowInsecureCertificates: true } }).security).toEqual({
+      allowInsecureCertificates: true
+    })
+  })
+
+  it.each([
+    ['a truthy string', { allowInsecureCertificates: 'true' }],
+    ['a number', { allowInsecureCertificates: 1 }],
+    ['null', { allowInsecureCertificates: null }],
+    ['nothing at all', {}]
+  ])('reads %s as certificates staying enforced', (_label, security) => {
+    expect(stored({ security }).security.allowInsecureCertificates).toBe(false)
+  })
+
+  it.each([
+    ['not an object', 'yes'],
+    ['an array', []],
+    ['null', null]
+  ])('reads a slice that is %s as the strict default', (_label, security) => {
+    expect(stored({ security }).security).toEqual({ allowInsecureCertificates: false })
+  })
+
+  it('merges like every other slice', () => {
+    const merged = mergePersistedState(defaultPersistedState(), {
+      security: { allowInsecureCertificates: true }
+    })
+    expect(merged.security.allowInsecureCertificates).toBe(true)
+  })
+
+  it('leaves it alone when a patch does not mention it', () => {
+    const base = { ...defaultPersistedState(), security: { allowInsecureCertificates: true } }
+    expect(mergePersistedState(base, { homeUrl: '' }).security).toEqual(base.security)
+  })
+})

@@ -1,9 +1,13 @@
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test'
 import { resolve } from 'node:path'
+import { ownProfile } from './profile'
 import { PROBE_URL } from './probe'
 
 const ROOT = resolve(__dirname, '..')
 const MAIN_ENTRY = resolve(ROOT, 'out', 'main', 'index.js')
+
+/** This spec's own state, not the machine's (see `ownProfile`). */
+const userDataDir = ownProfile('clipping')
 
 type Box = { x: number; y: number; width: number; height: number }
 
@@ -69,7 +73,7 @@ function geometry(app: ElectronApplication, url: string): Promise<Geometry> {
  */
 test('a device view scrolled under the toolbar is clipped by the canvas layer', async () => {
   const app = await electron.launch({
-    args: [MAIN_ENTRY],
+    args: [MAIN_ENTRY, `--user-data-dir=${userDataDir}`],
     env: {
       ...(process.env as Record<string, string>),
       RESPO_START_URL: PROBE_URL
@@ -131,7 +135,7 @@ test('a device view scrolled under the toolbar is clipped by the canvas layer', 
 /** The other half of the follow-up: Inter is the font the UI actually gets. */
 test('the interface is set in Inter, loaded from the app itself', async () => {
   const app = await electron.launch({
-    args: [MAIN_ENTRY],
+    args: [MAIN_ENTRY, `--user-data-dir=${userDataDir}`],
     env: {
       ...(process.env as Record<string, string>),
       RESPO_START_URL: PROBE_URL

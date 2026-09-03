@@ -203,3 +203,105 @@ describe('applyRotation', () => {
     expect(applyRotation(devices, { [IPHONE]: false })[0]).toBe(iphone)
   })
 })
+
+describe('layout store — canvas arrangement', () => {
+  beforeEach(() => {
+    savePersistedState.mockClear()
+    useLayout.setState({
+      mode: 'flex',
+      individualDeviceId: null,
+      beforeIndividual: null,
+      zoom: 1
+    })
+  })
+
+  it('opens on the arrangement Respo has always used', () => {
+    expect(useLayout.getState().mode).toBe('flex')
+  })
+
+  it('writes the mode and the expanded device together, as one decision', () => {
+    useLayout.getState().setMode('masonry')
+
+    expect(useLayout.getState().mode).toBe('masonry')
+    expect(savePersistedState).toHaveBeenCalledWith({
+      layout: { mode: 'masonry', individualDeviceId: null }
+    })
+  })
+
+  it('spends nothing on a switch to the mode it is already in', () => {
+    useLayout.getState().setMode('flex')
+    expect(savePersistedState).not.toHaveBeenCalled()
+  })
+
+  it('cycles column → flex → masonry → individual → column', () => {
+    const seen: string[] = []
+    useLayout.setState({ mode: 'column' })
+    for (let i = 0; i < 4; i += 1) {
+      useLayout.getState().cycleMode()
+      seen.push(useLayout.getState().mode)
+    }
+    expect(seen).toEqual(['flex', 'masonry', 'individual', 'column'])
+  })
+
+  it('remembers the arrangement and the zoom one device took the canvas from', () => {
+    useLayout.setState({ mode: 'masonry', zoom: 1.25 })
+    useLayout.getState().enterIndividual(IPAD)
+
+    expect(useLayout.getState()).toMatchObject({ mode: 'individual', individualDeviceId: IPAD })
+
+    // The canvas fits the device once it is expanded; leaving undoes both.
+    useLayout.getState().setZoom(0.5)
+    useLayout.getState().exitIndividual()
+
+    expect(useLayout.getState()).toMatchObject({ mode: 'masonry', zoom: 1.25 })
+    expect(useLayout.getState().beforeIndividual).toBeNull()
+  })
+
+  it('leaves individual mode for a sane arrangement when it was restored into it', () => {
+    useLayout.getState().hydrateLayout({ mode: 'individual', individualDeviceId: IPAD })
+    useLayout.getState().exitIndividual()
+    expect(useLayout.getState().mode).toBe('flex')
+  })
+
+  it('ignores a request to leave a mode it is not in', () => {
+    useLayout.setState({ mode: 'column' })
+    useLayout.getState().exitIndividual()
+    expect(useLayout.getState().mode).toBe('column')
+  })
+
+  it('records the device when one frame is expanded from a canvas already expanded', () => {
+    useLayout.getState().enterIndividual(IPHONE)
+    savePersistedState.mockClear()
+    useLayout.getState().enterIndividual(IPAD)
+
+    expect(useLayout.getState().individualDeviceId).toBe(IPAD)
+    expect(savePersistedState).toHaveBeenCalledWith({
+      layout: { mode: 'individual', individualDeviceId: IPAD }
+    })
+  })
+
+  it('switches tabs without touching the mode or the zoom', () => {
+    useLayout.getState().enterIndividual(IPHONE)
+    useLayout.setState({ zoom: 0.5 })
+    savePersistedState.mockClear()
+
+    useLayout.getState().showIndividual(DESKTOP)
+    expect(useLayout.getState()).toMatchObject({
+      mode: 'individual',
+      individualDeviceId: DESKTOP,
+      zoom: 0.5
+    })
+
+    // The same tab again is not a change, and does not cost a write.
+    savePersistedState.mockClear()
+    useLayout.getState().showIndividual(DESKTOP)
+    expect(savePersistedState).not.toHaveBeenCalled()
+  })
+
+  it('installs a restored arrangement without writing it straight back', () => {
+    useLayout.getState().hydrateLayout({ mode: 'column', individualDeviceId: IPAD })
+
+    expect(useLayout.getState()).toMatchObject({ mode: 'column', individualDeviceId: IPAD })
+    expect(savePersistedState).not.toHaveBeenCalled()
+  })
+})

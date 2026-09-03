@@ -1,11 +1,19 @@
 import { describe, expect, it } from 'vitest'
 import type { DeviceSpec } from '@shared/types'
 import {
+  validateAuthCredentials,
   validateBoolean,
+  validateBookmarks,
+  validateClearTarget,
   validateDeviceId,
   validateDeviceSpecs,
+  validateHistoryQuery,
+  validateHomeUrl,
   validateLeadDeviceId,
+  validatePermissionDecision,
+  validatePermissionType,
   validatePersistedPatch,
+  validatePromptId,
   validateScreenshotDirectory,
   validateShotPath,
   validateShotRequest,
@@ -420,5 +428,291 @@ describe('validateScreenshotDirectory', () => {
     // The one door left for this value is the folder dialog in `shot:choose-dir`
     // — and a path is checked even when it came back out of the OS.
     expect(() => validateScreenshotDirectory(directory)).toThrow(/invalid ipc payload/i)
+  })
+})
+
+describe('validatePersistedPatch — the canvas layout', () => {
+  it('accepts every layout this build can draw', () => {
+    for (const mode of ['column', 'flex', 'masonry', 'individual']) {
+      expect(validatePersistedPatch({ layout: { mode, individualDeviceId: null } })).toEqual({
+        layout: { mode, individualDeviceId: null }
+      })
+    }
+  })
+
+  it('keeps the device the canvas was expanded on', () => {
+    expect(
+      validatePersistedPatch({ layout: { mode: 'individual', individualDeviceId: 'ipad-mini' } })
+    ).toEqual({ layout: { mode: 'individual', individualDeviceId: 'ipad-mini' } })
+  })
+
+  it('reads a missing device id as "no preference"', () => {
+    expect(validatePersistedPatch({ layout: { mode: 'flex' } })).toEqual({
+      layout: { mode: 'flex', individualDeviceId: null }
+    })
+  })
+
+  it.each([
+    ['a mode this build has never heard of', { mode: 'kaleidoscope' }],
+    ['no mode at all', { individualDeviceId: 'pixel-8' }],
+    ['a device id that is not a string', { mode: 'flex', individualDeviceId: 7 }],
+    ['a device id longer than any name', { mode: 'flex', individualDeviceId: 'a'.repeat(500) }]
+  ])('rejects %s', (_label, layout) => {
+    expect(() => validatePersistedPatch({ layout })).toThrow(/invalid ipc payload/i)
+  })
+
+  it.each([
+    ['an array', []],
+    ['a string', 'masonry'],
+    ['null', null]
+  ])('rejects a slice that is %s', (_label, layout) => {
+    expect(() => validatePersistedPatch({ layout })).toThrow(/invalid ipc payload/i)
+  })
+
+  it('leaves the rest of the document alone when no layout is offered', () => {
+    expect(validatePersistedPatch({ activeSuiteId: 'default' })).toEqual({
+      activeSuiteId: 'default'
+    })
+  })
+})
+
+describe('validateBookmarks', () => {
+  const bookmark = { id: 'bm-1', title: 'Example', url: 'https://example.com/', addedAt: 1 }
+
+  it('accepts an empty list', () => {
+    expect(validateBookmarks([])).toEqual([])
+  })
+
+  it('stores the normalized url, not the one it was handed', () => {
+    expect(validateBookmarks([{ ...bookmark, url: 'example.com' }])[0]?.url).toBe(
+      'https://example.com/'
+    )
+  })
+
+  it('accepts an empty title — an untitled page is still a page', () => {
+    expect(validateBookmarks([{ ...bookmark, title: '' }])[0]?.title).toBe('')
+  })
+
+  it('rebuilds the entry rather than storing what it was sent', () => {
+    // A bookmark carrying twenty extra keys must not put them on disk.
+    expect(validateBookmarks([{ ...bookmark, evil: 'payload' }])[0]).toEqual(bookmark)
+  })
+
+  it.each([
+    ['a url no view may load', { ...bookmark, url: 'javascript:alert(1)' }],
+    ['no url at all', { id: 'bm-1', title: 'x', addedAt: 1 }],
+    ['no id', { title: 'x', url: 'https://example.com/', addedAt: 1 }],
+    ['a title that is not a string', { ...bookmark, title: 7 }],
+    ['a timestamp that is not a number', { ...bookmark, addedAt: 'today' }],
+    ['a negative timestamp', { ...bookmark, addedAt: -1 }],
+    ['a url longer than any url', { ...bookmark, url: `https://a.test/${'x'.repeat(3000)}` }]
+  ])('rejects %s', (_label, entry) => {
+    expect(() => validateBookmarks([entry])).toThrow(/invalid ipc payload/i)
+  })
+
+  it.each([
+    ['not an array', {}],
+    ['a string', 'bookmarks'],
+    ['null', null]
+  ])('rejects a list that is %s', (_label, value) => {
+    expect(() => validateBookmarks(value)).toThrow(/invalid ipc payload/i)
+  })
+
+  it('refuses more bookmarks than the document holds', () => {
+    const many = Array.from({ length: 501 }, (_value, n) => ({ ...bookmark, id: `bm-${n}` }))
+    expect(() => validateBookmarks(many)).toThrow(/at most/i)
+  })
+
+  it('travels through store:save like every other slice', () => {
+    expect(validatePersistedPatch({ bookmarks: [bookmark] })).toEqual({ bookmarks: [bookmark] })
+  })
+})
+
+describe('validateHomeUrl', () => {
+  it('reads the empty string as "no home page"', () => {
+    expect(validateHomeUrl('')).toBe('')
+  })
+
+  it('normalizes what it keeps', () => {
+    expect(validateHomeUrl('example.com')).toBe('https://example.com/')
+  })
+
+  it('keeps http for a loopback host, the way the address bar does', () => {
+    expect(validateHomeUrl('localhost:5173')).toBe('http://localhost:5173/')
+  })
+
+  it.each([
+    ['a scheme no view may load', 'javascript:alert(1)'],
+    ['something that is not a url', '   '],
+    ['a number', 7],
+    ['null', null]
+  ])('rejects %s', (_label, value) => {
+    expect(() => validateHomeUrl(value)).toThrow(/invalid ipc payload/i)
+  })
+
+  it('travels through store:save like every other field', () => {
+    expect(validatePersistedPatch({ homeUrl: 'example.com' })).toEqual({
+      homeUrl: 'https://example.com/'
+    })
+  })
+})
+
+describe('validateHistoryQuery', () => {
+  it('accepts what someone might type', () => {
+    expect(validateHistoryQuery('exa')).toBe('exa')
+  })
+
+  it('accepts an empty query, which asks for the recent pages', () => {
+    expect(validateHistoryQuery('')).toBe('')
+  })
+
+  it.each([
+    ['a number', 7],
+    ['null', null],
+    ['an object', {}]
+  ])('rejects %s', (_label, value) => {
+    expect(() => validateHistoryQuery(value)).toThrow(/invalid ipc payload/i)
+  })
+
+  it('refuses a payload big enough to be an attack on the matcher', () => {
+    expect(() => validateHistoryQuery('x'.repeat(3000))).toThrow(/too long/i)
+  })
+})
+
+describe('validateClearTarget', () => {
+  it.each(['storage', 'cookies', 'cache', 'all'])('accepts %s', (target) => {
+    expect(validateClearTarget(target)).toBe(target)
+  })
+
+  it.each([
+    ['a target this build has never heard of', 'everything-everywhere'],
+    ['an empty string', ''],
+    ['null', null],
+    ['an object', {}]
+  ])('rejects %s', (_label, value) => {
+    expect(() => validateClearTarget(value)).toThrow(/invalid ipc payload/i)
+  })
+})
+
+describe('permission payloads', () => {
+  it.each([
+    'camera',
+    'microphone',
+    'geolocation',
+    'notifications',
+    'clipboard-read',
+    'fullscreen',
+    'midi',
+    'pointerLock'
+  ])('accepts the %s capability', (type) => {
+    expect(validatePermissionType(type)).toBe(type)
+  })
+
+  it.each([
+    ['a capability this build has no row for', 'display-capture'],
+    ['a prototype key', 'toString'],
+    ['null', null],
+    ['an object', {}]
+  ])('rejects %s as a capability', (_label, value) => {
+    expect(() => validatePermissionType(value)).toThrow(/invalid ipc payload/i)
+  })
+
+  it.each(['allow', 'block', 'ask'])('accepts the %s decision', (decision) => {
+    expect(validatePermissionDecision(decision)).toBe(decision)
+  })
+
+  it.each([
+    ['a decision this build does not know', 'maybe'],
+    ['a boolean', true],
+    ['null', null]
+  ])('rejects %s as a decision', (_label, value) => {
+    expect(() => validatePermissionDecision(value)).toThrow(/invalid ipc payload/i)
+  })
+
+  it('accepts a prompt id of the shape main mints', () => {
+    expect(validatePromptId('perm-7', 'permissions:respond')).toBe('perm-7')
+  })
+
+  it.each([
+    ['an empty string', ''],
+    ['a number', 7],
+    ['null', null],
+    ['a payload longer than any id', 'x'.repeat(200)]
+  ])('rejects %s as a prompt id', (_label, value) => {
+    expect(() => validatePromptId(value, 'permissions:respond')).toThrow(/invalid ipc payload/i)
+  })
+
+  /**
+   * The important one. `permissions` is main's field: a renderer that could
+   * patch it would skip the question entirely and write itself a camera on any
+   * site. The patch validator rebuilds what it accepts, so the key simply is
+   * not there on the other side.
+   */
+  it('drops a permissions slice out of a store:save patch', () => {
+    const patch = validatePersistedPatch({
+      permissions: { 'https://evil.example': { camera: 'allow' } },
+      homeUrl: 'example.com'
+    })
+
+    expect(patch).toEqual({ homeUrl: 'https://example.com/' })
+    expect('permissions' in patch).toBe(false)
+  })
+})
+
+describe('validateAuthCredentials', () => {
+  it('accepts a pair and rebuilds it', () => {
+    const credentials = { username: 'ada', password: 'hunter2', extra: 'x' }
+    const validated = validateAuthCredentials(credentials)
+
+    expect(validated).toEqual({ username: 'ada', password: 'hunter2' })
+    expect(validated).not.toBe(credentials)
+  })
+
+  it('accepts empty strings — some servers want exactly that', () => {
+    expect(validateAuthCredentials({ username: '', password: '' })).toEqual({
+      username: '',
+      password: ''
+    })
+  })
+
+  it('accepts null, which is how a cancel travels', () => {
+    expect(validateAuthCredentials(null)).toBeNull()
+  })
+
+  it.each([
+    ['a string', 'ada:hunter2'],
+    ['an array', []],
+    ['undefined', undefined],
+    ['a missing password', { username: 'ada' }],
+    ['a numeric username', { username: 7, password: 'x' }],
+    ['a username past the cap', { username: 'x'.repeat(257), password: 'x' }],
+    ['a password past the cap', { username: 'ada', password: 'x'.repeat(1025) }]
+  ])('rejects %s', (_label, value) => {
+    expect(() => validateAuthCredentials(value)).toThrow(/invalid ipc payload/i)
+  })
+})
+
+describe('the security slice of store:save', () => {
+  it('carries the certificate switch through', () => {
+    expect(validatePersistedPatch({ security: { allowInsecureCertificates: true } })).toEqual({
+      security: { allowInsecureCertificates: true }
+    })
+  })
+
+  it('drops anything else the slice carries', () => {
+    expect(
+      validatePersistedPatch({
+        security: { allowInsecureCertificates: false, disableWebSecurity: true }
+      })
+    ).toEqual({ security: { allowInsecureCertificates: false } })
+  })
+
+  it.each([
+    ['a truthy string instead of a boolean', { security: { allowInsecureCertificates: 'true' } }],
+    ['a missing field', { security: {} }],
+    ['a non-object slice', { security: true }],
+    ['an array', { security: [] }]
+  ])('rejects %s', (_label, payload) => {
+    expect(() => validatePersistedPatch(payload)).toThrow(/invalid ipc payload/i)
   })
 })

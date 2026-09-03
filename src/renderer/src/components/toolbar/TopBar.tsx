@@ -1,13 +1,16 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import {
   ArrowPathRoundedSquareIcon,
   ArrowsPointingOutIcon,
   ArrowTopRightOnSquareIcon,
   Bars2Icon,
+  ClockIcon,
   Cog6ToothIcon,
   ComputerDesktopIcon,
   CursorArrowRaysIcon,
+  DocumentArrowUpIcon,
   EllipsisVerticalIcon,
+  HomeIcon,
   LinkIcon,
   LinkSlashIcon,
   MagnifyingGlassMinusIcon,
@@ -15,10 +18,14 @@ import {
   MoonIcon,
   PlusIcon,
   RectangleGroupIcon,
+  Square2StackIcon,
+  SquaresPlusIcon,
+  StarIcon,
   SunIcon,
   ViewColumnsIcon
 } from '@heroicons/react/24/outline'
 import type { DockPosition } from '@shared/ipc'
+import type { CanvasLayoutMode } from '@shared/persistence-types'
 import { SuiteSelector } from '@renderer/components/device-manager/SuiteSelector'
 import { SettingsDialog } from '@renderer/components/settings/SettingsDialog'
 import { Button } from '@renderer/components/ui/button'
@@ -27,18 +34,26 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuShortcut,
   DropdownMenuTrigger
 } from '@renderer/components/ui/dropdown-menu'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
+import { openLocalFile } from '@renderer/lib/browsing'
 import { cn } from '@renderer/lib/utils'
+import { useBookmarks } from '@renderer/stores/bookmarks'
+import { useHistory } from '@renderer/stores/history'
 import { useLayout } from '@renderer/stores/layout'
+import { useNavigation } from '@renderer/stores/navigation'
 import { usePanels } from '@renderer/stores/panels'
 import { useSettings } from '@renderer/stores/settings'
 import { useSync } from '@renderer/stores/sync'
 import { AddressBar } from './AddressBar'
+import { ClearMenu } from './ClearMenu'
 import { NavControls } from './NavControls'
+import { Notice } from './Notice'
 import { ShotAllButton, ShotNotice } from './ShotControls'
 
 type IconButtonProps = {
@@ -144,6 +159,49 @@ function ThemeToggle(): React.JSX.Element {
  * gesture people actually use.
  */
 /**
+ * How the canvas arranges the frames, as a radio group.
+ *
+ * Four mutually exclusive answers to one question, so they are radio items and
+ * not four toggles: the menu says which one is on without the user having to
+ * infer it from three that are off, and screen readers say the same thing. The
+ * chord is on the group rather than on a row, because it steps through all four
+ * rather than reaching any one of them.
+ */
+function LayoutModeItems(): React.JSX.Element {
+  const mode = useLayout((s) => s.mode)
+  const setMode = useLayout((s) => s.setMode)
+
+  const item = (
+    value: CanvasLayoutMode,
+    label: string,
+    icon: React.ReactNode
+  ): React.JSX.Element => (
+    <DropdownMenuRadioItem value={value}>
+      {icon}
+      {label}
+    </DropdownMenuRadioItem>
+  )
+
+  return (
+    <>
+      <DropdownMenuLabel className="flex items-center">
+        Layout
+        <DropdownMenuShortcut>{'⇧'}Ctrl L</DropdownMenuShortcut>
+      </DropdownMenuLabel>
+      <DropdownMenuRadioGroup
+        value={mode}
+        onValueChange={(next) => setMode(next as CanvasLayoutMode)}
+      >
+        {item('column', 'Column', <Bars2Icon />)}
+        {item('flex', 'Flexible rows', <ViewColumnsIcon />)}
+        {item('masonry', 'Masonry', <SquaresPlusIcon />)}
+        {item('individual', 'One device', <Square2StackIcon />)}
+      </DropdownMenuRadioGroup>
+    </>
+  )
+}
+
+/**
  * Where DevTools opens, as a menu.
  *
  * The dock's own header carries the same three choices, but it only exists
@@ -209,6 +267,86 @@ function InspectToggle(): React.JSX.Element {
   )
 }
 
+/**
+ * How many saved pages the menu is a way into.
+ *
+ * A shortlist, not the library: the star's popover is where a bookmark is
+ * edited, and the address bar's suggestions are where one is *searched for*.
+ * This is the "take me back to one of the few I use" path, and a menu that
+ * scrolled would stop being that.
+ */
+const MENU_BOOKMARKS = 6
+
+/**
+ * The saved pages, as a way back to them.
+ *
+ * Newest first, which is the order the store keeps: the page saved five minutes
+ * ago is the one this menu is usually opened for.
+ */
+function BookmarkItems(): React.JSX.Element {
+  const items = useBookmarks((s) => s.items)
+  const navigate = useNavigation((s) => s.navigate)
+  // Derived through `useMemo`: a selector that sliced the list per call would
+  // return a new array every time and re-render forever (React error #185).
+  const shown = useMemo(() => items.slice(0, MENU_BOOKMARKS), [items])
+
+  return (
+    <>
+      <DropdownMenuLabel>Bookmarks</DropdownMenuLabel>
+      {shown.length === 0 ? (
+        <DropdownMenuItem disabled>
+          <StarIcon />
+          Nothing saved yet
+        </DropdownMenuItem>
+      ) : (
+        shown.map((bookmark) => (
+          <DropdownMenuItem key={bookmark.id} onSelect={() => navigate(bookmark.url)}>
+            <StarIcon />
+            <span className="min-w-0 truncate">
+              {bookmark.title === '' ? bookmark.url : bookmark.title}
+            </span>
+          </DropdownMenuItem>
+        ))
+      )}
+    </>
+  )
+}
+
+/**
+ * The page-level actions that are not a button in the bar.
+ *
+ * Setting a home page is a decision made once; opening a local file is rare
+ * enough that its chord is the whole fast path; clearing history is the kind of
+ * thing that should take a deliberate trip through a menu.
+ */
+function PageItems(): React.JSX.Element {
+  const url = useNavigation((s) => s.url)
+  const homeUrl = useBookmarks((s) => s.homeUrl)
+  const setHome = useBookmarks((s) => s.setHome)
+  const isHome = homeUrl !== '' && homeUrl === url
+
+  return (
+    <>
+      <DropdownMenuItem onSelect={() => void openLocalFile()}>
+        <DocumentArrowUpIcon />
+        Open file…
+        <DropdownMenuShortcut>Ctrl O</DropdownMenuShortcut>
+      </DropdownMenuItem>
+      <DropdownMenuItem
+        disabled={url === '' && !isHome}
+        onSelect={() => setHome(isHome ? '' : url)}
+      >
+        <HomeIcon />
+        {isHome ? 'Clear home page' : 'Set this page as home'}
+      </DropdownMenuItem>
+      <DropdownMenuItem onSelect={() => useHistory.getState().clear()}>
+        <ClockIcon />
+        Clear history
+      </DropdownMenuItem>
+    </>
+  )
+}
+
 function OverflowMenu({ onOpenSettings }: { onOpenSettings: () => void }): React.JSX.Element {
   const zoom = useLayout((s) => s.zoom)
   const zoomIn = useLayout((s) => s.zoomIn)
@@ -224,6 +362,12 @@ function OverflowMenu({ onOpenSettings }: { onOpenSettings: () => void }): React
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
+        <BookmarkItems />
+        <DropdownMenuSeparator />
+        <PageItems />
+        <DropdownMenuSeparator />
+        <LayoutModeItems />
+        <DropdownMenuSeparator />
         <DropdownMenuLabel>Canvas zoom</DropdownMenuLabel>
         <DropdownMenuItem onSelect={zoomIn}>
           <MagnifyingGlassPlusIcon />
@@ -282,7 +426,10 @@ export function TopBar(): React.JSX.Element {
         in the corner of the canvas would spend half its life behind a frame.
       */}
       <ShotNotice />
+      {/* Everything else worth one line of feedback: a bookmark, a clear. */}
+      <Notice />
       <div className="flex items-center gap-1">
+        <ClearMenu />
         <SuiteSelector />
         <DeviceLibraryButton />
         <SyncChip />

@@ -196,6 +196,15 @@ export type ElectronViewBackendOptions = {
   inspect?: InspectRegistry
   /** Told about every view's lifetime, so it can be screenshotted. */
   shots?: ShotRegistry
+  /**
+   * Told which icons a page declared, so history can cache one.
+   *
+   * The *urls*, not the images: Chromium hands over `<link rel="icon">` targets
+   * and whoever wants a picture has to go and get it (`favicons.ts`). Reported
+   * from every device rather than only the lead — the cache is keyed by origin,
+   * so the second device through costs a lookup and nothing more.
+   */
+  onFavicon?: (pageUrl: string, iconUrls: string[]) => void
 }
 
 /** Default size of a DevTools window, when the panel gets one of its own. */
@@ -328,6 +337,7 @@ export function createElectronViewBackend(
   const devtools = options.devtools ?? null
   const inspect = options.inspect ?? null
   const shots = options.shots ?? null
+  const onFavicon = options.onFavicon ?? null
   let disposed = false
 
   if (layer !== null) {
@@ -421,6 +431,18 @@ export function createElectronViewBackend(
           template.map((item) => ({ label: item.label, enabled: item.enabled, click: item.click }))
         ).popup({ window })
       })
+
+      // The page said where its icon is. Only the url of the *page* travels
+      // with it: the cache is per origin, and which device happened to parse
+      // the `<link>` first is not information anything downstream wants.
+      if (onFavicon !== null) {
+        wc.on('page-favicon-updated', (_event, icons) => {
+          if (wc.isDestroyed() || icons.length === 0) return
+          const pageUrl = wc.getURL()
+          if (isPrimer(pageUrl)) return
+          onFavicon(pageUrl, icons)
+        })
+      }
 
       // A preload is a document's script: the copy running in the page this
       // view just committed has not been told anything yet, and starts from

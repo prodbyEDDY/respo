@@ -1,0 +1,464 @@
+/**
+ * Who may use the camera, and every other question a page is allowed to ask.
+ *
+ * Respo shipped deny-everything (W1): correct, and unusable the first time
+ * someone builds a map. This is the upgrade — a decision per origin per
+ * capability, remembered, with the *asking* done by Respo's own UI rather than
+ * Chromium's, because the views are native surfaces and Chromium's bubble would
+ * appear over a viewport instead of over the browser.
+ *
+ * Three rules shape everything here:
+ *
+ * - **Main names the origin.** The renderer answers a question by id and sets a
+ *   capability by type; it never says which site it means. An origin taken from
+ *   a renderer payload would be a compromised renderer granting a microphone to
+ *   any site on the machine — the same reasoning that keeps a clear's origin on
+ *   this side (`clear-data.ts`).
+ * - **One question per origin+capability.** Five viewports load one page and all
+ *   five ask for geolocation; that is one prompt, and answering it answers all
+ *   five. A per-view dialog would be a dialog five times.
+ * - **A capability Respo has no row for is refused silently.** Display capture,
+ *   idle detection, window management: a prompt nobody can evaluate is worse
+ *   than a no.
+ *
+ * Electron is nowhere in this file — it takes an origin string and a permission
+ * name — so the part that has to be right is reachable from a unit test.
+ */
+
+import {
+  DEFAULT_PERMISSION_DECISIONS,
+  PERMISSION_TYPES,
+  type PermissionDecision,
+  type PermissionPrompt,
+  type PermissionStatePayload,
+  type PermissionType
+} from '@shared/ipc'
+import {
+  isStorableOrigin,
+  MAX_PERMISSION_ORIGINS,
+  type OriginPermissions,
+  type PermissionsDocument
+} from '@shared/persistence-types'
+import { immediateDeferrer, type Deferrer } from './load-state-batcher'
+
+/** What Electron hands a permission request to be answered with. */
+export type PermissionCallback = (granted: boolean) => void
+
+/** The slice of the persisted document this manager owns. */
+export type PermissionsStore = {
+  read(): PermissionsDocument
+  write(next: PermissionsDocument): void
+}
+
+export type PermissionsManagerOptions = {
+  store: PermissionsStore
+  /**
+   * The site the canvas is on, as main knows it — a url or an origin, or `null`
+   * before anything has loaded. Only what the *panel* is about; a request always
+   * carries its own requesting origin.
+   */
+  currentOrigin: () => string | null
+  /** Push the whole state to the renderer. Called at most once per turn. */
+  onState: (state: PermissionStatePayload) => void
+  /** Coalescing primitive. Injectable so tests need no timers. */
+  deferrer?: Deferrer
+}
+
+/**
+ * More unanswered questions than a person will ever work through.
+ *
+ * A page can ask for the same thing again after being ignored, and a page built
+ * to do that must not be able to fill the toolbar with prompts. Past this,
+ * requests are refused without being shown — the user is already looking at six
+ * questions from this site.
+ */
+export const MAX_PENDING_PROMPTS = 6
+
+export interface PermissionsManager {
+  /**
+   * A page is asking. `origin` is the requesting url or origin as Electron
+   * reported it; `permission` is Electron's own name for the capability.
+   */
+  request(
+    origin: string | null,
+    permission: string,
+    mediaTypes: readonly string[] | undefined,
+    callback: PermissionCallback
+  ): void
+  /**
+   * Chromium's silent question — "would this be allowed?" — asked before some
+   * APIs even reach the request handler. `ask` answers `false` here: "we would
+   * have put a dialog up" is not consent.
+   */
+  check(origin: string | null, permission: string, mediaType?: string): boolean
+  /** Answer one prompt by id. Unknown ids are ignored: the question is gone. */
+  respond(id: string, allow: boolean): void
+  /**
+   * Put one prompt away without deciding anything.
+   *
+   * The request is refused — a page cannot be left waiting forever — but
+   * nothing is written, so the site may ask again next time. This is what
+   * clicking away from the bubble means.
+   */
+  dismiss(id: string): void
+  /** Set one capability for the site the canvas is on. */
+  setDecision(type: PermissionType, decision: PermissionDecision): PermissionStatePayload
+  /** Forget every decision for the site the canvas is on. */
+  resetOrigin(): PermissionStatePayload
+  /** The current picture, for `permissions:get`. */
+  state(): PermissionStatePayload
+  /** The canvas may have moved to another site; push if the picture changed. */
+  refresh(): void
+  dispose(): void
+}
+
+/**
+ * Translate one Electron permission name into the capabilities Respo names.
+ *
+ * `null` means "Respo has no row for this", which is a refusal — see the module
+ * comment. `media` is the interesting one: it is camera, microphone or both, and
+ * a request for both is a request for two capabilities that are granted together
+ * or not at all.
+ *
+ * Exported for its unit test; production code reaches it through `request`.
+ */
+export function mapPermission(
+  permission: string,
+  mediaTypes: readonly string[] | undefined
+): PermissionType[] | null {
+  switch (permission) {
+    case 'media': {
+      const types: PermissionType[] = []
+      if (mediaTypes?.includes('video') === true) types.push('camera')
+      if (mediaTypes?.includes('audio') === true) types.push('microphone')
+      // A `media` request that names no media type is not a question anyone can
+      // answer — and it is the shape a probing page sends.
+      return types.length === 0 ? null : types
+    }
+    case 'geolocation':
+      return ['geolocation']
+    case 'notifications':
+      return ['notifications']
+    case 'clipboard-read':
+      return ['clipboard-read']
+    case 'fullscreen':
+      return ['fullscreen']
+    // `midiSysex` is the dangerous half of MIDI (it can reflash a device), and
+    // plain `midi` is what Chromium asks for otherwise. One row for both: the
+    // question a person can answer is "may this site talk to my MIDI gear".
+    case 'midi':
+    case 'midiSysex':
+      return ['midi']
+    case 'pointerLock':
+      return ['pointerLock']
+    default:
+      return null
+  }
+}
+
+/**
+ * The origin a decision would be keyed by, or `null` when there is not one.
+ *
+ * Accepts a full url or a bare origin, because Electron reports the first and
+ * the lead tracker holds the second. Anything that is not an http(s) site — a
+ * `file:` page, a blank canvas, junk — has no origin worth a decision, and a
+ * request from one is refused rather than attributed to something.
+ */
+export function permissionOrigin(value: string | null | undefined): string | null {
+  if (value === null || value === undefined || value === '') return null
+  try {
+    const url = new URL(value)
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return null
+    return isStorableOrigin(url.origin) ? url.origin : null
+  } catch {
+    return null
+  }
+}
+
+type Pending = {
+  id: string
+  origin: string
+  types: PermissionType[]
+  callbacks: PermissionCallback[]
+}
+
+function promptKey(origin: string, types: readonly PermissionType[]): string {
+  return `${origin} ${[...types].sort().join(',')}`
+}
+
+/**
+ * Keep the document from growing without bound.
+ *
+ * Object key order is insertion order, so the front of it is the sites decided
+ * about longest ago — the ones nobody remembers making a decision about. The
+ * origin being written now is never the one dropped.
+ */
+function capOrigins(document: PermissionsDocument, keep: string): PermissionsDocument {
+  const keys = Object.keys(document)
+  if (keys.length <= MAX_PERMISSION_ORIGINS) return document
+
+  const out = { ...document }
+  for (const key of keys) {
+    if (Object.keys(out).length <= MAX_PERMISSION_ORIGINS) break
+    if (key === keep) continue
+    delete out[key]
+  }
+  return out
+}
+
+export function createPermissionsManager(options: PermissionsManagerOptions): PermissionsManager {
+  const { store, currentOrigin, onState } = options
+  const deferrer = options.deferrer ?? immediateDeferrer
+
+  // Two indexes over the same entries: by key, because that is what coalesces a
+  // second identical request into the first; by id, because that is what an
+  // answer names.
+  const byKey = new Map<string, Pending>()
+  const byId = new Map<string, Pending>()
+  let sequence = 0
+  let cancelPush: (() => void) | null = null
+  /** The last picture actually sent. Nothing is pushed twice. */
+  let pushed: string | null = null
+  let disposed = false
+
+  const decisionFor = (origin: string, type: PermissionType): PermissionDecision =>
+    store.read()[origin]?.[type] ?? DEFAULT_PERMISSION_DECISIONS[type]
+
+  const prompts = (): PermissionPrompt[] =>
+    [...byKey.values()].map((entry) => ({
+      id: entry.id,
+      origin: entry.origin,
+      types: [...entry.types]
+    }))
+
+  const state = (): PermissionStatePayload => {
+    const origin = permissionOrigin(currentOrigin())
+    const decisions = {} as Record<PermissionType, PermissionDecision>
+    for (const type of PERMISSION_TYPES) {
+      decisions[type] =
+        origin === null ? DEFAULT_PERMISSION_DECISIONS[type] : decisionFor(origin, type)
+    }
+    return { origin, decisions, prompts: prompts() }
+  }
+
+  /** Cheap identity of a picture, so an unchanged one costs no IPC message. */
+  const signature = (value: PermissionStatePayload): string =>
+    [
+      value.origin ?? '',
+      PERMISSION_TYPES.map((type) => value.decisions[type]).join(','),
+      value.prompts.map((prompt) => `${prompt.id}:${prompt.types.join('+')}`).join(' ')
+    ].join('|')
+
+  const flush = (): void => {
+    cancelPush = null
+    if (disposed) return
+    const next = state()
+    const stamp = signature(next)
+    if (stamp === pushed) return
+    pushed = stamp
+    onState(next)
+  }
+
+  const schedule = (): void => {
+    if (disposed) return
+    cancelPush ??= deferrer.defer(flush)
+  }
+
+  const persist = (
+    origin: string,
+    types: readonly PermissionType[],
+    decision: PermissionDecision
+  ): void => {
+    const document = store.read()
+    const entry: OriginPermissions = { ...document[origin] }
+    for (const type of types) {
+      if (decision === 'ask') delete entry[type]
+      else entry[type] = decision
+    }
+
+    const next: PermissionsDocument = { ...document }
+    // An origin whose last decision was cleared is not an entry any more: an
+    // empty object would mean "the defaults", which is what no entry means.
+    if (Object.keys(entry).length === 0) delete next[origin]
+    else next[origin] = entry
+    store.write(capOrigins(next, origin))
+  }
+
+  const drop = (entry: Pending): void => {
+    byId.delete(entry.id)
+    byKey.delete(promptKey(entry.origin, entry.types))
+  }
+
+  /** Answer everyone who was waiting behind one question. */
+  const settle = (entry: Pending, granted: boolean): void => {
+    for (const callback of entry.callbacks) {
+      // A view torn down mid-question leaves a callback that throws. One of
+      // those must not take the other four answers down with it.
+      try {
+        callback(granted)
+      } catch (error) {
+        console.error('permissions: a request callback threw', error)
+      }
+    }
+  }
+
+  /**
+   * A decision made in the *panel* also answers any question it settles.
+   *
+   * Otherwise "Block" in the panel would leave the prompt for the same thing
+   * sitting there, and the page would still be waiting for an answer the user
+   * believes they have given.
+   */
+  const applyToPending = (origin: string, type: PermissionType): void => {
+    for (const entry of [...byKey.values()]) {
+      if (entry.origin !== origin || !entry.types.includes(type)) continue
+      const decisions = entry.types.map((each) => decisionFor(origin, each))
+      if (decisions.includes('block')) {
+        drop(entry)
+        settle(entry, false)
+        continue
+      }
+      if (decisions.every((decision) => decision === 'allow')) {
+        drop(entry)
+        settle(entry, true)
+      }
+      // Still at least one `ask`: the question stands, unchanged.
+    }
+  }
+
+  return {
+    request(origin, permission, mediaTypes, callback): void {
+      if (disposed) {
+        callback(false)
+        return
+      }
+
+      const types = mapPermission(permission, mediaTypes)
+      // Nothing Respo has a row for. Refused, and not narrated: the page asked
+      // for something the user was never offered a way to say yes to.
+      if (types === null) {
+        callback(false)
+        return
+      }
+
+      const site = permissionOrigin(origin)
+      // A request Respo cannot attribute to a site cannot be remembered either,
+      // and "allow this, for nobody in particular" is not a question worth asking.
+      if (site === null) {
+        callback(false)
+        return
+      }
+
+      const decisions = types.map((type) => decisionFor(site, type))
+      // Every type has to be allowed. A `getUserMedia({video, audio})` where
+      // only the camera was granted is not a granted request.
+      if (decisions.includes('block')) {
+        callback(false)
+        return
+      }
+      if (decisions.every((decision) => decision === 'allow')) {
+        callback(true)
+        return
+      }
+
+      const key = promptKey(site, types)
+      const existing = byKey.get(key)
+      if (existing !== undefined) {
+        // The coalescing that makes five viewports one prompt.
+        existing.callbacks.push(callback)
+        return
+      }
+      if (byKey.size >= MAX_PENDING_PROMPTS) {
+        callback(false)
+        return
+      }
+
+      sequence += 1
+      const entry: Pending = {
+        id: `perm-${sequence}`,
+        origin: site,
+        types: [...types],
+        callbacks: [callback]
+      }
+      byKey.set(key, entry)
+      byId.set(entry.id, entry)
+      schedule()
+    },
+
+    check(origin, permission, mediaType): boolean {
+      const types = mapPermission(permission, mediaType === undefined ? undefined : [mediaType])
+      if (types === null) return false
+      const site = permissionOrigin(origin)
+      if (site === null) return false
+      return types.every((type) => decisionFor(site, type) === 'allow')
+    },
+
+    respond(id, allow): void {
+      const entry = byId.get(id)
+      // A stale answer: the question was already settled, or the window that
+      // asked it is gone. Silently nothing — never a guess at which one it meant.
+      if (entry === undefined) return
+
+      drop(entry)
+      // Kept, the way a browser keeps it. The panel is where it is changed back.
+      persist(entry.origin, entry.types, allow ? 'allow' : 'block')
+      settle(entry, allow)
+      schedule()
+    },
+
+    dismiss(id): void {
+      const entry = byId.get(id)
+      if (entry === undefined) return
+      drop(entry)
+      // Refused for now, and nothing persisted: see `PermissionsManager.dismiss`.
+      settle(entry, false)
+      schedule()
+    },
+
+    setDecision(type, decision): PermissionStatePayload {
+      const site = permissionOrigin(currentOrigin())
+      // Nowhere to hang the decision. The panel disables its rows in this case;
+      // this is the boundary saying the same thing.
+      if (site === null) return state()
+
+      persist(site, [type], decision)
+      if (decision !== 'ask') applyToPending(site, type)
+      schedule()
+      return state()
+    },
+
+    resetOrigin(): PermissionStatePayload {
+      const site = permissionOrigin(currentOrigin())
+      if (site === null) return state()
+
+      const document = store.read()
+      if (document[site] !== undefined) {
+        const next = { ...document }
+        delete next[site]
+        store.write(next)
+      }
+      // Pending questions survive: everything just went back to `ask`, and
+      // `ask` is exactly what a pending question is.
+      schedule()
+      return state()
+    },
+
+    state,
+
+    refresh(): void {
+      schedule()
+    },
+
+    dispose(): void {
+      if (disposed) return
+      disposed = true
+      cancelPush?.()
+      cancelPush = null
+      // Nothing is left waiting on an answer that can no longer be given.
+      const entries = [...byKey.values()]
+      byKey.clear()
+      byId.clear()
+      for (const entry of entries) settle(entry, false)
+    }
+  }
+}

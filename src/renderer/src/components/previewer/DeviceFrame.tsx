@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import {
   ArrowPathIcon,
   ArrowPathRoundedSquareIcon,
+  ArrowsPointingOutIcon,
   ArrowsUpDownIcon,
   CameraIcon,
   ChevronDownIcon,
@@ -183,6 +184,36 @@ function DevtoolsToggle({ deviceId }: { deviceId: string }): React.JSX.Element {
 }
 
 /**
+ * Give this device the whole canvas, from its own header.
+ *
+ * The way *into* individual mode, and deliberately the only one that names a
+ * device: the layout menu can switch to the mode, but "show me this one" is a
+ * thought people have while looking at a particular frame, and walking up to a
+ * menu to say which would be the long way round. Esc — or the strip's own
+ * button — is the way back.
+ */
+function ExpandButton({ deviceId }: { deviceId: string }): React.JSX.Element {
+  const enterIndividual = useLayout((s) => s.enterIndividual)
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          aria-label="Show only this device"
+          onClick={() => enterIndividual(deviceId)}
+          className="text-muted-foreground hover:text-foreground"
+        >
+          <ArrowsPointingOutIcon />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>Show only this device</TooltipContent>
+    </Tooltip>
+  )
+}
+
+/**
  * Screenshot this device, from its own header.
  *
  * One click is the whole gesture: the viewport, saved. Everything else is one
@@ -297,6 +328,8 @@ export function DeviceFrame({ device, zoom, viewportRef }: DeviceFrameProps): Re
   const isLead = useSync((s) => s.leadDeviceId === device.id && s.disabled[device.id] !== true)
   const setLead = useSync((s) => s.setLead)
   const flashing = useShutter(device.id)
+  // Nothing to expand when this frame already has the canvas to itself.
+  const expandable = useLayout((s) => s.mode !== 'individual')
   const width = Math.round(device.width * zoom)
   const height = Math.round(device.height * zoom)
 
@@ -358,6 +391,12 @@ export function DeviceFrame({ device, zoom, viewportRef }: DeviceFrameProps): Re
         {isRotatable(device) ? <RotateToggle deviceId={device.id} /> : null}
         <ShotButton deviceId={device.id} />
         <DevtoolsToggle deviceId={device.id} />
+        {/*
+          Last in the row: it changes what the *canvas* shows rather than
+          anything about this device, so it reads as the way out of the row
+          instead of one more device control.
+        */}
+        {expandable ? <ExpandButton deviceId={device.id} /> : null}
       </header>
 
       <div

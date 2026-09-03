@@ -7,13 +7,32 @@
  * back at its caller instead of reaching `ViewManager` or `nativeTheme`.
  */
 
-import type { DockPosition, InputEventPayload, ShotRequest, ThemeSource } from '@shared/ipc'
+import {
+  isPermissionDecision,
+  isPermissionType,
+  normalizeUrl,
+  type AuthCredentials,
+  type ClearTarget,
+  type DockPosition,
+  type InputEventPayload,
+  type PermissionDecision,
+  type PermissionType,
+  type ShotRequest,
+  type ThemeSource
+} from '@shared/ipc'
 import {
   clampDockSize,
+  isCanvasLayoutMode,
+  MAX_BOOKMARKS,
   MAX_PATH_LENGTH,
+  MAX_TITLE_LENGTH,
+  MAX_URL_LENGTH,
+  type Bookmark,
   type DevtoolsSettings,
+  type LayoutSettings,
   type PersistedState,
   type ScreenshotSettings,
+  type SecuritySettings,
   type Suite,
   type SyncSettings
 } from '@shared/persistence-types'
@@ -187,12 +206,185 @@ export function validatePersistedPatch(
   }
   if (patch['sync'] !== undefined) out.sync = validateSyncSettings(patch['sync'])
   if (patch['rotated'] !== undefined) out.rotated = validateRotated(patch['rotated'])
+  if (patch['layout'] !== undefined) out.layout = validateLayoutSettings(patch['layout'])
   if (patch['devtools'] !== undefined) out.devtools = validateDevtoolsSettings(patch['devtools'])
   if (patch['screenshots'] !== undefined) {
     out.screenshots = validateScreenshotSettings(patch['screenshots'], context.screenshotDirectory)
   }
+  if (patch['bookmarks'] !== undefined) out.bookmarks = validateBookmarks(patch['bookmarks'])
+  if (patch['homeUrl'] !== undefined) out.homeUrl = validateHomeUrl(patch['homeUrl'])
+  if (patch['security'] !== undefined) out.security = validateSecuritySettings(patch['security'])
+  // `permissions` is deliberately absent, and it is not an oversight: it is
+  // main's field, like the screenshots folder above. A patch that could set it
+  // would be a renderer writing `{"https://evil.example": {"camera": "allow"}}`
+  // into the document and skipping the question entirely. The only doors into
+  // that slice are answering a prompt and the permission panel, and both of
+  // them go through `permissions:*`, where main supplies the origin.
 
   return out
+}
+
+/**
+ * Validate the persisted bookmark list.
+ *
+ * Every url is put through `normalizeUrl` and the *normalized* one is stored:
+ * this list is a set of things a view will later be told to load, so "it
+ * parsed" is not the bar — it has to be a url a device view is allowed to open
+ * at all (spec §7a). A junk entry throws rather than being skipped, unlike the
+ * disk-repair path: this payload comes from code, not from a file someone
+ * edited, and a renderer sending one is a bug worth surfacing.
+ */
+export function validateBookmarks(value: unknown): Bookmark[] {
+  if (!Array.isArray(value)) fail('store:save bookmarks must be an array')
+  if (value.length > MAX_BOOKMARKS) {
+    fail(`store:save accepts at most ${MAX_BOOKMARKS} bookmarks`)
+  }
+
+  return value.map((entry) => {
+    if (typeof entry !== 'object' || entry === null) fail('bookmark must be an object')
+    const bookmark = entry as Record<string, unknown>
+
+    if (!isFilledString(bookmark['id']) || bookmark['id'].length > MAX_NAME_LENGTH) {
+      fail('bookmark.id must be a non-empty string')
+    }
+    const title = bookmark['title']
+    if (typeof title !== 'string' || title.length > MAX_TITLE_LENGTH) {
+      fail(`bookmark.title must be a string of at most ${MAX_TITLE_LENGTH} characters`)
+    }
+    const rawUrl = bookmark['url']
+    if (!isFilledString(rawUrl) || rawUrl.length > MAX_URL_LENGTH) {
+      fail(`bookmark.url must be a non-empty string of at most ${MAX_URL_LENGTH} characters`)
+    }
+    const url = normalizeUrl(rawUrl)
+    if (url === null) fail('bookmark.url is not a url a device view could load')
+
+    const addedAt = bookmark['addedAt']
+    if (typeof addedAt !== 'number' || !Number.isFinite(addedAt) || addedAt < 0) {
+      fail('bookmark.addedAt must be a non-negative timestamp')
+    }
+
+    return { id: bookmark['id'], title, url, addedAt }
+  })
+}
+
+/** Validate the persisted home page: a loadable url, or `''` for none. */
+export function validateHomeUrl(value: unknown): string {
+  if (value === '') return ''
+  if (typeof value !== 'string' || value.length > MAX_URL_LENGTH) {
+    fail(`store:save homeUrl must be a string of at most ${MAX_URL_LENGTH} characters`)
+  }
+  const url = normalizeUrl(value)
+  if (url === null) fail('store:save homeUrl is not a url a device view could load')
+  return url
+}
+
+/**
+ * Validate a `history:query` prefix.
+ *
+ * Nothing is looked up by it and nothing is executed with it — it is matched
+ * against strings — so the only thing worth refusing is a payload big enough to
+ * be an attack on the matcher itself.
+ */
+export function validateHistoryQuery(value: unknown): string {
+  if (typeof value !== 'string') fail('history:query expects a string')
+  if (value.length > MAX_URL_LENGTH) fail('history:query prefix is too long')
+  return value
+}
+
+/**
+ * The longest correlation id main ever mints (`perm-…`, `auth-…`). An argument
+ * past this is not one of ours and there is nothing to look up.
+ */
+const MAX_PROMPT_ID_LENGTH = 64
+
+/**
+ * Validate a prompt id — a `permissions:respond` or `auth:respond` argument.
+ *
+ * Shape only. Whether it names a *live* question is the manager's answer, and
+ * an id it does not know is ignored rather than refused: a prompt settled a
+ * frame before the click is a race, not an attack.
+ */
+export function validatePromptId(value: unknown, what: string): string {
+  if (!isFilledString(value) || value.length > MAX_PROMPT_ID_LENGTH) {
+    fail(`${what} expects a prompt id`)
+  }
+  return value
+}
+
+/**
+ * Longest username and password `auth:respond` will carry.
+ *
+ * Generous — a token pasted into a password field is legitimately long — and
+ * still far short of a payload. These strings go into an `Authorization`
+ * header, not into a parser, so length is the only thing worth bounding.
+ */
+const MAX_USERNAME_LENGTH = 256
+const MAX_PASSWORD_LENGTH = 1024
+
+/**
+ * Validate an `auth:respond` credential pair, or `null` for a cancel.
+ *
+ * Note what is *not* here: no logging of any kind, in this function or in its
+ * failure path. A validator that printed its argument would print a password.
+ * The pair is rebuilt rather than passed through for the usual reason — nothing
+ * from the renderer is handed onward with extra keys attached.
+ */
+export function validateAuthCredentials(value: unknown): AuthCredentials | null {
+  if (value === null) return null
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    fail('auth:respond expects credentials or null')
+  }
+
+  const credentials = value as Record<string, unknown>
+  const username = credentials['username']
+  const password = credentials['password']
+  if (typeof username !== 'string' || username.length > MAX_USERNAME_LENGTH) {
+    fail(`auth:respond username must be a string of at most ${MAX_USERNAME_LENGTH} characters`)
+  }
+  if (typeof password !== 'string' || password.length > MAX_PASSWORD_LENGTH) {
+    fail(`auth:respond password must be a string of at most ${MAX_PASSWORD_LENGTH} characters`)
+  }
+
+  return { username, password }
+}
+
+/**
+ * Validate the persisted safety switches.
+ *
+ * Only a literal `true` turns one on. This one *is* the renderer's to set — it
+ * is a setting with a toggle in front of it, unlike `permissions` — but a junk
+ * value must read as off, never as on.
+ */
+function validateSecuritySettings(value: unknown): SecuritySettings {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    fail('store:save security must be an object')
+  }
+  const security = value as Record<string, unknown>
+  const allow = security['allowInsecureCertificates']
+  if (typeof allow !== 'boolean') {
+    fail('store:save security.allowInsecureCertificates must be a boolean')
+  }
+  return { allowInsecureCertificates: allow }
+}
+
+/** Validate a `permissions:set` capability. */
+export function validatePermissionType(value: unknown): PermissionType {
+  if (!isPermissionType(value)) fail('permissions:set expects a known capability')
+  return value
+}
+
+/** Validate a `permissions:set` decision. */
+export function validatePermissionDecision(value: unknown): PermissionDecision {
+  if (!isPermissionDecision(value)) fail("permissions:set expects 'allow', 'block' or 'ask'")
+  return value
+}
+
+/** Validate a `data:clear` target. */
+export function validateClearTarget(value: unknown): ClearTarget {
+  if (value !== 'storage' && value !== 'cookies' && value !== 'cache' && value !== 'all') {
+    fail("data:clear expects 'storage', 'cookies', 'cache' or 'all'")
+  }
+  return value
 }
 
 /**
@@ -282,6 +474,33 @@ export function validateShotPath(value: unknown): string {
   }
   if (value.includes('\0')) fail('shot:reveal path must not contain NUL')
   return value
+}
+
+/**
+ * Validate the persisted canvas layout.
+ *
+ * The device id is a *label* here, not something main resolves: nothing on this
+ * side looks a device up by it, the renderer falls back to the first frame when
+ * it names nothing, and `null` is the honest way to say "no preference". So it
+ * is length-checked like every other id and otherwise passed through.
+ */
+function validateLayoutSettings(value: unknown): LayoutSettings {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    fail('store:save layout must be an object')
+  }
+  const layout = value as Record<string, unknown>
+  const mode = layout['mode']
+  if (!isCanvasLayoutMode(mode)) fail('store:save layout.mode is not a known layout')
+
+  const device = layout['individualDeviceId']
+  if (device !== null && device !== undefined && !isFilledString(device)) {
+    fail('store:save layout.individualDeviceId must be a device id or null')
+  }
+  if (typeof device === 'string' && device.length > MAX_NAME_LENGTH) {
+    fail('store:save layout.individualDeviceId is too long')
+  }
+
+  return { mode, individualDeviceId: typeof device === 'string' ? device : null }
 }
 
 /** Validate the persisted DevTools panel shape. The size is clamped, not rejected. */

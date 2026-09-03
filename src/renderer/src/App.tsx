@@ -2,18 +2,25 @@ import { useEffect, useMemo, useState } from 'react'
 import { DeviceManagerView } from '@renderer/components/device-manager/DeviceManagerView'
 import { DevtoolsDock } from '@renderer/components/devtools/DevtoolsDock'
 import { Canvas } from '@renderer/components/previewer/Canvas'
+import { AuthDialog } from '@renderer/components/toolbar/AuthDialog'
 import { TopBar } from '@renderer/components/toolbar/TopBar'
 import { TooltipProvider } from '@renderer/components/ui/tooltip'
+import { useAddressHotkeys } from '@renderer/hooks/useAddressHotkeys'
+import { useClearHotkeys } from '@renderer/hooks/useClearHotkeys'
 import { useInspectHotkeys } from '@renderer/hooks/useInspectHotkeys'
+import { useLayoutHotkeys } from '@renderer/hooks/useLayoutHotkeys'
 import { useShotHotkeys } from '@renderer/hooks/useShotHotkeys'
 import { ipcBridge } from '@renderer/lib/ipc'
 import { createLayoutTelemetry, type LayoutTelemetry } from '@renderer/lib/layout-telemetry'
 import { loadPersistedState } from '@renderer/lib/persistence'
 import { cn } from '@renderer/lib/utils'
+import { attachAuthBridge } from '@renderer/stores/auth'
+import { useBookmarks } from '@renderer/stores/bookmarks'
 import { useDevices } from '@renderer/stores/devices'
 import { applyRotation, useLayout } from '@renderer/stores/layout'
 import { attachNavigationBridge, useNavigation } from '@renderer/stores/navigation'
 import { attachPanelsBridge, selectDockVisible, usePanels } from '@renderer/stores/panels'
+import { attachPermissionsBridge } from '@renderer/stores/permissions'
 import { useSettings } from '@renderer/stores/settings'
 import { attachShotsBridge, useShots } from '@renderer/stores/shots'
 import { useSync } from '@renderer/stores/sync'
@@ -64,11 +71,16 @@ function usePersistedState(): boolean {
       if (!live) return
       if (state !== null) {
         useSettings.getState().hydrate(state.ui.theme)
+        useSettings.getState().hydrateSecurity(state.security)
         useDevices.getState().hydrate(state)
         useSync.getState().hydrate(state.sync)
         useLayout.getState().hydrateRotation(state.rotated)
+        useLayout.getState().hydrateLayout(state.layout)
         usePanels.getState().hydrate(state.devtools)
         useShots.getState().hydrate(state.screenshots)
+        // The home page itself is main's to apply — it decides the start url
+        // before the renderer has hydrated — so this only mirrors it.
+        useBookmarks.getState().hydrate(state)
       }
       setHydrated(true)
     })
@@ -123,10 +135,24 @@ function App(): React.JSX.Element {
   // Screenshot progress and results, batched the same way load events are.
   useEffect(() => attachShotsBridge(), [])
 
+  // What each site may do, and what one is asking for right now. Main is the
+  // authority — it hears the questions and owns the answers.
+  useEffect(() => attachPermissionsBridge(), [])
+
+  // Servers asking for a username and password. Coalesced in main, so this is
+  // one dialog however many viewports hit the same host.
+  useEffect(() => attachAuthBridge(), [])
+
   // mod+i arms the element picker, Escape puts it away.
   useInspectHotkeys()
   // mod+s photographs the whole canvas.
   useShotHotkeys()
+  // mod+shift+l cycles the canvas layout, Escape leaves individual mode.
+  useLayoutHotkeys()
+  // mod+d saves the page, mod+l goes to the address bar, mod+o opens a file.
+  useAddressHotkeys()
+  // mod+alt+q/a/z/del forget this site's storage, cookies or cache.
+  useClearHotkeys()
 
   // Hand main the device set. Runs again whenever the selection changes; the
   // view manager reuses the views that stayed and loads the current url into
@@ -193,6 +219,13 @@ function App(): React.JSX.Element {
           </div>
           {showDock && dockedDeviceId !== null ? <DevtoolsDock deviceId={dockedDeviceId} /> : null}
         </div>
+
+        {/*
+          Outside the canvas, and modal: a 401 is not something the page behind
+          it can be worked with until it is answered. It renders nothing at all
+          while no server is asking.
+        */}
+        <AuthDialog />
       </div>
     </TooltipProvider>
   )

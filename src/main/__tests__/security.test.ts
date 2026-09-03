@@ -13,7 +13,13 @@ vi.mock('electron', () => ({
   session: { fromPartition }
 }))
 
-import { DEVICE_PARTITION, installDevicePermissionHandlers, openExternalSafe } from '../security'
+import {
+  DEVICE_PARTITION,
+  installDevicePermissionHandlers,
+  isDeviceWebContents,
+  openExternalSafe,
+  shouldTrustCertificate
+} from '../security'
 
 describe('openExternalSafe', () => {
   beforeEach(() => {
@@ -45,6 +51,27 @@ describe('openExternalSafe', () => {
   })
 })
 
+type RequestHandler = (
+  wc: { getURL(): string } | null,
+  permission: string,
+  callback: (granted: boolean) => void,
+  details: { requestingUrl?: string; mediaTypes?: string[] }
+) => void
+
+type CheckHandler = (
+  wc: unknown,
+  permission: string,
+  requestingOrigin: string,
+  details: { mediaType?: string }
+) => boolean
+
+function handlers(): { request: RequestHandler; check: CheckHandler } {
+  const request = setPermissionRequestHandler.mock.calls[0]?.[0] as RequestHandler | undefined
+  const check = setPermissionCheckHandler.mock.calls[0]?.[0] as CheckHandler | undefined
+  if (request === undefined || check === undefined) throw new Error('handlers were not installed')
+  return { request, check }
+}
+
 describe('installDevicePermissionHandlers', () => {
   beforeEach(() => {
     fromPartition.mockReset()
@@ -53,25 +80,126 @@ describe('installDevicePermissionHandlers', () => {
     fromPartition.mockReturnValue({ setPermissionRequestHandler, setPermissionCheckHandler })
   })
 
-  it('denies every request on the device partition', () => {
+  it('installs both handlers on the device partition', () => {
     installDevicePermissionHandlers()
-
     expect(fromPartition).toHaveBeenCalledWith(DEVICE_PARTITION)
-
-    const request = setPermissionRequestHandler.mock.calls[0]?.[0] as (
-      wc: unknown,
-      permission: string,
-      callback: (granted: boolean) => void
-    ) => void
-    const granted = vi.fn()
-    request(null, 'media', granted)
-    expect(granted).toHaveBeenCalledWith(false)
+    expect(setPermissionRequestHandler).toHaveBeenCalledTimes(1)
+    expect(setPermissionCheckHandler).toHaveBeenCalledTimes(1)
   })
 
-  it('denies every check on the device partition', () => {
-    installDevicePermissionHandlers()
+  it('denies everything when there is no policy to consult', () => {
+    installDevicePermissionHandlers(null)
 
-    const check = setPermissionCheckHandler.mock.calls[0]?.[0] as () => boolean
-    expect(check()).toBe(false)
+    const { request, check } = handlers()
+    const granted = vi.fn()
+    request(null, 'media', granted, { requestingUrl: 'https://a.dev/' })
+
+    expect(granted).toHaveBeenCalledWith(false)
+    expect(check(null, 'media', 'https://a.dev', {})).toBe(false)
+  })
+
+  it('hands a request to the policy with the origin Chromium reported', () => {
+    const gate = { request: vi.fn(), check: vi.fn(() => true) }
+    installDevicePermissionHandlers(gate)
+
+    const callback = vi.fn()
+    handlers().request({ getURL: () => 'https://page.dev/' }, 'media', callback, {
+      requestingUrl: 'https://frame.dev/embed',
+      mediaTypes: ['video']
+    })
+
+    // The *requesting* url, not the page the toolbar happens to show: a
+    // third-party frame asks on its own behalf.
+    expect(gate.request).toHaveBeenCalledWith(
+      'https://frame.dev/embed',
+      'media',
+      ['video'],
+      callback
+    )
+  })
+
+  it('falls back to the view’s own url when no requesting url is reported', () => {
+    const gate = { request: vi.fn(), check: vi.fn(() => false) }
+    installDevicePermissionHandlers(gate)
+
+    handlers().request({ getURL: () => 'https://page.dev/' }, 'geolocation', vi.fn(), {
+      requestingUrl: ''
+    })
+
+    expect(gate.request).toHaveBeenCalledWith(
+      'https://page.dev/',
+      'geolocation',
+      undefined,
+      expect.any(Function)
+    )
+  })
+
+  it('passes a check through, dropping Chromium’s “unknown” media type', () => {
+    const gate = { request: vi.fn(), check: vi.fn(() => true) }
+    installDevicePermissionHandlers(gate)
+
+    expect(handlers().check(null, 'media', 'https://a.dev', { mediaType: 'unknown' })).toBe(true)
+    expect(gate.check).toHaveBeenCalledWith('https://a.dev', 'media', undefined)
+
+    handlers().check(null, 'media', 'https://a.dev', { mediaType: 'audio' })
+    expect(gate.check).toHaveBeenLastCalledWith('https://a.dev', 'media', 'audio')
+  })
+})
+
+describe('isDeviceWebContents', () => {
+  const deviceSession = { id: 'device' }
+
+  beforeEach(() => {
+    fromPartition.mockReset()
+    fromPartition.mockReturnValue(deviceSession)
+  })
+
+  it('recognises a view on the device partition', () => {
+    const wc = { isDestroyed: () => false, session: deviceSession }
+    expect(isDeviceWebContents(wc as never)).toBe(true)
+    expect(fromPartition).toHaveBeenCalledWith(DEVICE_PARTITION)
+  })
+
+  it('does not recognise anything else — the window, a DevTools frontend', () => {
+    const wc = { isDestroyed: () => false, session: { id: 'default' } }
+    expect(isDeviceWebContents(wc as never)).toBe(false)
+  })
+
+  it.each([
+    ['null', null],
+    ['undefined', undefined]
+  ])('answers no for %s', (_label, value) => {
+    expect(isDeviceWebContents(value as never)).toBe(false)
+  })
+
+  it('answers no for a view that is tearing down', () => {
+    const destroyed = { isDestroyed: () => true, session: deviceSession }
+    expect(isDeviceWebContents(destroyed as never)).toBe(false)
+
+    const throwing = {
+      isDestroyed: () => false,
+      get session(): unknown {
+        throw new Error('gone')
+      }
+    }
+    expect(isDeviceWebContents(throwing as never)).toBe(false)
+  })
+})
+
+/**
+ * The security invariant of "allow invalid certificates": it is a setting about
+ * the pages under development, and it must never reach Respo's own window.
+ */
+describe('shouldTrustCertificate', () => {
+  it('trusts only a device view, and only when the switch is on', () => {
+    expect(shouldTrustCertificate({ allowInsecure: true, isDeviceView: true })).toBe(true)
+  })
+
+  it.each([
+    ['the switch is off', { allowInsecure: false, isDeviceView: true }],
+    ['it is not a device view', { allowInsecure: true, isDeviceView: false }],
+    ['neither holds', { allowInsecure: false, isDeviceView: false }]
+  ])('refuses when %s', (_label, options) => {
+    expect(shouldTrustCertificate(options)).toBe(false)
   })
 })

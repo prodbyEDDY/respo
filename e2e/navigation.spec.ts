@@ -1,10 +1,14 @@
 import { test, expect, _electron as electron } from '@playwright/test'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { ownProfile } from './profile'
 import { probes, PROBE_URL } from './probe'
 
 const ROOT = resolve(__dirname, '..')
 const MAIN_ENTRY = resolve(ROOT, 'out', 'main', 'index.js')
+
+/** This spec's own state, not the machine's (see `ownProfile`). */
+const userDataDir = ownProfile('navigation')
 
 /** A url that is certain to fail, without needing the network. */
 const MISSING_URL = pathToFileURL(resolve(__dirname, 'fixtures', 'no-such-page.html')).href
@@ -25,7 +29,7 @@ const SECOND_URL = `${PROBE_URL}?navigated=1`
  */
 test('typing a url in the address bar loads it in every device view', async () => {
   const app = await electron.launch({
-    args: [MAIN_ENTRY],
+    args: [MAIN_ENTRY, `--user-data-dir=${userDataDir}`],
     env: {
       ...(process.env as Record<string, string>),
       RESPO_START_URL: PROBE_URL
@@ -96,7 +100,7 @@ test('typing a url in the address bar loads it in every device view', async () =
 /** The other half of the load-state pipeline: a page that cannot be loaded. */
 test('a failed load surfaces as an error card on every device', async () => {
   const app = await electron.launch({
-    args: [MAIN_ENTRY],
+    args: [MAIN_ENTRY, `--user-data-dir=${userDataDir}`],
     env: {
       ...(process.env as Record<string, string>),
       RESPO_START_URL: PROBE_URL
