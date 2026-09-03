@@ -58,7 +58,8 @@ Responsively App, написанный с нуля (их AGPL-код не исп
 | IMPL-W1 | ✅ | W1 «Foundation» реализована и смержена: каркас, темы, IPC, ViewManager (R1 снят: p99 4–5 мс), 38 устройств, CDP-эмуляция, топ-бар/навигация, зум/поворот, секьюрити-хардening | [отчёт W1](progress/W1-foundation-2026-08-28.md), тесты 231 unit + 4 e2e |
 | IMPL-W2 | ✅ | W2 «Sync + Suites» смержена: SyncEngine (CDP-зеркалирование, p99 2.4 мс), Device Manager, сьюты, персистентность, follow-ups W1 | [отчёт W2](progress/W2-sync-suites-2026-08-28.md), 569 unit + 11 e2e |
 | IMPL-W3 | ✅ | W3 «DevTools + Screenshots» смержена: DevTools-док (Chrome-style), инспект, скриншот-пайплайн, zoom-фикс десктопов | [отчёт W3](progress/W3-devtools-screenshots-2026-08-28.md), 757 unit + 16 e2e |
-| IMPL-W4 | 🟡 | W4 «Address + Layouts»: раскладки, закладки/история, очистки, разрешения (ask-UI), auth, SSL; первым — стабилизация sync.spec | план W4 |
+| IMPL-W4 | ✅ | W4 «Address + Layouts» смержена: раскладки, закладки/история, очистки, разрешения (ask-UI), auth, SSL; корень флейка sync.spec найден | [отчёт W4](progress/W4-address-layouts-2026-09-03.md), 1200 unit + 28 e2e |
+| IMPL-W5 | 🟡 | W5 «Designer Tools + Live Reload»: линейки/направляющие, Design Overlay, симуляция зрения, live-reload file:// — два параллельных worktree-агента | [план W5](superpowers/plans/2026-08-28-w5-designer-tools.md) |
 | PLAN-W4+ | ⬜ | W4 (адресные фичи + раскладки) → W5 (инструменты дизайнера + live-reload) → W6 (полировка/дистрибуция) | карта в конце плана W1 |
 
 ## §11. Журнал решений
