@@ -7,8 +7,47 @@ import {
 } from '../deviceCatalog'
 
 describe('DEVICE_CATALOG', () => {
-  it('ships a usable number of devices', () => {
-    expect(DEVICE_CATALOG.length).toBeGreaterThanOrEqual(25)
+  it('ships the 90+ devices the spec asks for (§5.2)', () => {
+    expect(DEVICE_CATALOG.length).toBeGreaterThanOrEqual(90)
+  })
+
+  it('still carries every device the W1 catalog had, under the same id and metrics', () => {
+    // Persisted suites and mirroring switches name devices by id, and a user's
+    // suite must not silently change shape because the catalog grew.
+    const w1: Record<string, [number, number, number]> = {
+      'iphone-se': [375, 667, 2],
+      'iphone-15-pro': [393, 852, 3],
+      'iphone-16-pro-max': [440, 956, 3],
+      'pixel-8': [412, 915, 2.625],
+      'pixel-fold': [841, 891, 2.625],
+      'galaxy-s23': [360, 780, 3],
+      'galaxy-z-fold-5-open': [768, 1076, 2],
+      'ipad-mini': [768, 1024, 2],
+      'ipad-pro-13': [1024, 1366, 2],
+      'surface-pro-7': [912, 1368, 2],
+      'macbook-1280': [1280, 800, 2],
+      'laptop-1366': [1366, 768, 1],
+      'desktop-1440': [1440, 900, 1],
+      'desktop-2560': [2560, 1440, 1]
+    }
+    for (const [id, [width, height, dpr]] of Object.entries(w1)) {
+      expect(deviceById(id), id).toMatchObject({ width, height, dpr })
+    }
+  })
+
+  it('covers the 2025–2026 lines a layout is checked against today', () => {
+    for (const id of ['iphone-17-pro', 'pixel-10', 'galaxy-s25-ultra', 'galaxy-z-fold-6-open']) {
+      expect(deviceById(id), id).toBeDefined()
+    }
+  })
+
+  it('keeps the dpr in the range the CDP layer accepts and phones narrower than tablets', () => {
+    for (const device of DEVICE_CATALOG) {
+      expect(device.dpr, device.id).toBeGreaterThanOrEqual(1)
+      expect(device.dpr, device.id).toBeLessThanOrEqual(4)
+      expect(device.width, device.id).toBeGreaterThanOrEqual(100)
+      expect(device.height, device.id).toBeGreaterThanOrEqual(100)
+    }
   })
 
   it('has unique ids', () => {
@@ -60,7 +99,9 @@ describe('DEVICE_CATALOG', () => {
     )
     expect(desktop.length).toBeGreaterThan(0)
     for (const device of desktop) {
-      if (device.id === 'surface-pro-7' || device.id === 'surface-pro-9') continue
+      // A Surface is the one Windows device with a touch screen and a desktop
+      // layout — and every one of them says so in its name.
+      if (/^Surface/.test(device.name)) continue
       expect(device.touch, device.id).toBe(false)
     }
   })
