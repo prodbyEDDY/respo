@@ -11,12 +11,14 @@ import {
   CodeBracketIcon,
   EllipsisVerticalIcon,
   ExclamationTriangleIcon,
+  EyeIcon,
   FaceFrownIcon,
   LinkIcon,
   LinkSlashIcon,
   ViewfinderCircleIcon
 } from '@heroicons/react/24/outline'
 import { isRotatable } from '@shared/custom-devices'
+import { VISION_DEFICIENCIES, VISION_LABELS, type VisionDeficiency } from '@shared/emulation'
 import type { LoadStatePayload } from '@shared/ipc'
 import type { DeviceSpec } from '@shared/types'
 import { Button } from '@renderer/components/ui/button'
@@ -24,12 +26,18 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuShortcut,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger
 } from '@renderer/components/ui/dropdown-menu'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
 import { cn } from '@renderer/lib/utils'
+import { useEmulation } from '@renderer/stores/emulation'
 import { useLayout } from '@renderer/stores/layout'
 import { useNavigation } from '@renderer/stores/navigation'
 import { useNotices } from '@renderer/stores/notices'
@@ -132,14 +140,99 @@ function PageCrashed({
   )
 }
 
+/** The radio value that means "no override": the profile decides. */
+const INHERIT = 'inherit'
+
+/**
+ * The vision simulation for one device: the profile's, or its own.
+ *
+ * A submenu of radio items rather than a toggle, because the question has
+ * eight answers and "inherit" is one of them — it is what makes a device that
+ * was set apart go back to matching the others, and it is where the current
+ * global choice is shown so nobody has to open the toolbar popover to learn
+ * what "inherit" would mean.
+ */
+function VisionItems({ deviceId }: { deviceId: string }): React.JSX.Element {
+  const override = useEmulation((s) => s.deviceVision[deviceId])
+  const global = useEmulation((s) => s.profile.vision)
+  const setDeviceVision = useEmulation((s) => s.setDeviceVision)
+
+  return (
+    <DropdownMenuSub>
+      <DropdownMenuSubTrigger>
+        <EyeIcon />
+        Vision
+        {override === undefined ? null : (
+          <DropdownMenuShortcut className="mr-1">{VISION_LABELS[override]}</DropdownMenuShortcut>
+        )}
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent>
+        <DropdownMenuRadioGroup
+          value={override ?? INHERIT}
+          onValueChange={(value) =>
+            setDeviceVision(deviceId, value === INHERIT ? null : (value as VisionDeficiency))
+          }
+        >
+          <DropdownMenuRadioItem value={INHERIT}>
+            Inherit global
+            <DropdownMenuShortcut>{VISION_LABELS[global]}</DropdownMenuShortcut>
+          </DropdownMenuRadioItem>
+          <DropdownMenuSeparator />
+          {VISION_DEFICIENCIES.map((type) => (
+            <DropdownMenuRadioItem key={type} value={type}>
+              {VISION_LABELS[type]}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
+  )
+}
+
+/**
+ * The one visible sign that this device sees the page differently from the
+ * others: its own vision simulation, when it has one.
+ *
+ * Any active emulation must be visible where it applies (W5 UX rule) — a frame
+ * that is quietly greyscale would be a mystery. Clicking it is the one-step
+ * undo: back to the profile, like every other device.
+ */
+function VisionChip({ deviceId }: { deviceId: string }): React.JSX.Element | null {
+  const override = useEmulation((s) => s.deviceVision[deviceId])
+  const setDeviceVision = useEmulation((s) => s.setDeviceVision)
+  if (override === undefined) return null
+
+  const label = override === 'none' ? 'No vision filter' : VISION_LABELS[override]
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="ghost"
+          size="xs"
+          aria-label={`Vision on this device: ${label}. Click to inherit the global setting`}
+          data-vision-override={override}
+          onClick={() => setDeviceVision(deviceId, null)}
+          className="h-5 rounded-full bg-primary/10 px-1.5 text-primary hover:bg-primary/15 hover:text-primary"
+        >
+          <EyeIcon />
+          {label}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>
+        {label} on this device only — click to inherit the global setting
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
 /**
  * Everything about one device that is not worth a button of its own.
  *
  * The header keeps the four things people do constantly — mirror, rotate,
  * shoot, DevTools — and this holds the rest: a reload of *this* device (the
  * toolbar's reloads them all), a cache-busting one, a jump to the top, the
- * url for pasting somewhere. Rare gestures, one level down, so the header
- * stays the same width whatever a device can do.
+ * vision simulation, the url for pasting somewhere. Rare gestures, one level
+ * down, so the header stays the same width whatever a device can do.
  */
 function DeviceMenu({ deviceId }: { deviceId: string }): React.JSX.Element {
   const reload = useNavigation((s) => s.reload)
@@ -179,6 +272,8 @@ function DeviceMenu({ deviceId }: { deviceId: string }): React.JSX.Element {
           <ArrowUpIcon />
           Scroll to top
         </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <VisionItems deviceId={deviceId} />
         <DropdownMenuSeparator />
         <DropdownMenuItem disabled={url === ''} onSelect={copyUrl}>
           <ClipboardIcon />
@@ -484,6 +579,8 @@ export function DeviceFrame({ device, zoom, viewportRef }: DeviceFrameProps): Re
           {zoom === 1 ? '' : ` · ${Math.round(zoom * 100)}%`}
         </p>
         {load?.state === 'loading' ? <Spinner /> : null}
+        {/* What sets this device apart from the others, when something does. */}
+        <VisionChip deviceId={device.id} />
         {/*
           Next to the caption rather than pushed to the far edge: a 1920px
           frame would put a right-aligned control most of a screen away from

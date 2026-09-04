@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { CheckIcon } from '@heroicons/react/24/outline'
+import { CheckIcon, ChevronRightIcon } from '@heroicons/react/24/outline'
 import { DropdownMenu as DropdownMenuPrimitive } from 'radix-ui'
 
 import { cn } from '@renderer/lib/utils'
@@ -138,6 +138,53 @@ function DropdownMenuShortcut({
   )
 }
 
+function DropdownMenuSub(
+  props: React.ComponentProps<typeof DropdownMenuPrimitive.Sub>
+): React.JSX.Element {
+  return <DropdownMenuPrimitive.Sub data-slot="dropdown-menu-sub" {...props} />
+}
+
+function DropdownMenuSubTrigger({
+  className,
+  children,
+  ...props
+}: React.ComponentProps<typeof DropdownMenuPrimitive.SubTrigger>): React.JSX.Element {
+  return (
+    <DropdownMenuPrimitive.SubTrigger
+      data-slot="dropdown-menu-sub-trigger"
+      className={cn(
+        "relative flex cursor-default items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-hidden select-none [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+        'focus:bg-accent focus:text-accent-foreground data-[state=open]:bg-accent data-[state=open]:text-accent-foreground',
+        className
+      )}
+      {...props}
+    >
+      {children}
+      <ChevronRightIcon className="ml-auto size-3.5" />
+    </DropdownMenuPrimitive.SubTrigger>
+  )
+}
+
+function DropdownMenuSubContent({
+  className,
+  ...props
+}: React.ComponentProps<typeof DropdownMenuPrimitive.SubContent>): React.JSX.Element {
+  return (
+    <DropdownMenuPrimitive.SubContent
+      data-slot="dropdown-menu-sub-content"
+      className={cn(
+        'z-50 min-w-[9rem] overflow-hidden rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-soft',
+        // Motion budget: transform/opacity only, 120-180ms (DESIGN-SYSTEM.md).
+        'origin-(--radix-dropdown-menu-content-transform-origin) duration-150 ease-out',
+        'data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95',
+        'data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95',
+        className
+      )}
+      {...props}
+    />
+  )
+}
+
 export {
   DropdownMenu,
   DropdownMenuContent,
@@ -147,5 +194,8 @@ export {
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuShortcut,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger
 }
