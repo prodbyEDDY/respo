@@ -60,6 +60,34 @@ test('CDP emulation reaches the page in every device view', async () => {
     expect(desktop.dpr).toBe(1)
     expect(desktop.ua).toContain('Windows NT')
     expect(desktop.ua).not.toContain('Mobile')
+
+    // Client Hints follow the user agent, not the host machine (spec §5.2):
+    // the Pixel says Android and mobile through `navigator.userAgentData`,
+    // the Windows desktop says Windows, and the iPhone and iPad — Safaris —
+    // have none. Three Chromium devices in the default suite, so three.
+    await expect
+      .poll(
+        async () => {
+          reported = await probes(app, PROBE_URL)
+          return reported.filter((p) => p.uaData !== null).length
+        },
+        { timeout: 20_000, message: 'client hints never reached the Chromium views' }
+      )
+      .toBe(3)
+    const pixel = reported.find((p) => p.innerWidth === 412) as Probe
+    expect(pixel.uaData).toMatchObject({
+      platform: 'Android',
+      platformVersion: '15.0.0',
+      model: 'Pixel 8',
+      mobile: true
+    })
+    expect(pixel.uaData?.brands).toContain('Chromium')
+    const windows = reported.find((p) => p.innerWidth === 1440) as Probe
+    expect(windows.uaData).toMatchObject({ platform: 'Windows', mobile: false, model: '' })
+    const mac = reported.find((p) => p.innerWidth === 1280) as Probe
+    expect(mac.uaData).toMatchObject({ platform: 'macOS', mobile: false })
+    expect((reported.find((p) => /iPhone/.test(p.ua)) as Probe).uaData).toBeNull()
+    expect((reported.find((p) => p.innerWidth === 768) as Probe).uaData).toBeNull()
     // `navigator.maxTouchPoints` is deliberately not asserted here: CDP only
     // accepts 1..16 touch points, so switching touch emulation *off* hands the
     // page back the host machine's own hardware — 10 on a touchscreen laptop,

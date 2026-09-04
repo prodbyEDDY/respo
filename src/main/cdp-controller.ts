@@ -1,3 +1,4 @@
+import { clientHintsOf, userAgentMetadataFor } from '@shared/client-hints'
 import {
   acceptLanguageFor,
   GEOLOCATION_ACCURACY_M,
@@ -258,8 +259,29 @@ function metricsOf(
  * debugger is unavailable (DevTools took it, the view is closing) degrades to
  * an un-emulated viewport instead of taking the app down.
  */
+export type CDPControllerOptions = {
+  /**
+   * The Chromium this process runs on (`process.versions.chrome`), for the
+   * full version in Client Hints. `null` means "say only what the user-agent
+   * string says" — see `userAgentMetadataFor`.
+   */
+  chromiumVersion?: string | null
+}
+
+/** The engine's own version, when there is a Chromium underneath at all. */
+function hostChromiumVersion(): string | null {
+  const version = (process.versions as Record<string, string | undefined>)['chrome']
+  return typeof version === 'string' && version !== '' ? version : null
+}
+
 export class CDPController {
   private readonly sessions = new Map<number, Session>()
+  private readonly chromiumVersion: string | null
+
+  constructor(options: CDPControllerOptions = {}) {
+    this.chromiumVersion =
+      options.chromiumVersion === undefined ? hostChromiumVersion() : options.chromiumVersion
+  }
 
   /** Ids of the views with a live session. Test/diagnostic seam. */
   attachedIds(): number[] {
@@ -335,10 +357,17 @@ export class CDPController {
   }
 
   /**
-   * The user-agent override, which carries more than the string: the
-   * `Accept-Language` the locale emulation implies travels in the same call,
-   * because the protocol has one override for both and the second call would
-   * silently undo the first.
+   * The user-agent override, which carries more than the string.
+   *
+   * - **Client Hints** (`userAgentMetadata`): what `navigator.userAgentData`
+   *   and the `Sec-CH-UA-*` headers say, derived from the device's own string
+   *   (`shared/client-hints`). Without it Chromium would keep answering with
+   *   the host machine — a Pixel that says `platform: "Windows"`. A Safari or
+   *   Firefox string gets none at all, and Chromium then exposes none, which
+   *   is what those browsers do.
+   * - **`Accept-Language`**: what the locale emulation implies. It travels in
+   *   this call because the protocol has one override for all three, and a
+   *   second call would silently undo the first.
    *
    * `Network.setUserAgentOverride` is the call DevTools has always used and the
    * one the brief names; the protocol has since moved it to `Emulation`. Try
@@ -349,9 +378,13 @@ export class CDPController {
     spec: DeviceSpec,
     locale: string | null
   ): Promise<void> {
+    const hints = clientHintsOf(spec)
     const ua = {
       userAgent: spec.userAgent,
-      ...(locale === null ? {} : { acceptLanguage: acceptLanguageFor(locale) })
+      ...(locale === null ? {} : { acceptLanguage: acceptLanguageFor(locale) }),
+      ...(hints === null
+        ? {}
+        : { userAgentMetadata: userAgentMetadataFor(hints, this.chromiumVersion) })
     }
     if (!(await this.send(target, 'Network.setUserAgentOverride', ua))) {
       await this.send(target, 'Emulation.setUserAgentOverride', ua)

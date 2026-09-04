@@ -952,7 +952,7 @@ describe('CDPController.applyEmulation', () => {
 
     await controller.applyDevice(target, DESKTOP)
 
-    expect(paramsOf(target, 'Network.setUserAgentOverride')).toEqual({
+    expect(paramsOf(target, 'Network.setUserAgentOverride')).toMatchObject({
       userAgent: DESKTOP.userAgent,
       acceptLanguage: 'fr-FR,fr;q=0.9,en;q=0.8'
     })
@@ -1022,5 +1022,53 @@ describe('CDPController.applyEmulation', () => {
     })
     // One user-agent call for the whole replay, not one per half.
     expect(order.filter((m) => m === 'Network.setUserAgentOverride')).toHaveLength(1)
+  })
+})
+
+describe('CDPController — Client Hints', () => {
+  it('sends userAgentMetadata for a Chromium user agent, from the string itself', async () => {
+    const controller = new CDPController({ chromiumVersion: '139.0.7258.66' })
+    const target = fakeTarget()
+    await controller.attach(target)
+    await controller.applyDevice(target, DESKTOP)
+
+    const params = paramsOf(target, 'Network.setUserAgentOverride') as {
+      userAgent: string
+      userAgentMetadata?: {
+        platform: string
+        mobile: boolean
+        brands: { brand: string; version: string }[]
+      }
+    }
+    expect(params.userAgent).toBe(DESKTOP.userAgent)
+    expect(params.userAgentMetadata).toMatchObject({ platform: 'Windows', mobile: false })
+    expect(params.userAgentMetadata?.brands).toEqual(
+      expect.arrayContaining([{ brand: 'Chromium', version: '139' }])
+    )
+  })
+
+  it('sends none for a Safari user agent — an iPhone has no Client Hints', async () => {
+    const controller = new CDPController({ chromiumVersion: '139.0.7258.66' })
+    const target = fakeTarget()
+    await controller.attach(target)
+    await controller.applyDevice(target, IPHONE)
+
+    expect(paramsOf(target, 'Network.setUserAgentOverride')).toEqual({
+      userAgent: IPHONE.userAgent
+    })
+  })
+
+  it('lets the user-agent string win over a newer engine', async () => {
+    const controller = new CDPController({ chromiumVersion: '152.0.7977.54' })
+    const target = fakeTarget()
+    await controller.attach(target)
+    await controller.applyDevice(target, DESKTOP)
+
+    const params = paramsOf(target, 'Network.setUserAgentOverride') as {
+      userAgentMetadata?: { fullVersionList: { brand: string; version: string }[] }
+    }
+    expect(params.userAgentMetadata?.fullVersionList).toEqual(
+      expect.arrayContaining([{ brand: 'Chromium', version: '139.0.0.0' }])
+    )
   })
 })
