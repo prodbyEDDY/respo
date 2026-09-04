@@ -1072,3 +1072,44 @@ describe('CDPController — Client Hints', () => {
     )
   })
 })
+
+describe('CDPController — Runtime', () => {
+  it('enables the domain once asked, and replays it after a re-attach', async () => {
+    const controller = new CDPController()
+    const target = fakeTarget()
+    await controller.attach(target)
+    await controller.applyDevice(target, IPHONE)
+
+    expect(await controller.enableRuntime(target)).toBe(true)
+    expect(methods(target)).toContain('Runtime.enable')
+    target.calls.length = 0
+
+    target.fireDetach('canceled by user')
+    await vi.waitFor(() => expect(methods(target)).toContain('Runtime.enable'))
+  })
+
+  it('evaluates an expression by value and answers null for a throw', async () => {
+    const controller = new CDPController()
+    const target = fakeTarget()
+    await controller.attach(target)
+    target.replies.set('Runtime.evaluate', { result: { value: { ok: 1 } } })
+
+    expect(await controller.evaluate(target, '1')).toEqual({ ok: 1 })
+    expect(paramsOf(target, 'Runtime.evaluate')).toMatchObject({
+      expression: '1',
+      returnByValue: true
+    })
+
+    target.replies.set('Runtime.evaluate', { exceptionDetails: { text: 'boom' } })
+    expect(await controller.evaluate(target, 'throw 1')).toBeNull()
+  })
+
+  it('answers null for a view that is gone', async () => {
+    const controller = new CDPController()
+    const target = fakeTarget()
+    await controller.attach(target)
+    target.destroyed = true
+    expect(await controller.evaluate(target, '1')).toBeNull()
+    expect(await controller.enableRuntime(target)).toBe(false)
+  })
+})

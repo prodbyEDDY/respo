@@ -23,6 +23,7 @@ import { authHostLabel, authRealmLabel, createAuthManager, type AuthManager } fr
 import { CDPController } from './cdp-controller'
 import { clearBrowsingData } from './clear-data'
 import { DevtoolsManager } from './devtools-manager'
+import { DiagnosticsManager } from './diagnostics'
 import { EmulationManager } from './emulation'
 import { createFaviconFetcher } from './favicons'
 import { createHistory, type History } from './history'
@@ -57,9 +58,11 @@ import {
   validateDeviceSpecs,
   validateDockPosition,
   validateEmulationProfile,
+  validateHighlightTarget,
   validateHistoryQuery,
   validateLeadDeviceId,
   validateOptionalDeviceId,
+  validateOptionalDevtoolsPanel,
   validateOptionalVisionDeficiency,
   validatePermissionDecision,
   validatePermissionType,
@@ -96,6 +99,8 @@ let shots: ScreenshotQueue | null = null
  * the rest of the emulation pack. Restored from disk before the first view.
  */
 let emulation: EmulationManager | null = null
+/** Console errors and overflow, per device, batched to the renderer. */
+let diagnostics: DiagnosticsManager | null = null
 /**
  * Who may use a camera, and which questions are waiting.
  *
@@ -307,6 +312,15 @@ function createWindow(): void {
     ...(persistence === null ? {} : { initial: persistence.load().emulation })
   })
 
+  // What each page complains about, coalesced per turn like load events: a
+  // page throwing in a loop is one message per flush, never one per throw.
+  diagnostics = new DiagnosticsManager({
+    cdp,
+    onState: (batch) => {
+      sendMainEvent(mainWindow.webContents, { type: 'diagnostics', payload: batch })
+    }
+  })
+
   viewManager = new ViewManager(
     createElectronViewBackend(mainWindow, {
       canvasLayer: process.env['RESPO_CANVAS_LAYER'] !== '0',
@@ -316,6 +330,7 @@ function createWindow(): void {
       inspect: inspector,
       shots,
       emulation,
+      diagnostics,
       // Popups belong to the viewport the user is interacting with — the same
       // election the mirroring follows.
       isLead: (deviceId) => syncEngine?.lead() === deviceId,
@@ -353,6 +368,8 @@ function createWindow(): void {
     viewManager = null
     emulation?.dispose()
     emulation = null
+    diagnostics?.dispose()
+    diagnostics = null
     loadStates?.cancel()
     loadStates = null
     stopSpike?.()
@@ -505,6 +522,7 @@ function registerIpcHandlers(): void {
     inspector?.retain(live)
     shots?.retain(live)
     emulation?.retain(live)
+    diagnostics?.retain(live)
     // A lead that left the canvas must not keep deciding what gets recorded —
     // or whose cookies a clear would take (`lead-tracker.ts`).
     lead?.retain(specs.map((spec) => spec.id))
@@ -564,10 +582,12 @@ function registerIpcHandlers(): void {
   // resize drag already coalesced to one call per animation frame by the
   // renderer (CLAUDE.md §4). The three that change what is open answer with the
   // whole state, so the renderer never has to guess what its click did.
-  registerHandler(
-    'devtools:open',
-    (_event, deviceId) => devtools?.openFor(validateDeviceId(deviceId)) ?? emptyDevtoolsState()
-  )
+  registerHandler('devtools:open', (_event, deviceId, panel) => {
+    const id = validateDeviceId(deviceId)
+    const which = validateOptionalDevtoolsPanel(panel)
+    if (devtools === null) return emptyDevtoolsState()
+    return which === 'console' ? devtools.openConsole(id) : devtools.openFor(id)
+  })
 
   registerHandler(
     'devtools:close',
@@ -753,6 +773,14 @@ function registerIpcHandlers(): void {
     () =>
       emulation?.state() ?? { profile: defaultPersistedState().emulation.profile, deviceVision: {} }
   )
+
+  // Diagnostics. The renderer highlights by *index* into the last report it
+  // was pushed — the selectors are page text and never leave main.
+  registerHandler('diagnostics:highlight', (_event, deviceId, target) =>
+    diagnostics?.highlight(validateDeviceId(deviceId), validateHighlightTarget(target))
+  )
+
+  registerHandler('diagnostics:get', () => diagnostics?.state() ?? [])
 
   // The one-way stream from the device views. Its sender is an untrusted page,
   // so the batch is validated (and clamped) before the engine sees any of it;

@@ -356,6 +356,57 @@ export type LoadStatePayload = {
   canGoForward?: boolean
 }
 
+/** One console message worth keeping: the level, and the first line of it. */
+export type DiagnosticMessage = {
+  /** `exception` is an uncaught error; the other two are `console.error` / `console.assert`. */
+  level: 'exception' | 'error' | 'assert'
+  /** Truncated in main; page text, so the renderer renders it as text only. */
+  text: string
+}
+
+/** One element that sticks out past the viewport's right edge. */
+export type OverflowItem = {
+  /** `tag#id.class`, for reading. The selector main highlights by stays in main. */
+  label: string
+  /** The element's rendered width, in the page's CSS pixels. */
+  width: number
+  /** How far its right edge is from the document's left edge, CSS pixels. */
+  right: number
+}
+
+/** What the overflow scan found, once a page has settled. */
+export type OverflowReport = {
+  clientWidth: number
+  scrollWidth: number
+  /** Up to ten offenders, outermost first; empty when nothing overflows. */
+  items: OverflowItem[]
+}
+
+/**
+ * What one device's page has been complaining about since it last navigated.
+ *
+ * `errors` counts every exception and error-level console call; `messages`
+ * keeps only the last few, so a page in a logging loop costs a bounded amount
+ * of memory and IPC. `overflow` is `null` until the first scan after a load.
+ */
+export type DiagnosticsPayload = {
+  deviceId: string
+  errors: number
+  messages: DiagnosticMessage[]
+  overflow: OverflowReport | null
+}
+
+/**
+ * What `diagnostics:highlight` points at: one offender by its index in the
+ * last report, all of them, or nothing (clear). An index rather than a
+ * selector on purpose — the selector is page-derived text, and it never
+ * leaves main.
+ */
+export type HighlightTarget = number | 'all' | 'none'
+
+/** The DevTools panels Respo can open a frontend on. */
+export type DevtoolsPanelName = 'elements' | 'console'
+
 /**
  * Batched main -> renderer notification. One `load-state` message carries many
  * devices; the DevTools and inspect messages carry one whole state each and are
@@ -364,6 +415,12 @@ export type LoadStatePayload = {
  */
 export type MainEvent =
   | { type: 'load-state'; payload: LoadStatePayload[] }
+  /**
+   * Console errors and overflow, coalesced like `load-state`: a page throwing
+   * in a loop is one message per flush window carrying the count, not one
+   * message per throw (CLAUDE.md §4).
+   */
+  | { type: 'diagnostics'; payload: DiagnosticsPayload[] }
   | { type: 'devtools-state'; payload: DevtoolsStatePayload }
   | { type: 'inspect-mode'; payload: { active: boolean } }
   /**
@@ -544,9 +601,11 @@ export type IpcInvokeMap = {
    * Open DevTools for one device, in whatever mode `dock` currently names.
    *
    * Opening the dock for a second device retargets it: the DevTools frontend is
-   * a `WebContentsView` main owns, and there is exactly one of it.
+   * a `WebContentsView` main owns, and there is exactly one of it. The panel
+   * is optional and defaults to whatever the frontend opens on (Elements);
+   * the errors chip asks for the console.
    */
-  'devtools:open': { args: [string]; result: DevtoolsStatePayload }
+  'devtools:open': { args: [string, DevtoolsPanelName?]; result: DevtoolsStatePayload }
   /** Close one device's DevTools, or (`null`) whatever is in the dock. */
   'devtools:close': { args: [string | null]; result: DevtoolsStatePayload }
   /**
@@ -693,6 +752,16 @@ export type IpcInvokeMap = {
   'emulation:set-device-vision': { args: [string, VisionDeficiency | null]; result: void }
   /** What main is actually applying. For a renderer that wants to be sure. */
   'emulation:get': { args: []; result: EmulationStatePayload }
+  /**
+   * Outline one overflow offender, all of them, or none, on one device.
+   *
+   * A CSS layer (`webContents.insertCSS`) rather than DevTools' overlay: the
+   * outline then scrolls with the element and several can be shown at once.
+   * The selector is looked up in main by index — see `HighlightTarget`.
+   */
+  'diagnostics:highlight': { args: [string, HighlightTarget]; result: void }
+  /** Every device's diagnostics, for a renderer that has just started. */
+  'diagnostics:get': { args: []; result: DiagnosticsPayload[] }
 }
 
 export type IpcChannel = keyof IpcInvokeMap
@@ -743,7 +812,9 @@ const CHANNEL_REGISTRY: Record<IpcChannel, true> = {
   'auth:respond': true,
   'emulation:set': true,
   'emulation:set-device-vision': true,
-  'emulation:get': true
+  'emulation:get': true,
+  'diagnostics:highlight': true,
+  'diagnostics:get': true
 }
 
 export const IPC_CHANNELS: readonly IpcChannel[] = Object.keys(CHANNEL_REGISTRY) as IpcChannel[]

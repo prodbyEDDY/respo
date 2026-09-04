@@ -18,6 +18,7 @@ import { cn } from '@renderer/lib/utils'
 import { attachAuthBridge } from '@renderer/stores/auth'
 import { useBookmarks } from '@renderer/stores/bookmarks'
 import { useDevices } from '@renderer/stores/devices'
+import { attachDiagnosticsBridge, useDiagnostics } from '@renderer/stores/diagnostics'
 import { useEmulation } from '@renderer/stores/emulation'
 import { applyRotation, useLayout } from '@renderer/stores/layout'
 import { attachNavigationBridge, useNavigation } from '@renderer/stores/navigation'
@@ -148,6 +149,9 @@ function App(): React.JSX.Element {
   // one dialog however many viewports hit the same host.
   useEffect(() => attachAuthBridge(), [])
 
+  // Console errors and overflow per device, batched like load events.
+  useEffect(() => attachDiagnosticsBridge(), [])
+
   // mod+i arms the element picker, Escape puts it away.
   useInspectHotkeys()
   // mod+s photographs the whole canvas.
@@ -177,7 +181,9 @@ function App(): React.JSX.Element {
   // A device that left the canvas must not keep a load state — or the address
   // bar, if it was the view the bar was following.
   useEffect(() => {
-    useNavigation.getState().pruneDevices(devices.map((d) => d.id))
+    const ids = devices.map((d) => d.id)
+    useNavigation.getState().pruneDevices(ids)
+    useDiagnostics.getState().pruneDevices(ids)
   }, [devices])
 
   // Point every view at the start url. It arrives from main a round trip after

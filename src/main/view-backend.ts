@@ -17,6 +17,7 @@ import type {
   DevtoolsPanel,
   DevtoolsRegistry
 } from './devtools-manager'
+import type { DiagnosticsRegistry } from './diagnostics'
 import type { EmulationRegistry } from './emulation'
 import { deviceMenuTemplate, type InspectRegistry } from './inspector'
 import type { ShotRegistry } from './screenshot-queue'
@@ -221,6 +222,11 @@ export type ElectronViewBackendOptions = {
    */
   isLead?: (deviceId: string) => boolean
   /**
+   * Told about every view's lifetime and every finished load, so console
+   * errors are counted and the page is scanned for overflow.
+   */
+  diagnostics?: DiagnosticsRegistry
+  /**
    * Told which icons a page declared, so history can cache one.
    *
    * The *urls*, not the images: Chromium hands over `<link rel="icon">` targets
@@ -362,6 +368,7 @@ export function createElectronViewBackend(
   const inspect = options.inspect ?? null
   const shots = options.shots ?? null
   const emulation = options.emulation ?? null
+  const diagnostics = options.diagnostics ?? null
   const isLead = options.isLead ?? null
   const onFavicon = options.onFavicon ?? null
   /** Windows pages opened from the lead. Closed with the canvas. */
@@ -502,6 +509,25 @@ export function createElectronViewBackend(
       let emulated = primed.then(async () => {
         await emulation?.registerDevice({ deviceId: device.id, target: wc })
         await cdp.applyDevice(wc, device)
+        // After the primer for the same reason as the rest: `Runtime.enable`
+        // needs a renderer on the other end. The stylesheet layer is the
+        // `webContents`' own API, handed over so the manager never sees Electron.
+        await diagnostics?.registerDevice({
+          deviceId: device.id,
+          target: wc,
+          css: {
+            insert: (css) => wc.insertCSS(css),
+            remove: (key) => wc.removeInsertedCSS(key)
+          }
+        })
+      })
+
+      // A finished document is what the overflow scan looks at. Reported here
+      // rather than through the load-state batcher: the batcher coalesces per
+      // turn, and a scan wants exactly the event, not the newest state.
+      wc.on('did-finish-load', () => {
+        if (wc.isDestroyed() || isPrimer(wc.getURL())) return
+        diagnostics?.refresh(device.id)
       })
 
       return {
@@ -547,7 +573,11 @@ export function createElectronViewBackend(
             width: next.width,
             height: next.height
           })
-          emulated = emulated.then(() => cdp.applyDevice(wc, next))
+          emulated = emulated.then(async () => {
+            await cdp.applyDevice(wc, next)
+            // A new viewport width is a new answer to "what overflows".
+            if (!wc.isDestroyed() && !isPrimer(wc.getURL())) diagnostics?.refresh(device.id)
+          })
         },
         loadUrl(url: string): void {
           if (wc.isDestroyed()) return
@@ -601,6 +631,7 @@ export function createElectronViewBackend(
           inspect?.unregisterDevice(device.id)
           shots?.unregisterDevice(device.id)
           emulation?.unregisterDevice(device.id)
+          diagnostics?.unregisterDevice(device.id)
           // Before the `webContents` goes: the manager still has to close a
           // panel that was open on it, and destroy the frontend behind it.
           devtools?.unregisterDevice(device.id)

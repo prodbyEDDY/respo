@@ -1,5 +1,11 @@
 import { create } from 'zustand'
-import type { DevtoolsStatePayload, DockPosition, MainEvent, RespoApi } from '@shared/ipc'
+import type {
+  DevtoolsPanelName,
+  DevtoolsStatePayload,
+  DockPosition,
+  MainEvent,
+  RespoApi
+} from '@shared/ipc'
 import { clampDockSize, DEFAULT_DOCK_SIZE, type DevtoolsSettings } from '@shared/persistence-types'
 import { ipcBridge } from '@renderer/lib/ipc'
 import { savePersistedState } from '@renderer/lib/persistence'
@@ -33,7 +39,8 @@ export interface PanelsState {
 
   /** Open DevTools for a device, or close it if this device already has it. */
   toggle: (deviceId: string) => void
-  open: (deviceId: string) => void
+  /** Open DevTools for a device, on the console when asked (the errors chip). */
+  open: (deviceId: string, panel?: DevtoolsPanelName) => void
   /** Close one device's DevTools, or — `null` — whatever is in the dock. */
   close: (deviceId?: string | null) => void
   setDock: (dock: DockPosition) => void
@@ -91,8 +98,12 @@ export const usePanels = create<PanelsState>((set, get) => ({
     else get().open(deviceId)
   },
 
-  open: (deviceId) => {
-    withState((bridge) => bridge.invoke('devtools:open', deviceId))
+  open: (deviceId, panel) => {
+    withState((bridge) =>
+      panel === undefined
+        ? bridge.invoke('devtools:open', deviceId)
+        : bridge.invoke('devtools:open', deviceId, panel)
+    )
   },
 
   close: (deviceId = null) => {

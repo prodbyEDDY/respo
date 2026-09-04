@@ -13,7 +13,9 @@ import {
   normalizeUrl,
   type AuthCredentials,
   type ClearTarget,
+  type DevtoolsPanelName,
   type DockPosition,
+  type HighlightTarget,
   type InputEventPayload,
   type PermissionDecision,
   type PermissionType,
@@ -720,6 +722,24 @@ export function validateReloadRequest(value: unknown): ReloadRequest {
     ...(deviceId === undefined ? {} : { deviceId }),
     ...(ignoreCache === undefined ? {} : { ignoreCache })
   }
+}
+
+/** Validate a `diagnostics:highlight` target: an offender's index, `all`, or `none`. */
+export function validateHighlightTarget(value: unknown): HighlightTarget {
+  if (value === 'all' || value === 'none') return value
+  if (typeof value === 'number' && Number.isInteger(value) && value >= 0 && value < 100) {
+    return value
+  }
+  fail("diagnostics:highlight expects an index, 'all' or 'none'")
+}
+
+/** Validate the optional panel argument of `devtools:open`. */
+export function validateOptionalDevtoolsPanel(value: unknown): DevtoolsPanelName | undefined {
+  if (value === undefined) return undefined
+  if (value !== 'elements' && value !== 'console') {
+    fail("devtools:open expects 'elements', 'console' or nothing")
+  }
+  return value
 }
 
 /** Validate a boolean argument. `what` names the channel for the error. */

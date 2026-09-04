@@ -44,6 +44,7 @@ import { useNotices } from '@renderer/stores/notices'
 import { selectIsOpen, usePanels } from '@renderer/stores/panels'
 import { selectIsBusy, useShots } from '@renderer/stores/shots'
 import { useSync } from '@renderer/stores/sync'
+import { DiagnosticsChips } from './DiagnosticsChips'
 
 export type DeviceFrameProps = {
   device: DeviceSpec
@@ -579,7 +580,8 @@ export function DeviceFrame({ device, zoom, viewportRef }: DeviceFrameProps): Re
           {zoom === 1 ? '' : ` · ${Math.round(zoom * 100)}%`}
         </p>
         {load?.state === 'loading' ? <Spinner /> : null}
-        {/* What sets this device apart from the others, when something does. */}
+        {/* What the page is complaining about, and what sets this device apart. */}
+        <DiagnosticsChips deviceId={device.id} />
         <VisionChip deviceId={device.id} />
         {/*
           Next to the caption rather than pushed to the far edge: a 1920px

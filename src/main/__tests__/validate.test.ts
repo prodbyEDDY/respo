@@ -8,9 +8,11 @@ import {
   validateDeviceId,
   validateDeviceSpecs,
   validateEmulationProfile,
+  validateHighlightTarget,
   validateHistoryQuery,
   validateHomeUrl,
   validateLeadDeviceId,
+  validateOptionalDevtoolsPanel,
   validateOptionalVisionDeficiency,
   validatePermissionDecision,
   validatePermissionType,
@@ -824,5 +826,26 @@ describe('validateReloadRequest', () => {
     ['a stringly cache flag', { ignoreCache: 'yes' }]
   ])('rejects %s', (_label, value) => {
     expect(() => validateReloadRequest(value)).toThrow(/invalid ipc payload/i)
+  })
+})
+
+describe('diagnostics and DevTools panel payloads', () => {
+  it('accepts an offender index, all or none as a highlight target', () => {
+    expect(validateHighlightTarget(0)).toBe(0)
+    expect(validateHighlightTarget(9)).toBe(9)
+    expect(validateHighlightTarget('all')).toBe('all')
+    expect(validateHighlightTarget('none')).toBe('none')
+  })
+
+  it.each([-1, 1.5, 100, '3', 'some', null, undefined, {}])('refuses %j as a target', (value) => {
+    expect(() => validateHighlightTarget(value)).toThrow(/invalid ipc payload/i)
+  })
+
+  it('accepts the two panels or nothing', () => {
+    expect(validateOptionalDevtoolsPanel(undefined)).toBeUndefined()
+    expect(validateOptionalDevtoolsPanel('console')).toBe('console')
+    expect(validateOptionalDevtoolsPanel('elements')).toBe('elements')
+    expect(() => validateOptionalDevtoolsPanel('sources')).toThrow(/invalid ipc payload/i)
+    expect(() => validateOptionalDevtoolsPanel(null)).toThrow(/invalid ipc payload/i)
   })
 })

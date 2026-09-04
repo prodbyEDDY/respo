@@ -110,6 +110,8 @@ type Session = {
   device: DeviceSpec | null
   /** Last environment applied, replayed after a re-attach. `null` until one is. */
   emulation: ViewEmulation | null
+  /** Whether `Runtime` was enabled on this view, replayed after a re-attach. */
+  runtime: boolean
   /**
    * The canvas zoom this view is painted at. `1` until a layout says otherwise.
    *
@@ -307,6 +309,7 @@ export class CDPController {
       target,
       device: null,
       emulation: null,
+      runtime: false,
       zoom: 1,
       attached: false,
       reattaches: 0,
@@ -563,6 +566,39 @@ export class CDPController {
       awaitPromise: false,
       userGesture: false
     })
+  }
+
+  /**
+   * Turn on the `Runtime` domain for one view, so it reports exceptions and
+   * console calls as protocol events.
+   *
+   * Enabling a domain twice is a no-op, and the domain's state lives in the
+   * session — Chromium re-enables it in every new document the target
+   * commits, and a re-attach replays it along with the rest.
+   */
+  async enableRuntime(target: CdpTarget): Promise<boolean> {
+    if (!this.live(target)) return false
+    const session = this.sessions.get(target.id)
+    if (session !== undefined) session.runtime = true
+    return this.send(target, 'Runtime.enable', {})
+  }
+
+  /**
+   * Evaluate one self-contained expression in the page and hand back its
+   * value. `null` when the page will not answer (torn down, mid-navigation,
+   * or the expression threw). The expression is Respo's own text — nothing
+   * page-controlled is ever interpolated into one — and the *answer* is page
+   * data, validated by whoever asked.
+   */
+  async evaluate<T>(target: CdpTarget, expression: string): Promise<T | null> {
+    if (!this.live(target)) return null
+    const answer = await this.request<{ result?: { value?: unknown }; exceptionDetails?: unknown }>(
+      target,
+      'Runtime.evaluate',
+      { expression, returnByValue: true, awaitPromise: false, userGesture: false }
+    )
+    if (answer === null || answer.exceptionDetails !== undefined) return null
+    return (answer.result?.value as T | undefined) ?? null
   }
 
   /**
@@ -876,6 +912,7 @@ export class CDPController {
     void (async () => {
       if (device !== null) await this.applyDevice(session.target, device)
       if (emulation !== null) await this.applyEmulation(session.target, emulation, { force: true })
+      if (session.runtime) await this.enableRuntime(session.target)
     })()
   }
 
