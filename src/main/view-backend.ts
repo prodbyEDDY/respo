@@ -20,7 +20,7 @@ import type {
 import type { EmulationRegistry } from './emulation'
 import { deviceMenuTemplate, type InspectRegistry } from './inspector'
 import type { ShotRegistry } from './screenshot-queue'
-import { DEVICE_PARTITION, openExternalSafe } from './security'
+import { DEVICE_PARTITION, popupDecision } from './security'
 import type { SyncRegistry } from './sync-engine'
 import type { ManagedView, ReportLoadState, ViewBackend } from './view-manager'
 
@@ -169,6 +169,18 @@ export function watchLoadState(wc: WebContents, deviceId: string, report: Report
     title = next
     emit({ state: settledState(), url })
   })
+
+  // The renderer process died under the page (spec §7). Reported as its own
+  // state rather than as a failure: the overlay says "crashed" and offers a
+  // restart, and an all-devices reload leaves it alone. It latches like a
+  // failure does — Chromium keeps talking about the dead document — and the
+  // restart's own `did-start-navigation` is what clears it.
+  wc.on('render-process-gone', (_event, details) => {
+    if (wc.isDestroyed()) return
+    failedThisNavigation = true
+    title = undefined
+    emit({ state: 'crashed', url: wc.getURL(), errorDesc: details.reason })
+  })
 }
 
 export type ElectronViewBackendOptions = {
@@ -202,6 +214,12 @@ export type ElectronViewBackendOptions = {
    * scheme, network, locale, …) lands on it — before its first navigation.
    */
   emulation?: EmulationRegistry
+  /**
+   * Whether a device is the one the user is interacting with — the only one
+   * whose popups get a window. Absent means no device ever leads, and no
+   * popup ever opens.
+   */
+  isLead?: (deviceId: string) => boolean
   /**
    * Told which icons a page declared, so history can cache one.
    *
@@ -344,7 +362,10 @@ export function createElectronViewBackend(
   const inspect = options.inspect ?? null
   const shots = options.shots ?? null
   const emulation = options.emulation ?? null
+  const isLead = options.isLead ?? null
   const onFavicon = options.onFavicon ?? null
+  /** Windows pages opened from the lead. Closed with the canvas. */
+  const popups = new Set<BrowserWindow>()
   let disposed = false
 
   if (layer !== null) {
@@ -365,11 +386,20 @@ export function createElectronViewBackend(
       parent.addChildView(view)
       views.add(view)
 
-      // Popups are a leading-viewport concern (spec §5.4); nothing opens here.
-      // The url is page-controlled, so it goes through the scheme filter.
-      view.webContents.setWindowOpenHandler(({ url }) => {
-        openExternalSafe(url)
-        return { action: 'deny' }
+      // Popups open for the *leading* viewport only (spec §5.4, §7a): a click
+      // is replayed into every follower, and one login popup is enough. The
+      // url is page-controlled and the decision is `security.ts`'s.
+      view.webContents.setWindowOpenHandler(({ url }) =>
+        popupDecision(url, isLead?.(device.id) ?? false)
+      )
+      // The popup is a page Respo does not control either: it gets no popups
+      // of its own, and it goes away with the canvas.
+      view.webContents.on('did-create-window', (child) => {
+        popups.add(child)
+        child.on('closed', () => {
+          popups.delete(child)
+        })
+        child.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
       })
 
       // One debugger attach for this view's whole life (CLAUDE.md §3).
@@ -542,12 +572,28 @@ export function createElectronViewBackend(
           if (wc.isDestroyed() || !wc.navigationHistory.canGoForward()) return
           wc.navigationHistory.goForward()
         },
-        reload(): void {
+        reload(options = {}): void {
           if (wc.isDestroyed()) return
           // A view still sitting on the primer has nothing to reload; give it
           // the session url instead, once emulation has landed.
           if (isPrimer(wc.getURL())) return
+          if (options.ignoreCache === true) wc.reloadIgnoringCache()
+          else wc.reload()
+        },
+        restart(): void {
+          if (wc.isDestroyed() || isPrimer(wc.getURL())) return
+          // A reload of a `webContents` whose renderer is gone is what spawns
+          // the new process; the CDP session stays attached to the
+          // `webContents` and Chromium restores its emulation into the new
+          // renderer (`e2e/reliability.spec.ts` checks the viewport is back).
           wc.reload()
+        },
+        scrollToTop(): void {
+          if (wc.isDestroyed()) return
+          // The same call the sync engine uses to place a follower, at the
+          // origin. If this view is the lead, the followers come along — which
+          // is what "scroll to top" means on a mirrored canvas.
+          cdp.scrollToRatio(wc, 0, 0)
         },
         dispose(): void {
           views.delete(view)
@@ -577,6 +623,10 @@ export function createElectronViewBackend(
     dispose(): void {
       if (disposed) return
       disposed = true
+      for (const popup of popups) {
+        if (!popup.isDestroyed()) popup.destroy()
+      }
+      popups.clear()
       cdp.detachAll()
       for (const view of views) {
         parent.removeChildView(view)

@@ -14,7 +14,9 @@ type FakeView = {
   loadUrl: Mock<(url: string) => void>
   goBack: Mock<() => void>
   goForward: Mock<() => void>
-  reload: Mock<() => void>
+  reload: Mock<(options?: { ignoreCache?: boolean }) => void>
+  restart: Mock<() => void>
+  scrollToTop: Mock<() => void>
   dispose: Mock<() => void>
 }
 
@@ -44,7 +46,9 @@ function fakeBackend(clipsToCanvas = false): FakeBackend {
         loadUrl: vi.fn<(url: string) => void>(),
         goBack: vi.fn<() => void>(),
         goForward: vi.fn<() => void>(),
-        reload: vi.fn<() => void>(),
+        reload: vi.fn<(options?: { ignoreCache?: boolean }) => void>(),
+        restart: vi.fn<() => void>(),
+        scrollToTop: vi.fn<() => void>(),
         dispose: vi.fn<() => void>()
       }
       views.set(device.id, view)
@@ -425,5 +429,97 @@ describe('ViewManager.destroy', () => {
     manager.applyLayout([rect('a')], CANVAS)
     manager.syncDevices([device('a')])
     expect(backend.order).toEqual(['a'])
+  })
+})
+
+describe('ViewManager — crashes, per-device reload, scroll to top', () => {
+  let backend: FakeBackend
+  let manager: ViewManager
+  let reported: LoadStatePayload[]
+
+  function crash(deviceId: string): LoadStatePayload {
+    return { deviceId, state: 'crashed', url: 'https://example.com/', errorDesc: 'killed' }
+  }
+
+  beforeEach(() => {
+    backend = fakeBackend()
+    reported = []
+    manager = new ViewManager(backend, { onLoadState: (payload) => reported.push(payload) })
+    manager.syncDevices([device('a'), device('b')])
+    manager.applyLayout([rect('a'), rect('b', { x: 400 })], CANVAS)
+  })
+
+  it('hides a crashed view so the renderer card is what the user sees', () => {
+    backend.views.get('a')?.report(crash('a'))
+
+    expect(backend.views.get('a')?.setVisible).toHaveBeenLastCalledWith(false)
+    expect(backend.views.get('b')?.setVisible).toHaveBeenLastCalledWith(true)
+    expect(reported.at(-1)?.state).toBe('crashed')
+  })
+
+  it('restart brings a crashed view back and shows it as soon as it loads', () => {
+    const a = backend.views.get('a')!
+    a.report(crash('a'))
+
+    manager.restart('a')
+
+    expect(a.restart).toHaveBeenCalledTimes(1)
+    expect(a.setVisible).toHaveBeenLastCalledWith(true)
+  })
+
+  it('restart is ignored for a view that is alive', () => {
+    manager.restart('b')
+    manager.restart('ghost')
+    expect(backend.views.get('b')?.restart).not.toHaveBeenCalled()
+  })
+
+  it('an all-devices reload leaves a crashed view alone', () => {
+    backend.views.get('a')?.report(crash('a'))
+
+    manager.reload()
+
+    expect(backend.views.get('a')?.reload).not.toHaveBeenCalled()
+    expect(backend.views.get('b')?.reload).toHaveBeenCalledWith({ ignoreCache: false })
+    // …and it stays hidden behind its card.
+    expect(backend.views.get('a')?.setVisible).toHaveBeenLastCalledWith(false)
+  })
+
+  it('reloads one device on request, ignoring the cache when asked', () => {
+    manager.reload({ deviceId: 'b', ignoreCache: true })
+
+    expect(backend.views.get('b')?.reload).toHaveBeenCalledWith({ ignoreCache: true })
+    expect(backend.views.get('a')?.reload).not.toHaveBeenCalled()
+  })
+
+  it('a per-device reload is the way out of that device’s error card', () => {
+    const a = backend.views.get('a')!
+    a.report({ deviceId: 'a', state: 'failed', url: 'https://nope.invalid/', errorCode: -105 })
+    expect(a.setVisible).toHaveBeenLastCalledWith(false)
+
+    manager.reload({ deviceId: 'a' })
+
+    expect(a.reload).toHaveBeenCalledWith({ ignoreCache: false })
+    expect(a.setVisible).toHaveBeenLastCalledWith(true)
+  })
+
+  it('a navigation clears the crash like it clears a failure', () => {
+    const a = backend.views.get('a')!
+    a.report(crash('a'))
+
+    manager.navigateAll('https://example.com/next')
+
+    expect(a.setVisible).toHaveBeenLastCalledWith(true)
+    // A crashed view that has been navigated is alive again as far as
+    // restart is concerned.
+    manager.restart('a')
+    expect(a.restart).not.toHaveBeenCalled()
+  })
+
+  it('scrolls one device to its top, and ignores an unknown one', () => {
+    manager.scrollToTop('b')
+    manager.scrollToTop('ghost')
+
+    expect(backend.views.get('b')?.scrollToTop).toHaveBeenCalledTimes(1)
+    expect(backend.views.get('a')?.scrollToTop).not.toHaveBeenCalled()
   })
 })

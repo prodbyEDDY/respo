@@ -16,6 +16,7 @@ import {
   validatePermissionType,
   validatePersistedPatch,
   validatePromptId,
+  validateReloadRequest,
   validateScreenshotDirectory,
   validateShotPath,
   validateShotRequest,
@@ -796,5 +797,32 @@ describe('emulation payloads', () => {
     ['a non-object slice', 'dark']
   ])('rejects store:save emulation with %s', (_label, emulation) => {
     expect(() => validatePersistedPatch({ emulation })).toThrow(/invalid ipc payload/i)
+  })
+})
+
+describe('validateReloadRequest', () => {
+  it('reads no argument as "every device, from cache"', () => {
+    expect(validateReloadRequest(undefined)).toEqual({})
+    expect(validateReloadRequest({})).toEqual({})
+  })
+
+  it('carries a device and the cache flag through, and nothing else', () => {
+    expect(validateReloadRequest({ deviceId: 'pixel-8', ignoreCache: true, extra: 1 })).toEqual({
+      deviceId: 'pixel-8',
+      ignoreCache: true
+    })
+    expect(validateReloadRequest({ ignoreCache: false })).toEqual({ ignoreCache: false })
+  })
+
+  it.each([
+    ['a non-object', 'all'],
+    ['null', null],
+    ['an array', []],
+    ['an empty device id', { deviceId: '' }],
+    ['a numeric device id', { deviceId: 7 }],
+    ['an overlong device id', { deviceId: 'x'.repeat(201) }],
+    ['a stringly cache flag', { ignoreCache: 'yes' }]
+  ])('rejects %s', (_label, value) => {
+    expect(() => validateReloadRequest(value)).toThrow(/invalid ipc payload/i)
   })
 })

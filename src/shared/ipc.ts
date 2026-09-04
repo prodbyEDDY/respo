@@ -323,7 +323,17 @@ export type EmulationStatePayload = {
   deviceVision: Record<string, VisionDeficiency>
 }
 
-export type LoadState = 'loading' | 'ready' | 'failed'
+/**
+ * Where one device's page is.
+ *
+ * `crashed` is its renderer process going away underneath it (`render-process-gone`):
+ * the document is gone but the view is not, and `view:restart` brings it back.
+ * It is kept apart from `failed` because the two need different words and a
+ * different button — a page that could not be fetched is retried, a page
+ * whose process died is restarted — and because a crash is the one state a
+ * reload of *every* device must not be the answer to (spec §7).
+ */
+export type LoadState = 'loading' | 'ready' | 'failed' | 'crashed'
 
 export type LoadStatePayload = {
   deviceId: string
@@ -331,6 +341,7 @@ export type LoadStatePayload = {
   url: string
   title?: string
   errorCode?: number
+  /** For `failed`, Chromium's error name; for `crashed`, the exit reason. */
   errorDesc?: string
   /**
    * This view's own history, as of this event.
@@ -450,6 +461,21 @@ export type BackupImportResult =
   | { ok: false; reason: 'invalid'; message: string }
   | { ok: false; reason: 'failed'; message: string }
 
+/**
+ * What one reload asks for.
+ *
+ * Both fields are optional because the common gesture — the toolbar button —
+ * says neither: every device, from cache. A device's own kebab names the
+ * device, and "Reload ignoring cache" (`mod+shift+r`) sets the flag; the
+ * combination is the whole space.
+ */
+export type ReloadRequest = {
+  /** One device, or every device when absent. */
+  deviceId?: string
+  /** `webContents.reloadIgnoringCache()` rather than `reload()`. */
+  ignoreCache?: boolean
+}
+
 /** renderer -> main request/response channels. Extended by later tasks. */
 export type IpcInvokeMap = {
   'app:get-version': { args: []; result: string }
@@ -472,7 +498,18 @@ export type IpcInvokeMap = {
    */
   'nav:back': { args: []; result: void }
   'nav:forward': { args: []; result: void }
-  'nav:reload': { args: []; result: void }
+  /** Reload every view, or one — see `ReloadRequest`. No argument is "all, from cache". */
+  'nav:reload': { args: [ReloadRequest?]; result: void }
+  /**
+   * Bring back a device whose renderer process died.
+   *
+   * Per device on purpose, unlike reload: the other viewports are alive and
+   * showing the page, and a crash in one must not cost the others their
+   * scroll position (spec §7). Ignored for a device that is not crashed.
+   */
+  'view:restart': { args: [string]; result: void }
+  /** Put one device's document back at its top. A user gesture, not a stream. */
+  'view:scroll-to-top': { args: [string]; result: void }
   'theme:set-source': { args: [ThemeSource]; result: void }
   /** Read the whole persisted document, already migrated and repaired by main. */
   'store:load': { args: []; result: PersistedState }
@@ -673,6 +710,8 @@ const CHANNEL_REGISTRY: Record<IpcChannel, true> = {
   'nav:back': true,
   'nav:forward': true,
   'nav:reload': true,
+  'view:restart': true,
+  'view:scroll-to-top': true,
   'theme:set-source': true,
   'store:load': true,
   'store:save': true,

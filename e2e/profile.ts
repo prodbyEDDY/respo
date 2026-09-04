@@ -26,7 +26,15 @@ import { join } from 'node:path'
 export function ownProfile(name: string): string {
   const directory = mkdtempSync(join(tmpdir(), `respo-e2e-${name}-`))
   test.afterAll(() => {
-    rmSync(directory, { recursive: true, force: true })
+    // Windows keeps a profile's databases locked for a moment after the
+    // process is gone (a popup window's session was the first to show it), so
+    // the delete retries — and a profile that still will not go is a stale
+    // temp folder, not a failed test.
+    try {
+      rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 })
+    } catch (error) {
+      console.warn(`could not remove ${directory}:`, error)
+    }
   })
   return directory
 }

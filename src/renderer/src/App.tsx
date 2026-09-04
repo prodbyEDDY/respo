@@ -9,6 +9,7 @@ import { useAddressHotkeys } from '@renderer/hooks/useAddressHotkeys'
 import { useClearHotkeys } from '@renderer/hooks/useClearHotkeys'
 import { useInspectHotkeys } from '@renderer/hooks/useInspectHotkeys'
 import { useLayoutHotkeys } from '@renderer/hooks/useLayoutHotkeys'
+import { useNavHotkeys } from '@renderer/hooks/useNavHotkeys'
 import { useShotHotkeys } from '@renderer/hooks/useShotHotkeys'
 import { ipcBridge } from '@renderer/lib/ipc'
 import { createLayoutTelemetry, type LayoutTelemetry } from '@renderer/lib/layout-telemetry'
@@ -157,6 +158,8 @@ function App(): React.JSX.Element {
   useAddressHotkeys()
   // mod+alt+q/a/z/del forget this site's storage, cookies or cache.
   useClearHotkeys()
+  // mod+r reloads every device, mod+shift+r reloads them ignoring the cache.
+  useNavHotkeys()
 
   // Hand main the device set. Runs again whenever the selection changes; the
   // view manager reuses the views that stayed and loads the current url into

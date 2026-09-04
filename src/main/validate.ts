@@ -17,6 +17,7 @@ import {
   type InputEventPayload,
   type PermissionDecision,
   type PermissionType,
+  type ReloadRequest,
   type ShotRequest,
   type ThemeSource
 } from '@shared/ipc'
@@ -695,6 +696,30 @@ export function validateDeviceId(value: unknown): string {
     fail('sync:set-enabled expects a device id')
   }
   return value
+}
+
+/**
+ * Validate a `nav:reload` request. No argument at all is the toolbar's "every
+ * device, from cache"; a present one is rebuilt with only the two fields.
+ */
+export function validateReloadRequest(value: unknown): ReloadRequest {
+  if (value === undefined) return {}
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    fail('nav:reload expects a request object or nothing')
+  }
+  const request = value as Record<string, unknown>
+  const deviceId = request['deviceId']
+  if (deviceId !== undefined && (!isFilledString(deviceId) || deviceId.length > MAX_NAME_LENGTH)) {
+    fail('nav:reload deviceId must be a device id')
+  }
+  const ignoreCache = request['ignoreCache']
+  if (ignoreCache !== undefined && typeof ignoreCache !== 'boolean') {
+    fail('nav:reload ignoreCache must be a boolean')
+  }
+  return {
+    ...(deviceId === undefined ? {} : { deviceId }),
+    ...(ignoreCache === undefined ? {} : { ignoreCache })
+  }
 }
 
 /** Validate a boolean argument. `what` names the channel for the error. */

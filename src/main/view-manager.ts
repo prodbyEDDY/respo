@@ -1,4 +1,4 @@
-import { normalizeUrl, type LoadStatePayload, type ViewRect } from '@shared/ipc'
+import { normalizeUrl, type LoadStatePayload, type ReloadRequest, type ViewRect } from '@shared/ipc'
 import type { DeviceSpec, Rect } from '@shared/types'
 import { planLayout, WINDOW_ORIGIN } from './layout'
 
@@ -23,7 +23,16 @@ export interface ManagedView {
   loadUrl(url: string): void
   goBack(): void
   goForward(): void
-  reload(): void
+  /** `ignoreCache` is `webContents.reloadIgnoringCache()`; the default is `reload()`. */
+  reload(options?: { ignoreCache?: boolean }): void
+  /**
+   * Bring the page back after its renderer process died. The same call as a
+   * reload underneath — Chromium spawns a fresh process for it — but named
+   * for what it means, and only ever issued at a crashed view.
+   */
+  restart(): void
+  /** Put the document back at its top. */
+  scrollToTop(): void
   dispose(): void
 }
 
@@ -59,11 +68,14 @@ type Entry = {
   /** What the newest layout frame wants: on the canvas and not culled. */
   wantVisible: boolean
   /**
-   * Latched by a main-frame load failure. A failed view is hidden so the
-   * renderer's own error card — which would otherwise be covered by the native
-   * view compositing above the window — is what the user sees.
+   * Latched by a main-frame load failure or a renderer crash. A view in either
+   * state is hidden so the renderer's own card — which would otherwise be
+   * covered by the native view compositing above the window — is what the
+   * user sees.
    */
   failed: boolean
+  /** The failure was a crash: the one case `restart` answers. */
+  crashed: boolean
   zoom: number | null
 }
 
@@ -142,6 +154,7 @@ export class ViewManager {
         visible: null,
         wantVisible: false,
         failed: false,
+        crashed: false,
         zoom: null
       })
       // Emulation before navigation: the user agent a document is fetched with
@@ -234,12 +247,42 @@ export class ViewManager {
     })
   }
 
-  /** Reload every view. Also the way out of an error overlay. */
-  reload(): void {
-    this.eachView((view, entry) => {
+  /**
+   * Reload every view, or one. Also the way out of an error overlay.
+   *
+   * A crashed view is skipped by the all-devices reload on purpose: its
+   * renderer is gone, and bringing it back is `restart`'s job — a deliberate
+   * click on the frame that died, not a side effect of refreshing the others.
+   */
+  reload(request: ReloadRequest = {}): void {
+    const options = { ignoreCache: request.ignoreCache === true }
+    if (request.deviceId !== undefined) {
+      const entry = this.entries.get(request.deviceId)
+      if (entry === undefined || this.destroyed) return
       this.clearFailure(entry)
-      view.reload()
+      entry.view.reload(options)
+      return
+    }
+    this.eachView((view, entry) => {
+      if (entry.crashed) return
+      this.clearFailure(entry)
+      view.reload(options)
     })
+  }
+
+  /** Bring one crashed view back. Ignored for a view that is alive. */
+  restart(deviceId: string): void {
+    if (this.destroyed) return
+    const entry = this.entries.get(deviceId)
+    if (entry === undefined || !entry.crashed) return
+    this.clearFailure(entry)
+    entry.view.restart()
+  }
+
+  /** Put one view's document back at its top. */
+  scrollToTop(deviceId: string): void {
+    if (this.destroyed) return
+    this.entries.get(deviceId)?.view.scrollToTop()
   }
 
   destroy(): void {
@@ -269,6 +312,7 @@ export class ViewManager {
   }
 
   private clearFailure(entry: Entry): void {
+    entry.crashed = false
     if (!entry.failed) return
     entry.failed = false
     this.applyVisibility(entry)
@@ -279,7 +323,8 @@ export class ViewManager {
 
     const entry = this.entries.get(payload.deviceId)
     if (entry !== undefined) {
-      const failed = payload.state === 'failed'
+      const failed = payload.state === 'failed' || payload.state === 'crashed'
+      entry.crashed = payload.state === 'crashed'
       if (entry.failed !== failed) {
         entry.failed = failed
         this.applyVisibility(entry)

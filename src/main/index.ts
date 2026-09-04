@@ -65,6 +65,7 @@ import {
   validatePermissionType,
   validatePersistedPatch,
   validatePromptId,
+  validateReloadRequest,
   validateScreenshotDirectory,
   validateShotPath,
   validateShotRequest,
@@ -315,6 +316,9 @@ function createWindow(): void {
       inspect: inspector,
       shots,
       emulation,
+      // Popups belong to the viewport the user is interacting with — the same
+      // election the mirroring follows.
+      isLead: (deviceId) => syncEngine?.lead() === deviceId,
       onFavicon: (pageUrl, icons) => history?.noteFavicon(pageUrl, icons)
     }),
     { onLoadState: (payload) => loadStates?.report(payload) }
@@ -527,8 +531,18 @@ function registerIpcHandlers(): void {
     viewManager?.goForward()
   })
 
-  registerHandler('nav:reload', () => {
-    viewManager?.reload()
+  registerHandler('nav:reload', (_event, request) => {
+    viewManager?.reload(validateReloadRequest(request))
+  })
+
+  // Per device, unlike the three above: a crash and a scroll position are
+  // facts about one view, and the others must not pay for them.
+  registerHandler('view:restart', (_event, deviceId) => {
+    viewManager?.restart(validateDeviceId(deviceId))
+  })
+
+  registerHandler('view:scroll-to-top', (_event, deviceId) => {
+    viewManager?.scrollToTop(validateDeviceId(deviceId))
   })
 
   // Mirroring controls. All three are user gestures — a hover, a click on a

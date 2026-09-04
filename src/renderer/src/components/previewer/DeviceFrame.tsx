@@ -4,11 +4,14 @@ import {
   ArrowPathRoundedSquareIcon,
   ArrowsPointingOutIcon,
   ArrowsUpDownIcon,
+  ArrowUpIcon,
   CameraIcon,
   ChevronDownIcon,
   ClipboardIcon,
   CodeBracketIcon,
+  EllipsisVerticalIcon,
   ExclamationTriangleIcon,
+  FaceFrownIcon,
   LinkIcon,
   LinkSlashIcon,
   ViewfinderCircleIcon
@@ -21,6 +24,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuShortcut,
   DropdownMenuTrigger
 } from '@renderer/components/ui/dropdown-menu'
@@ -28,6 +32,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui
 import { cn } from '@renderer/lib/utils'
 import { useLayout } from '@renderer/stores/layout'
 import { useNavigation } from '@renderer/stores/navigation'
+import { useNotices } from '@renderer/stores/notices'
 import { selectIsOpen, usePanels } from '@renderer/stores/panels'
 import { selectIsBusy, useShots } from '@renderer/stores/shots'
 import { useSync } from '@renderer/stores/sync'
@@ -66,7 +71,13 @@ function hostOf(url: string): string {
  * a `WebContentsView` composites above the entire window, so nothing the
  * renderer draws can ever sit on top of a live one.
  */
-function LoadError({ state }: { state: LoadStatePayload }): React.JSX.Element {
+function LoadError({
+  deviceId,
+  state
+}: {
+  deviceId: string
+  state: LoadStatePayload
+}): React.JSX.Element {
   const reload = useNavigation((s) => s.reload)
 
   return (
@@ -79,11 +90,102 @@ function LoadError({ state }: { state: LoadStatePayload }): React.JSX.Element {
         {state.errorDesc ?? 'The page failed to load'}
         {state.errorCode === undefined ? '' : ` (${state.errorCode})`}
       </p>
-      <Button variant="outline" size="sm" onClick={reload} className="mt-1">
+      {/* This device only: the others may well be showing the page. */}
+      <Button variant="outline" size="sm" onClick={() => reload({ deviceId })} className="mt-1">
         <ArrowPathIcon />
         Retry
       </Button>
     </div>
+  )
+}
+
+/**
+ * What the user sees when a device's renderer process died (spec §7).
+ *
+ * Its own card rather than the load-error one: the words are different ("the
+ * page crashed", not "could not load"), the button is different (a restart of
+ * *this* process, not a reload of every device), and the other frames are
+ * alive and untouched — which is the whole point of one process per view.
+ */
+function PageCrashed({
+  deviceId,
+  state
+}: {
+  deviceId: string
+  state: LoadStatePayload
+}): React.JSX.Element {
+  const restart = useNavigation((s) => s.restart)
+
+  return (
+    <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-4 text-center">
+      <FaceFrownIcon aria-hidden="true" className="size-6 text-status-error" />
+      <p className="text-caption font-medium text-foreground">This page crashed</p>
+      <p className="max-w-full truncate text-micro text-muted-foreground">
+        The renderer process {state.errorDesc === undefined ? 'went away' : state.errorDesc}. The
+        other devices are not affected.
+      </p>
+      <Button variant="outline" size="sm" onClick={() => restart(deviceId)} className="mt-1">
+        <ArrowPathIcon />
+        Restart
+      </Button>
+    </div>
+  )
+}
+
+/**
+ * Everything about one device that is not worth a button of its own.
+ *
+ * The header keeps the four things people do constantly — mirror, rotate,
+ * shoot, DevTools — and this holds the rest: a reload of *this* device (the
+ * toolbar's reloads them all), a cache-busting one, a jump to the top, the
+ * url for pasting somewhere. Rare gestures, one level down, so the header
+ * stays the same width whatever a device can do.
+ */
+function DeviceMenu({ deviceId }: { deviceId: string }): React.JSX.Element {
+  const reload = useNavigation((s) => s.reload)
+  const scrollToTop = useNavigation((s) => s.scrollToTop)
+  const url = useNavigation((s) => s.perDevice[deviceId]?.url ?? '')
+
+  const copyUrl = (): void => {
+    if (url === '') return
+    navigator.clipboard.writeText(url).then(
+      () => useNotices.getState().say('ok', 'URL copied'),
+      () => useNotices.getState().say('error', 'Could not copy the URL')
+    )
+  }
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          aria-label="More for this device"
+          className="text-muted-foreground hover:text-foreground data-[state=open]:text-foreground"
+        >
+          <EllipsisVerticalIcon />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start">
+        <DropdownMenuItem onSelect={() => reload({ deviceId })}>
+          <ArrowPathIcon />
+          Reload
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => reload({ deviceId, ignoreCache: true })}>
+          <ArrowPathIcon />
+          Reload ignoring cache
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => scrollToTop(deviceId)}>
+          <ArrowUpIcon />
+          Scroll to top
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem disabled={url === ''} onSelect={copyUrl}>
+          <ClipboardIcon />
+          Copy URL
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 
@@ -397,6 +499,7 @@ export function DeviceFrame({ device, zoom, viewportRef }: DeviceFrameProps): Re
           instead of one more device control.
         */}
         {expandable ? <ExpandButton deviceId={device.id} /> : null}
+        <DeviceMenu deviceId={device.id} />
       </header>
 
       <div
@@ -406,7 +509,8 @@ export function DeviceFrame({ device, zoom, viewportRef }: DeviceFrameProps): Re
         className="relative rounded-md border border-border bg-card shadow-hairline"
         style={{ width, height }}
       >
-        {load?.state === 'failed' ? <LoadError state={load} /> : null}
+        {load?.state === 'failed' ? <LoadError deviceId={device.id} state={load} /> : null}
+        {load?.state === 'crashed' ? <PageCrashed deviceId={device.id} state={load} /> : null}
       </div>
     </section>
   )

@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>popup opener</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      /* The whole viewport is the button, so a click dispatched anywhere in
+         any device — at any canvas zoom — lands on it. */
+      button {
+        position: fixed;
+        inset: 0;
+        border: 0;
+        background: #e0f2fe;
+        font: 20px system-ui, sans-serif;
+      }
+    </style>
+  </head>
+  <body>
+    <button id="open" type="button">open a popup</button>
+    <script>
+      document.getElementById('open').addEventListener('click', function () {
+        // A relative url: the popup is served by the same origin as this page,
+        // which is what a login popup does too.
+        window.open('./child', 'respo-child', 'width=420,height=320')
+        document.title = 'opened'
+      })
+    </script>
+  </body>
+</html>
