@@ -90,7 +90,13 @@ function harness(): {
   return state
 }
 
-const scroll = (ratioY: number): InputEventPayload => ({ kind: 'scroll', ratioX: 0, ratioY })
+const scroll = (ratioY: number): InputEventPayload => ({
+  kind: 'scroll',
+  ratioX: 0,
+  ratioY,
+  x: 0,
+  y: 0
+})
 
 const mouseDown = (xNorm: number, yNorm: number): InputEventPayload => ({
   kind: 'mouse',
@@ -451,7 +457,7 @@ describe('SyncEngine', () => {
     })
 
     it('clamps a ratio outside 0..1', () => {
-      h.engine.handleInput(1, [{ kind: 'scroll', ratioX: -3, ratioY: 5 }])
+      h.engine.handleInput(1, [{ kind: 'scroll', ratioX: -3, ratioY: 5, x: 0, y: 0 }])
       h.runFrame()
       expect(h.scrolls[0]).toMatchObject({ ratioX: 0, ratioY: 1 })
     })
@@ -640,5 +646,69 @@ describe('SyncEngine', () => {
       expect(h.mouse.some((c) => c.id === 7)).toBe(true)
       expect(h.mouse.some((c) => c.id === 2)).toBe(false)
     })
+  })
+})
+
+describe('SyncEngine — scroll reporting for the rulers', () => {
+  it('passes a scroll offset on for the lead, and for a device asked to report', () => {
+    const seen: [string, number, number][] = []
+    const engine = new SyncEngine(
+      {
+        dispatchMouse: () => undefined,
+        dispatchKey: () => undefined,
+        scrollToRatio: () => undefined
+      },
+      { onScroll: (deviceId, x, y) => seen.push([deviceId, x, y]) }
+    )
+    const captured: [string, boolean][] = []
+    engine.registerDevice({
+      deviceId: 'phone',
+      target: fakeTarget(11),
+      width: 400,
+      height: 800,
+      setCapturing: (on) => captured.push(['phone', on])
+    })
+    engine.registerDevice({
+      deviceId: 'tablet',
+      target: fakeTarget(12),
+      width: 800,
+      height: 1000,
+      setCapturing: (on) => captured.push(['tablet', on])
+    })
+
+    // The lead reports as before…
+    engine.handleInput(11, [{ kind: 'scroll', ratioX: 0, ratioY: 0.5, x: 0, y: 400 }])
+    expect(seen).toEqual([['phone', 0, 400]])
+
+    // …a follower is not asked to, so nothing it might send counts as input…
+    engine.handleInput(12, [{ kind: 'scroll', ratioX: 0, ratioY: 0.1, x: 0, y: 90 }])
+    expect(seen).toHaveLength(2)
+    expect(seen[1]).toEqual(['tablet', 0, 90])
+
+    // …and asking it to report turns its capture on without making it lead.
+    engine.setReporting('tablet', true)
+    expect(captured.at(-1)).toEqual(['tablet', true])
+    expect(engine.lead()).toBe('phone')
+    engine.setReporting('tablet', false)
+    expect(captured.at(-1)).toEqual(['tablet', false])
+  })
+
+  it('reports the last sample of a batch only, and even with mirroring off', () => {
+    const seen: number[] = []
+    const engine = new SyncEngine(
+      {
+        dispatchMouse: () => undefined,
+        dispatchKey: () => undefined,
+        scrollToRatio: () => undefined
+      },
+      { onScroll: (_id, _x, y) => seen.push(y) }
+    )
+    engine.registerDevice({ deviceId: 'phone', target: fakeTarget(21), width: 400, height: 800 })
+    engine.setGlobalEnabled(false)
+    engine.handleInput(21, [
+      { kind: 'scroll', ratioX: 0, ratioY: 0.1, x: 0, y: 10 },
+      { kind: 'scroll', ratioX: 0, ratioY: 0.2, x: 0, y: 20 }
+    ])
+    expect(seen).toEqual([20])
   })
 })

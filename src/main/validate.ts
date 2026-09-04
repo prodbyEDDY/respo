@@ -15,6 +15,7 @@ import {
   type ClearTarget,
   type DevtoolsPanelName,
   type DockPosition,
+  type GuideSet,
   type HighlightTarget,
   type InputEventPayload,
   type PermissionDecision,
@@ -36,12 +37,17 @@ import {
   clampDockSize,
   isCanvasLayoutMode,
   MAX_BOOKMARKS,
+  MAX_GUIDE_POSITION,
+  MAX_GUIDE_SIZES,
+  MAX_GUIDES_PER_AXIS,
   MAX_PATH_LENGTH,
   MAX_TITLE_LENGTH,
   MAX_URL_LENGTH,
+  sanitizeGuideAxis,
   type Bookmark,
   type DevtoolsSettings,
   type EmulationSettings,
+  type GuidesDocument,
   type LayoutSettings,
   type PersistedState,
   type ScreenshotSettings,
@@ -229,6 +235,7 @@ export function validatePersistedPatch(
   if (patch['security'] !== undefined) out.security = validateSecuritySettings(patch['security'])
   if (patch['emulation'] !== undefined)
     out.emulation = validateEmulationSettings(patch['emulation'])
+  if (patch['guides'] !== undefined) out.guides = validateGuidesDocument(patch['guides'])
   // `permissions` is deliberately absent, and it is not an oversight: it is
   // main's field, like the screenshots folder above. A patch that could set it
   // would be a renderer writing `{"https://evil.example": {"camera": "allow"}}`
@@ -760,6 +767,59 @@ function clamp01(value: unknown): number | null {
   return value < 0 ? 0 : value > 1 ? 1 : value
 }
 
+/** Longest document a scroll offset may point into. Ten million CSS pixels. */
+const MAX_SCROLL_OFFSET = 10_000_000
+
+/** A scroll offset in CSS pixels: non-negative and bounded; anything else is the origin. */
+function clampOffset(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return 0
+  return value > MAX_SCROLL_OFFSET ? MAX_SCROLL_OFFSET : value
+}
+
+/**
+ * Validate a `guides:set` payload. Whole, bounded, deduplicated positions on
+ * each axis — the same repair the store applies, because this is the value
+ * about to become a stylesheet in a page.
+ */
+export function validateGuideSet(value: unknown): GuideSet {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    fail('guides:set expects a guide set')
+  }
+  const set = value as Record<string, unknown>
+  if (!Array.isArray(set['h']) || !Array.isArray(set['v'])) {
+    fail('guides:set expects h and v arrays')
+  }
+  if (set['h'].length > MAX_GUIDES_PER_AXIS || set['v'].length > MAX_GUIDES_PER_AXIS) {
+    fail(`guides:set accepts at most ${MAX_GUIDES_PER_AXIS} guides per axis`)
+  }
+  for (const entry of [...set['h'], ...set['v']]) {
+    if (typeof entry !== 'number' || !Number.isFinite(entry) || entry < 0) {
+      fail('guides:set positions must be non-negative numbers')
+    }
+    if (entry > MAX_GUIDE_POSITION) fail('guides:set position is too far')
+  }
+  return { h: sanitizeGuideAxis(set['h']), v: sanitizeGuideAxis(set['v']) }
+}
+
+/** Validate the persisted guides document. */
+function validateGuidesDocument(value: unknown): GuidesDocument {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    fail('store:save guides must be an object')
+  }
+  const entries = Object.entries(value as Record<string, unknown>)
+  if (entries.length > MAX_GUIDE_SIZES) {
+    fail(`store:save guides accepts at most ${MAX_GUIDE_SIZES} sizes`)
+  }
+  const out: GuidesDocument = {}
+  for (const [key, set] of entries) {
+    if (!/^\d{1,5}x\d{1,5}$/.test(key)) fail('store:save guides keys must be WxH')
+    const guides = validateGuideSet(set)
+    if (guides.h.length === 0 && guides.v.length === 0) continue
+    out[key] = guides
+  }
+  return out
+}
+
 function validateInputEvent(entry: unknown): InputEventPayload | null {
   if (typeof entry !== 'object' || entry === null) return null
   const event = entry as Record<string, unknown>
@@ -768,7 +828,14 @@ function validateInputEvent(entry: unknown): InputEventPayload | null {
     const ratioX = clamp01(event['ratioX'])
     const ratioY = clamp01(event['ratioY'])
     if (ratioX === null || ratioY === null) return null
-    return { kind: 'scroll', ratioX, ratioY }
+    // Absent on a preload from before the rulers; junk reads as the origin.
+    return {
+      kind: 'scroll',
+      ratioX,
+      ratioY,
+      x: clampOffset(event['x']),
+      y: clampOffset(event['y'])
+    }
   }
 
   if (event['kind'] === 'mouse') {

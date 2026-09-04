@@ -126,7 +126,10 @@ function sampleScroll(): void {
   const sample: InputEventPayload = {
     kind: 'scroll',
     ratioX: ratio(el.scrollLeft, el.scrollWidth - el.clientWidth),
-    ratioY: ratio(el.scrollTop, el.scrollHeight - el.clientHeight)
+    ratioY: ratio(el.scrollTop, el.scrollHeight - el.clientHeight),
+    // The absolute offsets too, for the rulers: same message, two numbers.
+    x: Number.isFinite(el.scrollLeft) ? Math.max(0, el.scrollLeft) : 0,
+    y: Number.isFinite(el.scrollTop) ? Math.max(0, el.scrollTop) : 0
   }
 
   // Latest wins: every earlier position in this frame is already stale.

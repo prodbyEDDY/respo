@@ -407,6 +407,17 @@ export type HighlightTarget = number | 'all' | 'none'
 /** The DevTools panels Respo can open a frontend on. */
 export type DevtoolsPanelName = 'elements' | 'console'
 
+/** Where one device's document is scrolled to, in its own CSS pixels. */
+export type ScrollStatePayload = { deviceId: string; x: number; y: number }
+
+/**
+ * The guides of one viewport size: `h` are horizontal lines (y positions),
+ * `v` vertical ones (x positions), in the page's CSS pixels from the
+ * document's origin. Keyed by `WxH` in the document, because a guide at
+ * 320px means something on a 320px-wide phone and nothing on a monitor.
+ */
+export type GuideSet = { h: number[]; v: number[] }
+
 /**
  * Batched main -> renderer notification. One `load-state` message carries many
  * devices; the DevTools and inspect messages carry one whole state each and are
@@ -421,6 +432,13 @@ export type MainEvent =
    * message per throw (CLAUDE.md §4).
    */
   | { type: 'diagnostics'; payload: DiagnosticsPayload[] }
+  /**
+   * Scroll offsets of the devices whose rulers are showing, one message per
+   * turn while any of them scrolls and nothing at all otherwise. The samples
+   * come from the same preload stream mirroring rides on — no second stream —
+   * and only devices with rulers on are asked to report (CLAUDE.md §4).
+   */
+  | { type: 'scroll-state'; payload: ScrollStatePayload[] }
   | { type: 'devtools-state'; payload: DevtoolsStatePayload }
   | { type: 'inspect-mode'; payload: { active: boolean } }
   /**
@@ -456,7 +474,12 @@ export type MainEvent =
  * carry, the less there is to abuse.
  */
 export type InputEventPayload =
-  | { kind: 'scroll'; ratioX: number; ratioY: number }
+  /**
+   * `x`/`y` are the absolute offsets in the page's own CSS pixels, next to
+   * the ratios mirroring works in: the rulers need to know *where* a page is,
+   * not only how far along. Same message, two more numbers.
+   */
+  | { kind: 'scroll'; ratioX: number; ratioY: number; x: number; y: number }
   | {
       kind: 'mouse'
       type: 'down' | 'up'
@@ -762,6 +785,19 @@ export type IpcInvokeMap = {
   'diagnostics:highlight': { args: [string, HighlightTarget]; result: void }
   /** Every device's diagnostics, for a renderer that has just started. */
   'diagnostics:get': { args: []; result: DiagnosticsPayload[] }
+  /**
+   * Show or hide one device's rulers, as far as main is concerned: a device
+   * with rulers reports its scroll offsets (see `scroll-state`). Answers with
+   * where the page is right now, so the ruler starts in the right place
+   * rather than at zero until the first scroll.
+   */
+  'rulers:set': { args: [string, boolean]; result: ScrollStatePayload | null }
+  /**
+   * Put a set of guides on one device's page, as a CSS layer that scrolls
+   * with the document. An empty set removes the layer. The renderer sends
+   * the set for the device's current size; the document is its to keep.
+   */
+  'guides:set': { args: [string, GuideSet]; result: void }
 }
 
 export type IpcChannel = keyof IpcInvokeMap
@@ -814,7 +850,9 @@ const CHANNEL_REGISTRY: Record<IpcChannel, true> = {
   'emulation:set-device-vision': true,
   'emulation:get': true,
   'diagnostics:highlight': true,
-  'diagnostics:get': true
+  'diagnostics:get': true,
+  'rulers:set': true,
+  'guides:set': true
 }
 
 export const IPC_CHANNELS: readonly IpcChannel[] = Object.keys(CHANNEL_REGISTRY) as IpcChannel[]

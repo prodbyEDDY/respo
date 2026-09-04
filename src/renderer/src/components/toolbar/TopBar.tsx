@@ -22,7 +22,8 @@ import {
   SquaresPlusIcon,
   StarIcon,
   SunIcon,
-  ViewColumnsIcon
+  ViewColumnsIcon,
+  WrenchScrewdriverIcon
 } from '@heroicons/react/24/outline'
 import type { DockPosition } from '@shared/ipc'
 import type { CanvasLayoutMode } from '@shared/persistence-types'
@@ -31,6 +32,7 @@ import { SettingsDialog } from '@renderer/components/settings/SettingsDialog'
 import { Button } from '@renderer/components/ui/button'
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
@@ -38,12 +40,17 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuShortcut,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger
 } from '@renderer/components/ui/dropdown-menu'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
 import { openLocalFile } from '@renderer/lib/browsing'
 import { cn } from '@renderer/lib/utils'
 import { useBookmarks } from '@renderer/stores/bookmarks'
+import { useDevices } from '@renderer/stores/devices'
+import { useGuides } from '@renderer/stores/guides'
 import { useHistory } from '@renderer/stores/history'
 import { useLayout } from '@renderer/stores/layout'
 import { useNavigation } from '@renderer/stores/navigation'
@@ -348,6 +355,41 @@ function PageItems(): React.JSX.Element {
   )
 }
 
+/**
+ * The switches that put something *on* every page at once — rulers, and the
+ * debug layers the later tasks add. A submenu because they are used together
+ * and rarely, and because "Debug" is a word people already know to look
+ * under for exactly this kind of thing.
+ */
+function DebugItems(): React.JSX.Element {
+  const active = useDevices((s) => s.active)
+  const rulers = useGuides((s) => s.rulers)
+  const setRulersAll = useGuides((s) => s.setRulersAll)
+  const allRulers = active.length > 0 && active.every((device) => rulers[device.id] === true)
+
+  return (
+    <DropdownMenuSub>
+      <DropdownMenuSubTrigger>
+        <WrenchScrewdriverIcon />
+        Debug
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent>
+        <DropdownMenuCheckboxItem
+          checked={allRulers}
+          onCheckedChange={(checked) =>
+            setRulersAll(
+              active.map((device) => device.id),
+              checked === true
+            )
+          }
+        >
+          Rulers on all devices
+        </DropdownMenuCheckboxItem>
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
+  )
+}
+
 function OverflowMenu({ onOpenSettings }: { onOpenSettings: () => void }): React.JSX.Element {
   const zoom = useLayout((s) => s.zoom)
   const zoomIn = useLayout((s) => s.zoomIn)
@@ -385,6 +427,8 @@ function OverflowMenu({ onOpenSettings }: { onOpenSettings: () => void }): React
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DevtoolsDockItems />
+        <DropdownMenuSeparator />
+        <DebugItems />
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={() => setTheme('system')}>
           <ComputerDesktopIcon />

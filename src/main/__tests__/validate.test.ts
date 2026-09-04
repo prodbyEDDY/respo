@@ -8,6 +8,7 @@ import {
   validateDeviceId,
   validateDeviceSpecs,
   validateEmulationProfile,
+  validateGuideSet,
   validateHighlightTarget,
   validateHistoryQuery,
   validateHomeUrl,
@@ -186,7 +187,7 @@ describe('validatePersistedPatch', () => {
 describe('validateSyncInputBatch', () => {
   it('accepts a well-formed batch', () => {
     const batch = [
-      { kind: 'scroll', ratioX: 0, ratioY: 0.5 },
+      { kind: 'scroll', ratioX: 0, ratioY: 0.5, x: 0, y: 0 },
       { kind: 'mouse', type: 'down', xNorm: 0.25, yNorm: 0.75, button: 'left' },
       { kind: 'key', type: 'up', key: 'a', code: 'KeyA', modifiers: 8 }
     ]
@@ -195,7 +196,7 @@ describe('validateSyncInputBatch', () => {
 
   it('clamps ratios into 0..1 rather than rejecting them', () => {
     expect(validateSyncInputBatch([{ kind: 'scroll', ratioX: -2, ratioY: 4 }])).toEqual([
-      { kind: 'scroll', ratioX: 0, ratioY: 1 }
+      { kind: 'scroll', ratioX: 0, ratioY: 1, x: 0, y: 0 }
     ])
     expect(
       validateSyncInputBatch([
@@ -847,5 +848,50 @@ describe('diagnostics and DevTools panel payloads', () => {
     expect(validateOptionalDevtoolsPanel('elements')).toBe('elements')
     expect(() => validateOptionalDevtoolsPanel('sources')).toThrow(/invalid ipc payload/i)
     expect(() => validateOptionalDevtoolsPanel(null)).toThrow(/invalid ipc payload/i)
+  })
+})
+
+describe('guides payloads', () => {
+  it('carries scroll offsets through the input batch, clamped', () => {
+    expect(
+      validateSyncInputBatch([{ kind: 'scroll', ratioX: 0, ratioY: 1, x: 12, y: 340 }])
+    ).toEqual([{ kind: 'scroll', ratioX: 0, ratioY: 1, x: 12, y: 340 }])
+    expect(validateSyncInputBatch([{ kind: 'scroll', ratioX: 0, ratioY: 0 }])).toEqual([
+      { kind: 'scroll', ratioX: 0, ratioY: 0, x: 0, y: 0 }
+    ])
+    expect(
+      validateSyncInputBatch([{ kind: 'scroll', ratioX: 0, ratioY: 0, x: -5, y: 1e12 }])[0]
+    ).toMatchObject({ x: 0, y: 10_000_000 })
+  })
+
+  it('accepts a guide set and repairs it into whole, sorted positions', () => {
+    expect(validateGuideSet({ h: [10.4, 10.4, 5], v: [] })).toEqual({ h: [5, 10], v: [] })
+  })
+
+  it.each([
+    ['not an object', 'guides'],
+    ['a missing axis', { h: [] }],
+    ['a negative position', { h: [-1], v: [] }],
+    ['a stringly position', { h: ['10'], v: [] }],
+    ['a position past the cap', { h: [], v: [1_000_000] }],
+    ['too many guides', { h: Array.from({ length: 51 }, (_v, i) => i), v: [] }]
+  ])('rejects %s', (_label, value) => {
+    expect(() => validateGuideSet(value)).toThrow(/invalid ipc payload/i)
+  })
+
+  it('carries the persisted guides through store:save, dropping empty sizes', () => {
+    expect(
+      validatePersistedPatch({
+        guides: { '393x852': { h: [1], v: [2] }, '1440x900': { h: [], v: [] } }
+      })
+    ).toEqual({ guides: { '393x852': { h: [1], v: [2] } } })
+  })
+
+  it.each([
+    ['a junk key', { guides: { phone: { h: [1], v: [] } } }],
+    ['an array', { guides: [] }],
+    ['a junk set', { guides: { '393x852': 'yes' } }]
+  ])('rejects store:save guides with %s', (_label, patch) => {
+    expect(() => validatePersistedPatch(patch)).toThrow(/invalid ipc payload/i)
   })
 })

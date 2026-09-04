@@ -9,6 +9,7 @@ import {
   ChevronDownIcon,
   ClipboardIcon,
   CodeBracketIcon,
+  Squares2X2Icon,
   EllipsisVerticalIcon,
   ExclamationTriangleIcon,
   EyeIcon,
@@ -20,10 +21,12 @@ import {
 import { isRotatable } from '@shared/custom-devices'
 import { VISION_DEFICIENCIES, VISION_LABELS, type VisionDeficiency } from '@shared/emulation'
 import type { LoadStatePayload } from '@shared/ipc'
+import { guidesKeyOf } from '@shared/persistence-types'
 import type { DeviceSpec } from '@shared/types'
 import { Button } from '@renderer/components/ui/button'
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuRadioGroup,
@@ -36,8 +39,10 @@ import {
   DropdownMenuTrigger
 } from '@renderer/components/ui/dropdown-menu'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
+import { ipcBridge } from '@renderer/lib/ipc'
 import { cn } from '@renderer/lib/utils'
 import { useEmulation } from '@renderer/stores/emulation'
+import { NO_GUIDES, useGuides } from '@renderer/stores/guides'
 import { useLayout } from '@renderer/stores/layout'
 import { useNavigation } from '@renderer/stores/navigation'
 import { useNotices } from '@renderer/stores/notices'
@@ -45,6 +50,7 @@ import { selectIsOpen, usePanels } from '@renderer/stores/panels'
 import { selectIsBusy, useShots } from '@renderer/stores/shots'
 import { useSync } from '@renderer/stores/sync'
 import { DiagnosticsChips } from './DiagnosticsChips'
+import { Rulers } from './Rulers'
 
 export type DeviceFrameProps = {
   device: DeviceSpec
@@ -138,6 +144,24 @@ function PageCrashed({
         Restart
       </Button>
     </div>
+  )
+}
+
+/**
+ * Rulers for this device, as a toggle in its menu. `alt+r` on the frame the
+ * pointer is over does the same; the overflow menu's Debug section does it
+ * for every device at once.
+ */
+function RulersItem({ deviceId }: { deviceId: string }): React.JSX.Element {
+  const on = useGuides((s) => s.rulers[deviceId] === true)
+  const toggleRulers = useGuides((s) => s.toggleRulers)
+
+  return (
+    <DropdownMenuCheckboxItem checked={on} onCheckedChange={() => toggleRulers(deviceId)}>
+      <Squares2X2Icon />
+      Rulers
+      <DropdownMenuShortcut>Alt R</DropdownMenuShortcut>
+    </DropdownMenuCheckboxItem>
   )
 }
 
@@ -274,6 +298,7 @@ function DeviceMenu({ deviceId }: { deviceId: string }): React.JSX.Element {
           Scroll to top
         </DropdownMenuItem>
         <DropdownMenuSeparator />
+        <RulersItem deviceId={deviceId} />
         <VisionItems deviceId={deviceId} />
         <DropdownMenuSeparator />
         <DropdownMenuItem disabled={url === ''} onSelect={copyUrl}>
@@ -530,6 +555,22 @@ export function DeviceFrame({ device, zoom, viewportRef }: DeviceFrameProps): Re
   const expandable = useLayout((s) => s.mode !== 'individual')
   const width = Math.round(device.width * zoom)
   const height = Math.round(device.height * zoom)
+  const rulers = useGuides((s) => s.rulers[device.id] === true)
+  const guidesKey = guidesKeyOf(device.width, device.height)
+  const guides = useGuides((s) => s.guides[guidesKey])
+
+  // The lines live in the page (main draws them as a stylesheet), and they
+  // show only while the rulers do: a line with no ruler to read it against is
+  // a page that "looks strange". Sent whenever this size's set changes.
+  useEffect(() => {
+    const bridge = ipcBridge()
+    if (bridge === null) return
+    void bridge
+      .invoke('guides:set', device.id, rulers ? (guides ?? NO_GUIDES) : NO_GUIDES)
+      .catch((error: unknown) => {
+        console.error('guides:set failed', error)
+      })
+  }, [device.id, rulers, guides])
 
   return (
     <section
@@ -601,16 +642,35 @@ export function DeviceFrame({ device, zoom, viewportRef }: DeviceFrameProps): Re
         <DeviceMenu deviceId={device.id} />
       </header>
 
-      <div
-        ref={viewportRef}
-        data-device-id={device.id}
-        data-load-state={load?.state ?? 'idle'}
-        className="relative rounded-md border border-border bg-card shadow-hairline"
-        style={{ width, height }}
-      >
-        {load?.state === 'failed' ? <LoadError deviceId={device.id} state={load} /> : null}
-        {load?.state === 'crashed' ? <PageCrashed deviceId={device.id} state={load} /> : null}
-      </div>
+      {/*
+        The rulers sit *around* the measured box, never over it: the native
+        view is glued to that box, and the frame simply grows by one strip on
+        two sides while they are showing.
+      */}
+      {(() => {
+        const viewport = (
+          <div
+            ref={viewportRef}
+            data-device-id={device.id}
+            data-load-state={load?.state ?? 'idle'}
+            className={cn(
+              'relative bg-card',
+              rulers ? '' : 'rounded-md border border-border shadow-hairline'
+            )}
+            style={{ width, height }}
+          >
+            {load?.state === 'failed' ? <LoadError deviceId={device.id} state={load} /> : null}
+            {load?.state === 'crashed' ? <PageCrashed deviceId={device.id} state={load} /> : null}
+          </div>
+        )
+        return rulers ? (
+          <Rulers deviceId={device.id} width={device.width} height={device.height} zoom={zoom}>
+            {viewport}
+          </Rulers>
+        ) : (
+          viewport
+        )
+      })()}
     </section>
   )
 }

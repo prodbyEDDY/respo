@@ -10,6 +10,7 @@ import { useClearHotkeys } from '@renderer/hooks/useClearHotkeys'
 import { useInspectHotkeys } from '@renderer/hooks/useInspectHotkeys'
 import { useLayoutHotkeys } from '@renderer/hooks/useLayoutHotkeys'
 import { useNavHotkeys } from '@renderer/hooks/useNavHotkeys'
+import { useRulerHotkeys } from '@renderer/hooks/useRulerHotkeys'
 import { useShotHotkeys } from '@renderer/hooks/useShotHotkeys'
 import { ipcBridge } from '@renderer/lib/ipc'
 import { createLayoutTelemetry, type LayoutTelemetry } from '@renderer/lib/layout-telemetry'
@@ -20,6 +21,7 @@ import { useBookmarks } from '@renderer/stores/bookmarks'
 import { useDevices } from '@renderer/stores/devices'
 import { attachDiagnosticsBridge, useDiagnostics } from '@renderer/stores/diagnostics'
 import { useEmulation } from '@renderer/stores/emulation'
+import { attachGuidesBridge, useGuides } from '@renderer/stores/guides'
 import { applyRotation, useLayout } from '@renderer/stores/layout'
 import { attachNavigationBridge, useNavigation } from '@renderer/stores/navigation'
 import { attachPanelsBridge, selectDockVisible, usePanels } from '@renderer/stores/panels'
@@ -84,6 +86,7 @@ function usePersistedState(): boolean {
         // Main put the environment on the views before this renderer existed;
         // this only mirrors it so the popover and the badge agree with it.
         useEmulation.getState().hydrate(state.emulation)
+        useGuides.getState().hydrate(state.guides)
         // The home page itself is main's to apply — it decides the start url
         // before the renderer has hydrated — so this only mirrors it.
         useBookmarks.getState().hydrate(state)
@@ -152,6 +155,9 @@ function App(): React.JSX.Element {
   // Console errors and overflow per device, batched like load events.
   useEffect(() => attachDiagnosticsBridge(), [])
 
+  // Scroll offsets of the devices showing rulers, batched the same way.
+  useEffect(() => attachGuidesBridge(), [])
+
   // mod+i arms the element picker, Escape puts it away.
   useInspectHotkeys()
   // mod+s photographs the whole canvas.
@@ -164,6 +170,8 @@ function App(): React.JSX.Element {
   useClearHotkeys()
   // mod+r reloads every device, mod+shift+r reloads them ignoring the cache.
   useNavHotkeys()
+  // alt+r toggles the rulers of the device under the pointer.
+  useRulerHotkeys()
 
   // Hand main the device set. Runs again whenever the selection changes; the
   // view manager reuses the views that stayed and loads the current url into
@@ -184,6 +192,7 @@ function App(): React.JSX.Element {
     const ids = devices.map((d) => d.id)
     useNavigation.getState().pruneDevices(ids)
     useDiagnostics.getState().pruneDevices(ids)
+    useGuides.getState().pruneDevices(ids)
   }, [devices])
 
   // Point every view at the start url. It arrives from main a round trip after

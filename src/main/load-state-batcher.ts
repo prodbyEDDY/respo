@@ -20,27 +20,28 @@ export const immediateDeferrer: Deferrer = {
   }
 }
 
-export type LoadStateBatcher = {
+export type KeyedBatcher<T> = {
   /** Record one device's newest state. Cheap; sends nothing by itself. */
-  report(payload: LoadStatePayload): void
+  report(payload: T): void
   /** Drop a flush that has not happened yet (the window is going away). */
   cancel(): void
 }
 
+export type LoadStateBatcher = KeyedBatcher<LoadStatePayload>
+
 /**
- * Collapses the load events of every device view into one IPC message per turn.
+ * Collapses per-device events into one IPC message per turn: the *latest*
+ * payload per device is kept and the whole set is flushed once.
  *
- * Five views loading a page produce a stream of start/finish/title events; the
- * rule (CLAUDE.md §4) is that none of them may become its own IPC message. The
- * batcher keeps the *latest* state per device and flushes the whole set once,
- * so a five-device navigation costs one `load-state` event, not fifteen.
+ * The shape behind every batched main -> renderer event (CLAUDE.md §4): load
+ * states, scroll offsets. Insertion-ordered, so devices reach the renderer in
+ * the order they spoke up.
  */
-export function createLoadStateBatcher(
-  flush: (batch: LoadStatePayload[]) => void,
+export function createKeyedBatcher<T extends { deviceId: string }>(
+  flush: (batch: T[]) => void,
   deferrer: Deferrer = immediateDeferrer
-): LoadStateBatcher {
-  // Insertion-ordered: devices reach the renderer in the order they spoke up.
-  const pending = new Map<string, LoadStatePayload>()
+): KeyedBatcher<T> {
+  const pending = new Map<string, T>()
   let cancelFlush: (() => void) | null = null
 
   const run = (): void => {
@@ -64,4 +65,19 @@ export function createLoadStateBatcher(
       cancelFlush = null
     }
   }
+}
+
+/**
+ * Collapses the load events of every device view into one IPC message per turn.
+ *
+ * Five views loading a page produce a stream of start/finish/title events; the
+ * rule (CLAUDE.md §4) is that none of them may become its own IPC message. The
+ * batcher keeps the *latest* state per device and flushes the whole set once,
+ * so a five-device navigation costs one `load-state` event, not fifteen.
+ */
+export function createLoadStateBatcher(
+  flush: (batch: LoadStatePayload[]) => void,
+  deferrer: Deferrer = immediateDeferrer
+): LoadStateBatcher {
+  return createKeyedBatcher<LoadStatePayload>(flush, deferrer)
 }

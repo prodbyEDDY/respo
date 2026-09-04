@@ -4,6 +4,7 @@ import {
   DEFAULT_SUITE_ID,
   SCHEMA_VERSION,
   defaultPersistedState,
+  guidesKeyOf,
   mergePersistedState,
   migratePersistedState,
   type PersistedState
@@ -675,5 +676,58 @@ describe('the emulation slice', () => {
       }
     }
     expect(mergePersistedState(base, { homeUrl: '' }).emulation).toEqual(base.emulation)
+  })
+})
+
+describe('the guides slice', () => {
+  function stored(over: Record<string, unknown>): PersistedState {
+    return migratePersistedState({ ...defaultPersistedState(), ...over }).state
+  }
+
+  it('starts empty', () => {
+    expect(defaultPersistedState().guides).toEqual({})
+  })
+
+  it('keys guides by viewport size', () => {
+    expect(guidesKeyOf(393, 852)).toBe('393x852')
+    expect(guidesKeyOf(393.4, 852.6)).toBe('393x853')
+  })
+
+  it('reads a document back, repaired size by size', () => {
+    const state = stored({
+      guides: {
+        '393x852': { h: [10, 10.2, -1, 'x'], v: [200] },
+        '1440x900': { h: [], v: [] },
+        phone: { h: [1], v: [] },
+        '360x780': 'junk'
+      }
+    })
+    expect(state.guides).toEqual({ '393x852': { h: [10], v: [200] } })
+  })
+
+  it('caps one axis at fifty guides', () => {
+    const state = stored({
+      guides: { '393x852': { h: Array.from({ length: 80 }, (_v, i) => i), v: [] } }
+    })
+    expect(state.guides['393x852']?.h).toHaveLength(50)
+  })
+
+  it.each([
+    ['missing', undefined],
+    ['not an object', 'x'],
+    ['an array', []],
+    ['null', null]
+  ])('reads a slice that is %s as empty', (_label, guides) => {
+    const doc: Record<string, unknown> = { ...defaultPersistedState() }
+    if (guides === undefined) delete doc['guides']
+    else doc['guides'] = guides
+    expect(migratePersistedState(doc).state.guides).toEqual({})
+  })
+
+  it('merges by copy', () => {
+    const guides = { '393x852': { h: [1], v: [2] } }
+    const merged = mergePersistedState(defaultPersistedState(), { guides })
+    expect(merged.guides).toEqual(guides)
+    expect(merged.guides['393x852']).not.toBe(guides['393x852'])
   })
 })

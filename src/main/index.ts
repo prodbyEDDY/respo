@@ -16,7 +16,8 @@ import {
   normalizeUrl,
   type DevtoolsStatePayload,
   type MainEvent,
-  type PermissionStatePayload
+  type PermissionStatePayload,
+  type ScrollStatePayload
 } from '@shared/ipc'
 import { defaultPersistedState } from '@shared/persistence-types'
 import { authHostLabel, authRealmLabel, createAuthManager, type AuthManager } from './auth'
@@ -25,6 +26,7 @@ import { clearBrowsingData } from './clear-data'
 import { DevtoolsManager } from './devtools-manager'
 import { DiagnosticsManager } from './diagnostics'
 import { EmulationManager } from './emulation'
+import { GuidesManager } from './guides'
 import { createFaviconFetcher } from './favicons'
 import { createHistory, type History } from './history'
 import { Inspector } from './inspector'
@@ -58,6 +60,7 @@ import {
   validateDeviceSpecs,
   validateDockPosition,
   validateEmulationProfile,
+  validateGuideSet,
   validateHighlightTarget,
   validateHistoryQuery,
   validateLeadDeviceId,
@@ -77,7 +80,12 @@ import {
 } from './validate'
 import { ViewManager } from './view-manager'
 import { createDevtoolsPanelFactory, createElectronViewBackend } from './view-backend'
-import { createLoadStateBatcher, type LoadStateBatcher } from './load-state-batcher'
+import {
+  createKeyedBatcher,
+  createLoadStateBatcher,
+  type KeyedBatcher,
+  type LoadStateBatcher
+} from './load-state-batcher'
 import { startPerfMonitor, type PerfMonitor } from './perf'
 import { runScrollSpike } from './spike'
 import icon from '../../resources/icon.png?asset'
@@ -101,6 +109,12 @@ let shots: ScreenshotQueue | null = null
 let emulation: EmulationManager | null = null
 /** Console errors and overflow, per device, batched to the renderer. */
 let diagnostics: DiagnosticsManager | null = null
+/** Ruler guides, as CSS layers on the pages. */
+let guides: GuidesManager | null = null
+/** Scroll offsets of the devices whose rulers are showing, one message per turn. */
+let scrollStates: KeyedBatcher<ScrollStatePayload> | null = null
+/** Devices whose rulers are showing — the only ones whose scroll travels. */
+const rulers = new Set<string>()
 /**
  * Who may use a camera, and which questions are waiting.
  *
@@ -238,7 +252,17 @@ function createWindow(): void {
   // mirroring rides the same debugger session emulation and screenshots use
   // (CLAUDE.md §3), so there is never a second attach.
   const cdp = new CDPController()
-  syncEngine = new SyncEngine(cdp)
+  // Scroll offsets ride the same preload stream mirroring does; only the
+  // devices with rulers showing are asked to report, and their samples are
+  // coalesced to one `scroll-state` message per turn (CLAUDE.md §4).
+  scrollStates = createKeyedBatcher<ScrollStatePayload>((batch) => {
+    sendMainEvent(mainWindow.webContents, { type: 'scroll-state', payload: batch })
+  })
+  syncEngine = new SyncEngine(cdp, {
+    onScroll: (deviceId, x, y) => {
+      if (rulers.has(deviceId)) scrollStates?.report({ deviceId, x, y })
+    }
+  })
 
   // Restore the mirroring switches here rather than from the renderer: they
   // have to be in place before the first view registers, and the renderer only
@@ -321,6 +345,9 @@ function createWindow(): void {
     }
   })
 
+  // Guides are stylesheets on the pages; the manager only needs to measure.
+  guides = new GuidesManager({ cdp })
+
   viewManager = new ViewManager(
     createElectronViewBackend(mainWindow, {
       canvasLayer: process.env['RESPO_CANVAS_LAYER'] !== '0',
@@ -331,6 +358,7 @@ function createWindow(): void {
       shots,
       emulation,
       diagnostics,
+      guides,
       // Popups belong to the viewport the user is interacting with — the same
       // election the mirroring follows.
       isLead: (deviceId) => syncEngine?.lead() === deviceId,
@@ -370,6 +398,11 @@ function createWindow(): void {
     emulation = null
     diagnostics?.dispose()
     diagnostics = null
+    guides?.dispose()
+    guides = null
+    rulers.clear()
+    scrollStates?.cancel()
+    scrollStates = null
     loadStates?.cancel()
     loadStates = null
     stopSpike?.()
@@ -523,6 +556,8 @@ function registerIpcHandlers(): void {
     shots?.retain(live)
     emulation?.retain(live)
     diagnostics?.retain(live)
+    guides?.retain(live)
+    for (const deviceId of [...rulers]) if (!live.has(deviceId)) rulers.delete(deviceId)
     // A lead that left the canvas must not keep deciding what gets recorded —
     // or whose cookies a clear would take (`lead-tracker.ts`).
     lead?.retain(specs.map((spec) => spec.id))
@@ -782,6 +817,21 @@ function registerIpcHandlers(): void {
 
   registerHandler('diagnostics:get', () => diagnostics?.state() ?? [])
 
+  // Rulers and guides. A device with rulers showing reports its scroll
+  // offsets (see `scroll-state`); the guides are a stylesheet on its page.
+  registerHandler('rulers:set', async (_event, deviceId, enabled) => {
+    const id = validateDeviceId(deviceId)
+    const on = validateBoolean(enabled, 'rulers:set')
+    if (on) rulers.add(id)
+    else rulers.delete(id)
+    syncEngine?.setReporting(id, on)
+    return on ? ((await guides?.scrollOf(id)) ?? null) : null
+  })
+
+  registerHandler('guides:set', (_event, deviceId, set) =>
+    guides?.set(validateDeviceId(deviceId), validateGuideSet(set))
+  )
+
   // The one-way stream from the device views. Its sender is an untrusted page,
   // so the batch is validated (and clamped) before the engine sees any of it;
   // anything malformed is dropped rather than thrown back at the page.
@@ -901,6 +951,10 @@ app.on('before-quit', () => {
   viewManager = null
   emulation?.dispose()
   emulation = null
+  guides?.dispose()
+  guides = null
+  scrollStates?.cancel()
+  scrollStates = null
   loadStates?.cancel()
   loadStates = null
   perf?.stop()

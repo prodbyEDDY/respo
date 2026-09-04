@@ -23,6 +23,7 @@ import {
   isPermissionType,
   normalizeUrl,
   type DockPosition,
+  type GuideSet,
   type PermissionType,
   type ShotDpr,
   type ShotFormat,
@@ -194,6 +195,30 @@ export type EmulationSettings = {
 const MAX_DEVICE_VISION = 256
 
 /**
+ * Guides, by viewport size (`393x852`). See `GuideSet`.
+ *
+ * Per size rather than per device: two devices of the same size share a
+ * layout, and a guide someone dragged to a column edge on one is the same
+ * guide on the other. Written on a debounce from the renderer — a drag is not
+ * a stream of documents.
+ */
+export type GuidesDocument = Record<string, GuideSet>
+
+/** How many viewport sizes may keep guides. Past this the oldest are junk. */
+export const MAX_GUIDE_SIZES = 100
+/** How many guides one axis of one size may hold. */
+export const MAX_GUIDES_PER_AXIS = 50
+/** Furthest a guide may sit from the document's origin, in CSS pixels. */
+export const MAX_GUIDE_POSITION = 100_000
+
+/** The document key for a viewport: `393x852`. */
+export function guidesKeyOf(width: number, height: number): string {
+  return `${Math.round(width)}x${Math.round(height)}`
+}
+
+const GUIDES_KEY_RE = /^\d{1,5}x\d{1,5}$/
+
+/**
  * More sites than anyone reviews by hand. A document past this is not a list of
  * decisions any more, and the oldest entries are the ones nobody remembers.
  */
@@ -251,6 +276,8 @@ export type PersistedState = {
   security: SecuritySettings
   /** The environment the pages are shown in. See `EmulationSettings`. */
   emulation: EmulationSettings
+  /** Ruler guides, by viewport size. See `GuidesDocument`. */
+  guides: GuidesDocument
   /**
    * The page every session opens on, or `''` for "no home page".
    *
@@ -328,6 +355,8 @@ export function defaultPersistedState(): PersistedState {
     // Nothing overridden: the pages see the real machine until someone asks
     // otherwise, and the toolbar badge is off.
     emulation: { profile: defaultEmulationProfile(), deviceVision: {} },
+    // No guides anywhere: they are drawn by the user, one ruler click at a time.
+    guides: {},
     homeUrl: ''
   }
 }
@@ -360,6 +389,7 @@ export function mergePersistedState(
     permissions: clonePermissions(patch.permissions ?? base.permissions),
     security: { ...(patch.security ?? base.security) },
     emulation: cloneEmulation(patch.emulation ?? base.emulation),
+    guides: cloneGuides(patch.guides ?? base.guides),
     homeUrl: patch.homeUrl ?? base.homeUrl,
     schemaVersion: SCHEMA_VERSION
   }
@@ -424,10 +454,53 @@ export function migratePersistedState(raw: unknown): MigrationResult {
       permissions: sanitizePermissions(doc['permissions']),
       security: sanitizeSecurity(doc['security']),
       emulation: sanitizeEmulation(doc['emulation']),
+      guides: sanitizeGuides(doc['guides']),
       homeUrl: sanitizeHomeUrl(doc['homeUrl'])
     },
     backup: null
   }
+}
+
+function cloneGuides(guides: GuidesDocument): GuidesDocument {
+  const out: GuidesDocument = {}
+  for (const [key, set] of Object.entries(guides)) out[key] = { h: [...set.h], v: [...set.v] }
+  return out
+}
+
+/** Repair one axis: whole, non-negative, bounded, deduplicated, ascending. */
+export function sanitizeGuideAxis(value: unknown): number[] {
+  if (!Array.isArray(value)) return []
+  const out = new Set<number>()
+  for (const entry of value) {
+    if (typeof entry !== 'number' || !Number.isFinite(entry)) continue
+    const position = Math.round(entry)
+    if (position < 0 || position > MAX_GUIDE_POSITION) continue
+    out.add(position)
+    if (out.size >= MAX_GUIDES_PER_AXIS) break
+  }
+  return [...out].sort((a, b) => a - b)
+}
+
+/**
+ * Repair the guides. A field, not a document: a junk size costs its own
+ * guides and nothing else, and a set with nothing left is not stored — the
+ * absence of a key already means "no guides here".
+ */
+function sanitizeGuides(value: unknown): GuidesDocument {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return {}
+  const out: GuidesDocument = {}
+  let sizes = 0
+  for (const [key, entry] of Object.entries(value)) {
+    if (sizes >= MAX_GUIDE_SIZES) break
+    if (!GUIDES_KEY_RE.test(key)) continue
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) continue
+    const set = entry as Record<string, unknown>
+    const guides = { h: sanitizeGuideAxis(set['h']), v: sanitizeGuideAxis(set['v']) }
+    if (guides.h.length === 0 && guides.v.length === 0) continue
+    out[key] = guides
+    sizes += 1
+  }
+  return out
 }
 
 function cloneEmulation(emulation: EmulationSettings): EmulationSettings {
