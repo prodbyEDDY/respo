@@ -7,6 +7,7 @@
  */
 
 import type { RespoBackupV1 } from './backup'
+import type { EmulationProfile, VisionDeficiency } from './emulation'
 import type { PersistedState } from './persistence-types'
 import type { DeviceSpec, Rect } from './types'
 
@@ -306,6 +307,21 @@ export type AuthPrompt = {
  * trusts are better at that than a development tool.
  */
 export type AuthCredentials = { username: string; password: string }
+
+/**
+ * The emulation pack as main is applying it: the global profile, and the
+ * devices whose vision simulation overrides it.
+ *
+ * The renderer owns the document (it persists this like every other slice);
+ * main mirrors it into every view and restores it at boot before the first
+ * view exists, so this payload is only what a renderer that has just started
+ * asks for when it wants to be sure.
+ */
+export type EmulationStatePayload = {
+  profile: EmulationProfile
+  /** Per-device vision overrides. An absent id inherits the profile. */
+  deviceVision: Record<string, VisionDeficiency>
+}
 
 export type LoadState = 'loading' | 'ready' | 'failed'
 
@@ -622,6 +638,24 @@ export type IpcInvokeMap = {
    * 401 page, which is a perfectly good thing to be looking at.
    */
   'auth:respond': { args: [string, AuthCredentials | null]; result: void }
+  /**
+   * Put one environment on every device view at once.
+   *
+   * The whole profile, not a delta: main diffs it against what each view is
+   * already emulating and sends only the CDP calls that change something, so
+   * a colour-scheme flip costs one `Emulation.setEmulatedMedia` per view. The
+   * renderer persists the profile itself (`emulation` slice), and main
+   * restores it at boot before the first view exists.
+   */
+  'emulation:set': { args: [EmulationProfile]; result: void }
+  /**
+   * Simulate a vision deficiency on one device only, or (`null`) let it
+   * inherit the profile again. Wins over the profile's `vision` for that
+   * device — the way to compare two identical frames with and without.
+   */
+  'emulation:set-device-vision': { args: [string, VisionDeficiency | null]; result: void }
+  /** What main is actually applying. For a renderer that wants to be sure. */
+  'emulation:get': { args: []; result: EmulationStatePayload }
 }
 
 export type IpcChannel = keyof IpcInvokeMap
@@ -667,7 +701,10 @@ const CHANNEL_REGISTRY: Record<IpcChannel, true> = {
   'permissions:dismiss': true,
   'permissions:set': true,
   'permissions:reset': true,
-  'auth:respond': true
+  'auth:respond': true,
+  'emulation:set': true,
+  'emulation:set-device-vision': true,
+  'emulation:get': true
 }
 
 export const IPC_CHANNELS: readonly IpcChannel[] = Object.keys(CHANNEL_REGISTRY) as IpcChannel[]

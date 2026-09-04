@@ -573,3 +573,107 @@ describe('the safety switches', () => {
     expect(mergePersistedState(base, { homeUrl: '' }).security).toEqual(base.security)
   })
 })
+
+describe('the emulation slice', () => {
+  function stored(over: Record<string, unknown>): PersistedState {
+    return migratePersistedState({ ...defaultPersistedState(), ...over }).state
+  }
+
+  it('starts with nothing overridden', () => {
+    const { emulation } = defaultPersistedState()
+    expect(emulation.deviceVision).toEqual({})
+    expect(emulation.profile).toEqual({
+      colorScheme: 'system',
+      reducedMotion: false,
+      forcedColors: false,
+      media: 'auto',
+      vision: 'none',
+      network: 'online',
+      geolocation: null,
+      locale: null,
+      timezone: null
+    })
+  })
+
+  it('reads a whole profile back', () => {
+    const profile = {
+      colorScheme: 'dark',
+      reducedMotion: true,
+      forcedColors: false,
+      media: 'print',
+      vision: 'deuteranopia',
+      network: 'slow-4g',
+      geolocation: { latitude: 35.6762, longitude: 139.6503 },
+      locale: 'ja-JP',
+      timezone: 'Asia/Tokyo'
+    }
+    const state = stored({ emulation: { profile, deviceVision: { 'pixel-8': 'none' } } })
+    expect(state.emulation.profile).toEqual(profile)
+    expect(state.emulation.deviceVision).toEqual({ 'pixel-8': 'none' })
+  })
+
+  it('repairs each field on its own, keeping the rest', () => {
+    const state = stored({
+      emulation: {
+        profile: {
+          colorScheme: 'sepia',
+          reducedMotion: 'yes',
+          media: 'braille',
+          vision: 'x-ray',
+          network: '5g',
+          geolocation: { latitude: 200, longitude: 0 },
+          locale: 'en_US',
+          timezone: 'Mars/Olympus Mons'
+        },
+        deviceVision: { 'pixel-8': 'deuteranopia', '': 'protanopia', ghost: 'nope' }
+      }
+    })
+    expect(state.emulation.profile).toEqual(defaultPersistedState().emulation.profile)
+    expect(state.emulation.deviceVision).toEqual({ 'pixel-8': 'deuteranopia' })
+  })
+
+  it('keeps a valid time zone next to a junk locale', () => {
+    const state = stored({
+      emulation: { profile: { locale: 42, timezone: 'Europe/Berlin' }, deviceVision: {} }
+    })
+    expect(state.emulation.profile.locale).toBeNull()
+    expect(state.emulation.profile.timezone).toBe('Europe/Berlin')
+  })
+
+  it.each([
+    ['missing', undefined],
+    ['not an object', 'dark'],
+    ['an array', []],
+    ['null', null]
+  ])('reads a slice that is %s as the defaults', (_label, emulation) => {
+    const doc: Record<string, unknown> = { ...defaultPersistedState() }
+    if (emulation === undefined) delete doc['emulation']
+    else doc['emulation'] = emulation
+    expect(migratePersistedState(doc).state.emulation).toEqual(defaultPersistedState().emulation)
+  })
+
+  it('merges like every other slice, by copy', () => {
+    const emulation = {
+      profile: {
+        ...defaultPersistedState().emulation.profile,
+        geolocation: { latitude: 1, longitude: 2 }
+      },
+      deviceVision: { 'pixel-8': 'tritanopia' as const }
+    }
+    const merged = mergePersistedState(defaultPersistedState(), { emulation })
+    expect(merged.emulation).toEqual(emulation)
+    expect(merged.emulation.profile.geolocation).not.toBe(emulation.profile.geolocation)
+    expect(merged.emulation.deviceVision).not.toBe(emulation.deviceVision)
+  })
+
+  it('leaves it alone when a patch does not mention it', () => {
+    const base = {
+      ...defaultPersistedState(),
+      emulation: {
+        profile: { ...defaultPersistedState().emulation.profile, colorScheme: 'dark' as const },
+        deviceVision: {}
+      }
+    }
+    expect(mergePersistedState(base, { homeUrl: '' }).emulation).toEqual(base.emulation)
+  })
+})

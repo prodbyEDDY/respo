@@ -10,6 +10,16 @@
 import { slugify } from './custom-devices'
 import { DEFAULT_ACTIVE_DEVICE_IDS } from './deviceCatalog'
 import {
+  defaultEmulationProfile,
+  isGeolocation,
+  isLocaleTag,
+  isNetworkPreset,
+  isTimezoneId,
+  isVisionDeficiency,
+  type EmulationProfile,
+  type VisionDeficiency
+} from './emulation'
+import {
   isPermissionType,
   normalizeUrl,
   type DockPosition,
@@ -167,6 +177,23 @@ export type SecuritySettings = {
 }
 
 /**
+ * The environment the pages are shown in — see `EmulationProfile`.
+ *
+ * Persisted because it is a *setting about the project*, not a mode: someone
+ * checking a German dark-mode site comes back tomorrow to the same German
+ * dark-mode site. The toolbar badge is what keeps a restored override from
+ * being a surprise. `deviceVision` is keyed by device id and, like `rotated`,
+ * only the exceptions are kept.
+ */
+export type EmulationSettings = {
+  profile: EmulationProfile
+  deviceVision: Record<string, VisionDeficiency>
+}
+
+/** One override per device the user ever set one on, catalog included. */
+const MAX_DEVICE_VISION = 256
+
+/**
  * More sites than anyone reviews by hand. A document past this is not a list of
  * decisions any more, and the oldest entries are the ones nobody remembers.
  */
@@ -222,6 +249,8 @@ export type PersistedState = {
   permissions: PermissionsDocument
   /** The switches that trade safety for reach. See `SecuritySettings`. */
   security: SecuritySettings
+  /** The environment the pages are shown in. See `EmulationSettings`. */
+  emulation: EmulationSettings
   /**
    * The page every session opens on, or `''` for "no home page".
    *
@@ -296,6 +325,9 @@ export function defaultPersistedState(): PersistedState {
     // Off. A browser that accepts a broken certificate out of the box is a
     // browser that lies about what it is showing you.
     security: { allowInsecureCertificates: false },
+    // Nothing overridden: the pages see the real machine until someone asks
+    // otherwise, and the toolbar badge is off.
+    emulation: { profile: defaultEmulationProfile(), deviceVision: {} },
     homeUrl: ''
   }
 }
@@ -327,6 +359,7 @@ export function mergePersistedState(
     bookmarks: (patch.bookmarks ?? base.bookmarks).map(cloneBookmark),
     permissions: clonePermissions(patch.permissions ?? base.permissions),
     security: { ...(patch.security ?? base.security) },
+    emulation: cloneEmulation(patch.emulation ?? base.emulation),
     homeUrl: patch.homeUrl ?? base.homeUrl,
     schemaVersion: SCHEMA_VERSION
   }
@@ -390,10 +423,85 @@ export function migratePersistedState(raw: unknown): MigrationResult {
       bookmarks: sanitizeBookmarks(doc['bookmarks']),
       permissions: sanitizePermissions(doc['permissions']),
       security: sanitizeSecurity(doc['security']),
+      emulation: sanitizeEmulation(doc['emulation']),
       homeUrl: sanitizeHomeUrl(doc['homeUrl'])
     },
     backup: null
   }
+}
+
+function cloneEmulation(emulation: EmulationSettings): EmulationSettings {
+  return {
+    profile: {
+      ...emulation.profile,
+      geolocation:
+        emulation.profile.geolocation === null ? null : { ...emulation.profile.geolocation }
+    },
+    deviceVision: { ...emulation.deviceVision }
+  }
+}
+
+/**
+ * Repair one emulation profile, field by field.
+ *
+ * Every field degrades to "no override" on its own: a junk time zone must not
+ * cost the user their dark-mode setting, and the safe reading of any damaged
+ * value is the real environment. Exported because main's boot-time restore
+ * and the renderer's hydrate both read the result.
+ */
+export function sanitizeEmulationProfile(value: unknown): EmulationProfile {
+  const defaults = defaultEmulationProfile()
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return defaults
+
+  const profile = value as Record<string, unknown>
+  const colorScheme = profile['colorScheme']
+  const media = profile['media']
+  const vision = profile['vision']
+  const network = profile['network']
+  const geolocation = profile['geolocation']
+  const locale = profile['locale']
+  const timezone = profile['timezone']
+
+  return {
+    colorScheme:
+      colorScheme === 'light' || colorScheme === 'dark' ? colorScheme : defaults.colorScheme,
+    reducedMotion: profile['reducedMotion'] === true,
+    forcedColors: profile['forcedColors'] === true,
+    media: media === 'screen' || media === 'print' ? media : defaults.media,
+    vision: isVisionDeficiency(vision) ? vision : defaults.vision,
+    network: isNetworkPreset(network) ? network : defaults.network,
+    geolocation: isGeolocation(geolocation)
+      ? { latitude: geolocation.latitude, longitude: geolocation.longitude }
+      : null,
+    locale: isLocaleTag(locale) ? locale : null,
+    timezone: isTimezoneId(timezone) ? timezone : null
+  }
+}
+
+/**
+ * Repair the emulation slice.
+ *
+ * Absent on every document written before this build, so "missing" means the
+ * defaults rather than a reset — a field, not a document (see
+ * `migratePersistedState`). A per-device override that is `none` is kept: it
+ * means "this device, unlike the profile, simulates nothing", which is a real
+ * decision and not the default said out loud.
+ */
+function sanitizeEmulation(value: unknown): EmulationSettings {
+  const defaults: EmulationSettings = { profile: defaultEmulationProfile(), deviceVision: {} }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return defaults
+
+  const emulation = value as Record<string, unknown>
+  const raw = emulation['deviceVision']
+  const deviceVision: Record<string, VisionDeficiency> = {}
+  if (typeof raw === 'object' && raw !== null && !Array.isArray(raw)) {
+    for (const [id, vision] of Object.entries(raw).slice(0, MAX_DEVICE_VISION)) {
+      if (id.length === 0 || !isVisionDeficiency(vision)) continue
+      deviceVision[id] = vision
+    }
+  }
+
+  return { profile: sanitizeEmulationProfile(emulation['profile']), deviceVision }
 }
 
 function cloneSuite(suite: Suite): Suite {

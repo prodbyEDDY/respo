@@ -1,3 +1,12 @@
+import {
+  acceptLanguageFor,
+  GEOLOCATION_ACCURACY_M,
+  type EmulatedColorScheme,
+  type EmulatedMediaType,
+  type GeolocationOverride,
+  type NetworkConditions,
+  type VisionDeficiency
+} from '@shared/emulation'
 import type { ShotDpr, ShotFormat } from '@shared/ipc'
 import type { DeviceSpec } from '@shared/types'
 
@@ -77,10 +86,29 @@ const MAX_REATTACHES = 3
 /** Touch points a touch device reports. Chrome's own emulation uses 1..5. */
 const MAX_TOUCH_POINTS = 5
 
+/**
+ * What the environment emulation puts on one view — the emulation pack
+ * resolved for *this* device (its vision simulation may differ from the
+ * profile's). See `applyEmulation`.
+ */
+export type ViewEmulation = {
+  media: EmulatedMediaType
+  colorScheme: EmulatedColorScheme
+  reducedMotion: boolean
+  forcedColors: boolean
+  vision: VisionDeficiency
+  network: NetworkConditions
+  geolocation: GeolocationOverride | null
+  locale: string | null
+  timezone: string | null
+}
+
 type Session = {
   target: CdpTarget
   /** Last device applied, replayed after a re-attach. */
   device: DeviceSpec | null
+  /** Last environment applied, replayed after a re-attach. `null` until one is. */
+  emulation: ViewEmulation | null
   /**
    * The canvas zoom this view is painted at. `1` until a layout says otherwise.
    *
@@ -150,6 +178,20 @@ const INSET = 2
  */
 export function isMobileDevice(spec: DeviceSpec): boolean {
   return /iPhone|iPad|iPod|Android/.test(spec.userAgent)
+}
+
+function sameNetwork(a: NetworkConditions, b: NetworkConditions): boolean {
+  return (
+    a.offline === b.offline &&
+    a.latency === b.latency &&
+    a.downloadThroughput === b.downloadThroughput &&
+    a.uploadThroughput === b.uploadThroughput
+  )
+}
+
+function sameGeolocation(a: GeolocationOverride | null, b: GeolocationOverride | null): boolean {
+  if (a === null || b === null) return a === b
+  return a.latitude === b.latitude && a.longitude === b.longitude
 }
 
 /** A finite, strictly positive number — a usable extent. */
@@ -242,6 +284,7 @@ export class CDPController {
     const session: Session = {
       target,
       device: null,
+      emulation: null,
       zoom: 1,
       attached: false,
       reattaches: 0,
@@ -288,12 +331,132 @@ export class CDPController {
       maxTouchPoints: spec.touch ? MAX_TOUCH_POINTS : 1
     })
 
-    const ua = { userAgent: spec.userAgent }
-    // `Network.setUserAgentOverride` is the call DevTools has always used and
-    // the one the brief names; the protocol has since moved it to `Emulation`.
-    // Try both so neither a new nor an old Chromium leaves a view un-branded.
+    await this.sendUserAgent(target, spec, session?.emulation?.locale ?? null)
+  }
+
+  /**
+   * The user-agent override, which carries more than the string: the
+   * `Accept-Language` the locale emulation implies travels in the same call,
+   * because the protocol has one override for both and the second call would
+   * silently undo the first.
+   *
+   * `Network.setUserAgentOverride` is the call DevTools has always used and the
+   * one the brief names; the protocol has since moved it to `Emulation`. Try
+   * both so neither a new nor an old Chromium leaves a view un-branded.
+   */
+  private async sendUserAgent(
+    target: CdpTarget,
+    spec: DeviceSpec,
+    locale: string | null
+  ): Promise<void> {
+    const ua = {
+      userAgent: spec.userAgent,
+      ...(locale === null ? {} : { acceptLanguage: acceptLanguageFor(locale) })
+    }
     if (!(await this.send(target, 'Network.setUserAgentOverride', ua))) {
       await this.send(target, 'Emulation.setUserAgentOverride', ua)
+    }
+  }
+
+  /**
+   * Put one environment on a view: media features, vision, network,
+   * location, locale and time zone (spec §5.2, the emulation pack).
+   *
+   * Diffed against what the view already has, group by group, so a
+   * colour-scheme flip is one `setEmulatedMedia` and nothing else — this runs
+   * on every view for every change, and ten views re-stating seven overrides
+   * apiece for one toggle would be a visible stall. `force` replays the whole
+   * set regardless, which is what a re-attach needs: the session that held the
+   * overrides is gone.
+   *
+   * Like `applyDevice`, only on a view that has committed a navigation
+   * (`view-backend` primes every view with `about:blank` before this runs), and
+   * best-effort throughout: a simulation this Chromium does not know is logged
+   * and skipped, not a reason to leave the rest of the environment unset.
+   *
+   * Every one of these overrides lives in the *session*, not in the document:
+   * Chromium restores the agents' state into each new document the target
+   * commits, so they survive navigation, and only a lost session (a detach)
+   * needs them said again. Verified in `e2e/emulation-pack.spec.ts`.
+   */
+  async applyEmulation(
+    target: CdpTarget,
+    next: ViewEmulation,
+    options: { force?: boolean } = {}
+  ): Promise<void> {
+    const session = this.sessions.get(target.id)
+    if (session === undefined) return
+    const previous = options.force === true ? null : session.emulation
+    session.emulation = next
+    if (!this.live(target)) return
+
+    if (
+      previous === null ||
+      previous.media !== next.media ||
+      previous.colorScheme !== next.colorScheme ||
+      previous.reducedMotion !== next.reducedMotion ||
+      previous.forcedColors !== next.forcedColors
+    ) {
+      // An empty value clears a feature: the protocol has no "unset" call,
+      // and DevTools itself sends the whole list with blanks for the rest.
+      await this.send(target, 'Emulation.setEmulatedMedia', {
+        media: next.media === 'auto' ? '' : next.media,
+        features: [
+          {
+            name: 'prefers-color-scheme',
+            value: next.colorScheme === 'system' ? '' : next.colorScheme
+          },
+          { name: 'prefers-reduced-motion', value: next.reducedMotion ? 'reduce' : '' },
+          { name: 'forced-colors', value: next.forcedColors ? 'active' : '' }
+        ]
+      })
+    }
+
+    if (previous === null || previous.vision !== next.vision) {
+      await this.send(target, 'Emulation.setEmulatedVisionDeficiency', { type: next.vision })
+    }
+
+    if (previous === null || !sameNetwork(previous.network, next.network)) {
+      await this.send(target, 'Network.emulateNetworkConditions', { ...next.network })
+    }
+
+    if (previous === null || !sameGeolocation(previous.geolocation, next.geolocation)) {
+      if (next.geolocation === null) {
+        await this.send(target, 'Emulation.clearGeolocationOverride', {})
+      } else {
+        await this.send(target, 'Emulation.setGeolocationOverride', {
+          latitude: next.geolocation.latitude,
+          longitude: next.geolocation.longitude,
+          accuracy: GEOLOCATION_ACCURACY_M
+        })
+      }
+    }
+
+    if (previous === null || previous.timezone !== next.timezone) {
+      // An empty id restores the host's zone.
+      await this.send(target, 'Emulation.setTimezoneOverride', {
+        timezoneId: next.timezone ?? ''
+      })
+    }
+
+    if (previous === null || previous.locale !== next.locale) {
+      // Two halves of one setting: `Intl` and `toLocaleString` follow the
+      // locale override, `navigator.language` and the request header follow
+      // `Accept-Language` — which rides the user-agent override, so it is
+      // re-sent here with the device's own string (and skipped when the
+      // device has not been applied yet: `applyDevice` will carry it).
+      await this.send(
+        target,
+        'Emulation.setLocaleOverride',
+        next.locale === null ? {} : { locale: next.locale }
+      )
+      //
+      // Skipped on a replay: `onDetach` re-applies the device first, and that
+      // call already carried this locale. Skipped on a first application with
+      // nothing to carry, for the same reason.
+      const device = session.device
+      const carried = options.force === true || (previous === null && next.locale === null)
+      if (device !== null && !carried) await this.sendUserAgent(target, device, next.locale)
     }
   }
 
@@ -673,9 +836,14 @@ export class CDPController {
     this.open(session)
     if (!session.attached) return
 
-    // The emulation lives in the session that just died; put it back.
+    // The emulation lives in the session that just died; put it back — the
+    // device first, so the user-agent call carries the environment's language.
     const device = session.device
-    if (device !== null) void this.applyDevice(session.target, device)
+    const emulation = session.emulation
+    void (async () => {
+      if (device !== null) await this.applyDevice(session.target, device)
+      if (emulation !== null) await this.applyEmulation(session.target, emulation, { force: true })
+    })()
   }
 
   /**

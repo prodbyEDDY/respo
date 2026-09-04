@@ -52,6 +52,7 @@ import { useSettings } from '@renderer/stores/settings'
 import { useSync } from '@renderer/stores/sync'
 import { AddressBar } from './AddressBar'
 import { ClearMenu } from './ClearMenu'
+import { EmulateButton } from './EmulatePopover'
 import { NavControls } from './NavControls'
 import { Notice } from './Notice'
 import { ShotAllButton, ShotNotice } from './ShotControls'
@@ -432,6 +433,7 @@ export function TopBar(): React.JSX.Element {
         <ClearMenu />
         <SuiteSelector />
         <DeviceLibraryButton />
+        <EmulateButton />
         <SyncChip />
         <InspectToggle />
         <ShotAllButton />

@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { ExclamationTriangleIcon, FolderOpenIcon } from '@heroicons/react/24/outline'
 import type { ShotDpr, ShotFormat } from '@shared/ipc'
+import { Segmented } from '@renderer/components/common/Segmented'
 import { Button } from '@renderer/components/ui/button'
 import { Checkbox } from '@renderer/components/ui/checkbox'
 import {
@@ -41,8 +42,8 @@ const DENSITIES: readonly Choice<ShotDpr>[] = [
   }
 ]
 
-/** A segmented picker: two or three choices that are one click apart. */
-function Segmented<T extends string | number>({
+/** A segmented picker with a caption above and the chosen option's hint below. */
+function SegmentedField<T extends string | number>({
   label,
   value,
   choices,
@@ -58,27 +59,13 @@ function Segmented<T extends string | number>({
   return (
     <div className="flex flex-col gap-1.5">
       <Label>{label}</Label>
-      <div role="radiogroup" aria-label={label} className="flex gap-1 rounded-md bg-muted p-1">
-        {choices.map((choice) => (
-          <button
-            key={String(choice.value)}
-            type="button"
-            role="radio"
-            aria-checked={choice.value === value}
-            onClick={() => onChange(choice.value)}
-            className={cn(
-              'flex flex-1 items-center justify-center rounded-sm px-2 py-1',
-              'text-micro font-medium transition-colors duration-150 ease-out outline-none',
-              'focus-visible:ring-[3px] focus-visible:ring-ring/50',
-              choice.value === value
-                ? 'bg-card text-foreground shadow-hairline'
-                : 'text-muted-foreground hover:text-foreground'
-            )}
-          >
-            {choice.label}
-          </button>
-        ))}
-      </div>
+      <Segmented
+        label={label}
+        value={value}
+        choices={choices}
+        onChange={onChange}
+        className="p-1"
+      />
       {/* Fixed height: the hint changes with the choice, and the dialog must
           not resize under the pointer while someone is comparing two of them. */}
       <p className="min-h-[34px] text-micro text-muted-foreground">{selected?.hint ?? ''}</p>
@@ -207,13 +194,13 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps): Rea
             </p>
           </div>
 
-          <Segmented
+          <SegmentedField
             label="Format"
             value={settings.format}
             choices={FORMATS}
             onChange={setFormat}
           />
-          <Segmented
+          <SegmentedField
             label="Pixel density"
             value={settings.dpr}
             choices={DENSITIES}

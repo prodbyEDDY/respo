@@ -7,9 +7,11 @@ import {
   validateClearTarget,
   validateDeviceId,
   validateDeviceSpecs,
+  validateEmulationProfile,
   validateHistoryQuery,
   validateHomeUrl,
   validateLeadDeviceId,
+  validateOptionalVisionDeficiency,
   validatePermissionDecision,
   validatePermissionType,
   validatePersistedPatch,
@@ -714,5 +716,85 @@ describe('the security slice of store:save', () => {
     ['an array', { security: [] }]
   ])('rejects %s', (_label, payload) => {
     expect(() => validatePersistedPatch(payload)).toThrow(/invalid ipc payload/i)
+  })
+})
+
+describe('emulation payloads', () => {
+  const profile = {
+    colorScheme: 'dark',
+    reducedMotion: true,
+    forcedColors: false,
+    media: 'print',
+    vision: 'deuteranopia',
+    network: 'slow-4g',
+    geolocation: { latitude: 35.6762, longitude: 139.6503 },
+    locale: 'ja-JP',
+    timezone: 'Asia/Tokyo'
+  }
+
+  it('accepts a full profile and rebuilds it without extra keys', () => {
+    expect(
+      validateEmulationProfile({ ...profile, geolocation: { ...profile.geolocation, extra: 1 } })
+    ).toEqual(profile)
+  })
+
+  it('accepts a profile with everything off', () => {
+    expect(
+      validateEmulationProfile({
+        colorScheme: 'system',
+        reducedMotion: false,
+        forcedColors: false,
+        media: 'auto',
+        vision: 'none',
+        network: 'online',
+        geolocation: null,
+        locale: null,
+        timezone: null
+      }).locale
+    ).toBeNull()
+  })
+
+  it.each([
+    ['a junk colour scheme', { colorScheme: 'sepia' }],
+    ['a junk media type', { media: 'braille' }],
+    ['an unknown simulation', { vision: 'x-ray' }],
+    ['an unknown network preset', { network: '5g' }],
+    ['a non-boolean reducedMotion', { reducedMotion: 'yes' }],
+    ['a non-boolean forcedColors', { forcedColors: 1 }],
+    ['a position off the planet', { geolocation: { latitude: 91, longitude: 0 } }],
+    ['a locale that is not a tag', { locale: 'en_US' }],
+    ['a locale that is a script', { locale: '<script>' }],
+    ['a time zone with spaces', { timezone: 'Mars/Olympus Mons' }],
+    ['a missing field', { timezone: undefined }]
+  ])('rejects %s', (_label, over) => {
+    expect(() => validateEmulationProfile({ ...profile, ...over })).toThrow(/invalid ipc payload/i)
+  })
+
+  it.each([null, 'dark', [], 42])('rejects a profile that is %j', (value) => {
+    expect(() => validateEmulationProfile(value)).toThrow(/invalid ipc payload/i)
+  })
+
+  it('accepts a per-device simulation or null', () => {
+    expect(validateOptionalVisionDeficiency('protanopia')).toBe('protanopia')
+    expect(validateOptionalVisionDeficiency(null)).toBeNull()
+    expect(() => validateOptionalVisionDeficiency('x-ray')).toThrow(/invalid ipc payload/i)
+    expect(() => validateOptionalVisionDeficiency(undefined)).toThrow(/invalid ipc payload/i)
+  })
+
+  it('carries the persisted slice through store:save', () => {
+    expect(
+      validatePersistedPatch({ emulation: { profile, deviceVision: { 'pixel-8': 'none' } } })
+    ).toEqual({ emulation: { profile, deviceVision: { 'pixel-8': 'none' } } })
+  })
+
+  it.each([
+    ['a junk override', { profile, deviceVision: { 'pixel-8': 'x-ray' } }],
+    ['an empty device id', { profile, deviceVision: { '': 'none' } }],
+    ['a missing override map', { profile }],
+    ['an array of overrides', { profile, deviceVision: [] }],
+    ['a junk profile inside', { profile: { ...profile, vision: 'x-ray' }, deviceVision: {} }],
+    ['a non-object slice', 'dark']
+  ])('rejects store:save emulation with %s', (_label, emulation) => {
+    expect(() => validatePersistedPatch({ emulation })).toThrow(/invalid ipc payload/i)
   })
 })

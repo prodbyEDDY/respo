@@ -23,6 +23,7 @@ import { authHostLabel, authRealmLabel, createAuthManager, type AuthManager } fr
 import { CDPController } from './cdp-controller'
 import { clearBrowsingData } from './clear-data'
 import { DevtoolsManager } from './devtools-manager'
+import { EmulationManager } from './emulation'
 import { createFaviconFetcher } from './favicons'
 import { createHistory, type History } from './history'
 import { Inspector } from './inspector'
@@ -55,9 +56,11 @@ import {
   validateDeviceId,
   validateDeviceSpecs,
   validateDockPosition,
+  validateEmulationProfile,
   validateHistoryQuery,
   validateLeadDeviceId,
   validateOptionalDeviceId,
+  validateOptionalVisionDeficiency,
   validatePermissionDecision,
   validatePermissionType,
   validatePersistedPatch,
@@ -87,6 +90,11 @@ let syncEngine: SyncEngine | null = null
 let devtools: DevtoolsManager | null = null
 let inspector: Inspector | null = null
 let shots: ScreenshotQueue | null = null
+/**
+ * The environment every page is shown in — colour scheme, network, locale and
+ * the rest of the emulation pack. Restored from disk before the first view.
+ */
+let emulation: EmulationManager | null = null
 /**
  * Who may use a camera, and which questions are waiting.
  *
@@ -290,6 +298,14 @@ function createWindow(): void {
     revealFile: (path) => shell.showItemInFolder(path)
   })
 
+  // The environment profile, restored here for the same reason the mirroring
+  // switches are: it has to be on a view before that view fetches anything,
+  // and the renderer only finishes hydrating after the first view exists.
+  emulation = new EmulationManager({
+    cdp,
+    ...(persistence === null ? {} : { initial: persistence.load().emulation })
+  })
+
   viewManager = new ViewManager(
     createElectronViewBackend(mainWindow, {
       canvasLayer: process.env['RESPO_CANVAS_LAYER'] !== '0',
@@ -298,6 +314,7 @@ function createWindow(): void {
       devtools,
       inspect: inspector,
       shots,
+      emulation,
       onFavicon: (pageUrl, icons) => history?.noteFavicon(pageUrl, icons)
     }),
     { onLoadState: (payload) => loadStates?.report(payload) }
@@ -330,6 +347,8 @@ function createWindow(): void {
     deviceNames.clear()
     viewManager?.destroy()
     viewManager = null
+    emulation?.dispose()
+    emulation = null
     loadStates?.cancel()
     loadStates = null
     stopSpike?.()
@@ -481,6 +500,7 @@ function registerIpcHandlers(): void {
     devtools?.retain(live)
     inspector?.retain(live)
     shots?.retain(live)
+    emulation?.retain(live)
     // A lead that left the canvas must not keep deciding what gets recorded —
     // or whose cookies a clear would take (`lead-tracker.ts`).
     lead?.retain(specs.map((spec) => spec.id))
@@ -703,6 +723,23 @@ function registerIpcHandlers(): void {
     auth?.respond(validatePromptId(id, 'auth:respond'), validateAuthCredentials(credentials))
   })
 
+  // The emulation pack. The renderer owns the document (it persists the
+  // profile like every other slice) and main mirrors it onto the views; the
+  // whole profile travels each time and the controller diffs it per view.
+  registerHandler('emulation:set', (_event, profile) => {
+    emulation?.setProfile(validateEmulationProfile(profile))
+  })
+
+  registerHandler('emulation:set-device-vision', (_event, deviceId, vision) => {
+    emulation?.setDeviceVision(validateDeviceId(deviceId), validateOptionalVisionDeficiency(vision))
+  })
+
+  registerHandler(
+    'emulation:get',
+    () =>
+      emulation?.state() ?? { profile: defaultPersistedState().emulation.profile, deviceVision: {} }
+  )
+
   // The one-way stream from the device views. Its sender is an untrusted page,
   // so the batch is validated (and clamped) before the engine sees any of it;
   // anything malformed is dropped rather than thrown back at the page.
@@ -820,6 +857,8 @@ app.on('before-quit', () => {
   devtools = null
   viewManager?.destroy()
   viewManager = null
+  emulation?.dispose()
+  emulation = null
   loadStates?.cancel()
   loadStates = null
   perf?.stop()

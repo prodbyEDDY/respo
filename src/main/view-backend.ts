@@ -17,6 +17,7 @@ import type {
   DevtoolsPanel,
   DevtoolsRegistry
 } from './devtools-manager'
+import type { EmulationRegistry } from './emulation'
 import { deviceMenuTemplate, type InspectRegistry } from './inspector'
 import type { ShotRegistry } from './screenshot-queue'
 import { DEVICE_PARTITION, openExternalSafe } from './security'
@@ -197,6 +198,11 @@ export type ElectronViewBackendOptions = {
   /** Told about every view's lifetime, so it can be screenshotted. */
   shots?: ShotRegistry
   /**
+   * Told about every view's lifetime, so the environment profile (colour
+   * scheme, network, locale, …) lands on it — before its first navigation.
+   */
+  emulation?: EmulationRegistry
+  /**
    * Told which icons a page declared, so history can cache one.
    *
    * The *urls*, not the images: Chromium hands over `<link rel="icon">` targets
@@ -337,6 +343,7 @@ export function createElectronViewBackend(
   const devtools = options.devtools ?? null
   const inspect = options.inspect ?? null
   const shots = options.shots ?? null
+  const emulation = options.emulation ?? null
   const onFavicon = options.onFavicon ?? null
   let disposed = false
 
@@ -456,7 +463,16 @@ export function createElectronViewBackend(
 
       // `emulated` is the gate every navigation waits behind, so a page is
       // never fetched before its device profile is in place.
-      let emulated = primed.then(() => cdp.applyDevice(wc, device))
+      //
+      // The environment goes on first and the device second, on purpose: the
+      // device call is the one that sends the user-agent override, and the
+      // `Accept-Language` the environment's locale implies rides along with
+      // it — the other order would cost a second user-agent call per view.
+      // Both wait for the primer for the same reason (see above).
+      let emulated = primed.then(async () => {
+        await emulation?.registerDevice({ deviceId: device.id, target: wc })
+        await cdp.applyDevice(wc, device)
+      })
 
       return {
         setBounds(bounds: Rect): void {
@@ -538,6 +554,7 @@ export function createElectronViewBackend(
           sync?.unregisterDevice(device.id)
           inspect?.unregisterDevice(device.id)
           shots?.unregisterDevice(device.id)
+          emulation?.unregisterDevice(device.id)
           // Before the `webContents` goes: the manager still has to close a
           // panel that was open on it, and destroy the frontend behind it.
           devtools?.unregisterDevice(device.id)

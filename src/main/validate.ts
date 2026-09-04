@@ -21,6 +21,15 @@ import {
   type ThemeSource
 } from '@shared/ipc'
 import {
+  isGeolocation,
+  isLocaleTag,
+  isNetworkPreset,
+  isTimezoneId,
+  isVisionDeficiency,
+  type EmulationProfile,
+  type VisionDeficiency
+} from '@shared/emulation'
+import {
   clampDockSize,
   isCanvasLayoutMode,
   MAX_BOOKMARKS,
@@ -29,6 +38,7 @@ import {
   MAX_URL_LENGTH,
   type Bookmark,
   type DevtoolsSettings,
+  type EmulationSettings,
   type LayoutSettings,
   type PersistedState,
   type ScreenshotSettings,
@@ -214,6 +224,8 @@ export function validatePersistedPatch(
   if (patch['bookmarks'] !== undefined) out.bookmarks = validateBookmarks(patch['bookmarks'])
   if (patch['homeUrl'] !== undefined) out.homeUrl = validateHomeUrl(patch['homeUrl'])
   if (patch['security'] !== undefined) out.security = validateSecuritySettings(patch['security'])
+  if (patch['emulation'] !== undefined)
+    out.emulation = validateEmulationSettings(patch['emulation'])
   // `permissions` is deliberately absent, and it is not an oversight: it is
   // main's field, like the screenshots folder above. A patch that could set it
   // would be a renderer writing `{"https://evil.example": {"camera": "allow"}}`
@@ -365,6 +377,106 @@ function validateSecuritySettings(value: unknown): SecuritySettings {
     fail('store:save security.allowInsecureCertificates must be a boolean')
   }
   return { allowInsecureCertificates: allow }
+}
+
+/**
+ * Validate an `emulation:set` profile.
+ *
+ * Strict where the values reach the protocol: a locale and a time zone are
+ * strings handed to `Emulation.setLocaleOverride` / `setTimezoneOverride`,
+ * and a page-shaped string in either would only ever be a renderer probing
+ * for a Chromium bug. Everything else is an enum or a bounded number, and a
+ * junk value throws rather than degrading — this is code talking, not a file
+ * someone edited (`sanitizeEmulationProfile` is the forgiving reader).
+ */
+export function validateEmulationProfile(value: unknown): EmulationProfile {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    fail('emulation profile must be an object')
+  }
+  const profile = value as Record<string, unknown>
+
+  const colorScheme = profile['colorScheme']
+  if (colorScheme !== 'system' && colorScheme !== 'light' && colorScheme !== 'dark') {
+    fail("emulation.colorScheme must be 'system', 'light' or 'dark'")
+  }
+  const media = profile['media']
+  if (media !== 'auto' && media !== 'screen' && media !== 'print') {
+    fail("emulation.media must be 'auto', 'screen' or 'print'")
+  }
+  const vision = profile['vision']
+  if (!isVisionDeficiency(vision)) fail('emulation.vision is not a known simulation')
+  const network = profile['network']
+  if (!isNetworkPreset(network)) fail('emulation.network is not a known preset')
+  if (typeof profile['reducedMotion'] !== 'boolean') {
+    fail('emulation.reducedMotion must be a boolean')
+  }
+  if (typeof profile['forcedColors'] !== 'boolean') {
+    fail('emulation.forcedColors must be a boolean')
+  }
+
+  const geolocation = profile['geolocation']
+  if (geolocation !== null && !isGeolocation(geolocation)) {
+    fail('emulation.geolocation must be null or a position on Earth')
+  }
+  const locale = profile['locale']
+  if (locale !== null && !isLocaleTag(locale)) {
+    fail('emulation.locale must be null or a BCP 47 language tag')
+  }
+  const timezone = profile['timezone']
+  if (timezone !== null && !isTimezoneId(timezone)) {
+    fail('emulation.timezone must be null or an IANA zone id')
+  }
+
+  return {
+    colorScheme,
+    reducedMotion: profile['reducedMotion'],
+    forcedColors: profile['forcedColors'],
+    media,
+    vision,
+    network,
+    geolocation:
+      geolocation === null
+        ? null
+        : { latitude: geolocation.latitude, longitude: geolocation.longitude },
+    locale,
+    timezone
+  }
+}
+
+/** Validate an `emulation:set-device-vision` simulation, or `null` for "inherit". */
+export function validateOptionalVisionDeficiency(value: unknown): VisionDeficiency | null {
+  if (value === null) return null
+  if (!isVisionDeficiency(value)) {
+    fail('emulation:set-device-vision expects a known simulation or null')
+  }
+  return value
+}
+
+/** Validate the persisted emulation slice. */
+function validateEmulationSettings(value: unknown): EmulationSettings {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    fail('store:save emulation must be an object')
+  }
+  const emulation = value as Record<string, unknown>
+  const raw = emulation['deviceVision']
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    fail('store:save emulation.deviceVision must be an object')
+  }
+  const entries = Object.entries(raw as Record<string, unknown>)
+  if (entries.length > MAX_ROTATED) {
+    fail(`store:save emulation.deviceVision accepts at most ${MAX_ROTATED} devices`)
+  }
+  const deviceVision: Record<string, VisionDeficiency> = {}
+  for (const [id, vision] of entries) {
+    if (id.length === 0 || id.length > MAX_NAME_LENGTH) {
+      fail('store:save emulation.deviceVision keys must be device ids')
+    }
+    if (!isVisionDeficiency(vision)) {
+      fail('store:save emulation.deviceVision values must be known simulations')
+    }
+    deviceVision[id] = vision
+  }
+  return { profile: validateEmulationProfile(emulation['profile']), deviceVision }
 }
 
 /** Validate a `permissions:set` capability. */

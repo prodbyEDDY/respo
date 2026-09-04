@@ -17,6 +17,7 @@ import { cn } from '@renderer/lib/utils'
 import { attachAuthBridge } from '@renderer/stores/auth'
 import { useBookmarks } from '@renderer/stores/bookmarks'
 import { useDevices } from '@renderer/stores/devices'
+import { useEmulation } from '@renderer/stores/emulation'
 import { applyRotation, useLayout } from '@renderer/stores/layout'
 import { attachNavigationBridge, useNavigation } from '@renderer/stores/navigation'
 import { attachPanelsBridge, selectDockVisible, usePanels } from '@renderer/stores/panels'
@@ -78,6 +79,9 @@ function usePersistedState(): boolean {
         useLayout.getState().hydrateLayout(state.layout)
         usePanels.getState().hydrate(state.devtools)
         useShots.getState().hydrate(state.screenshots)
+        // Main put the environment on the views before this renderer existed;
+        // this only mirrors it so the popover and the badge agree with it.
+        useEmulation.getState().hydrate(state.emulation)
         // The home page itself is main's to apply — it decides the start url
         // before the renderer has hydrated — so this only mirrors it.
         useBookmarks.getState().hydrate(state)
