@@ -17,13 +17,13 @@ Responsively App, написанный с нуля (их AGPL-код не исп
 
 Стек и правила — [`../CLAUDE.md`](../CLAUDE.md). Карта документации — [`README.md`](README.md).
 
-## §1. Текущее состояние (инвентарь)
+## §1. Текущее состояние (инвентарь, срез 2026-09-05)
 
-- Кодовой базы ещё нет — только документация. Репозиторий: `https://github.com/prodbyEDDY/respo.git`, ветка `main`.
-- Утверждённая спецификация: [`superpowers/specs/2026-08-28-respo-design.md`](superpowers/specs/2026-08-28-respo-design.md) (архитектура, полный каталог функционала ~90 фич, безопасность, риски, перф-бюджеты, тесты).
-- Проведён полный разбор исходников Responsively App (функционал + источники лагов); выводы вшиты в спеку. Клон референса лежит в scratchpad сессии, в репозиторий не входит и входить не должен (AGPL).
-- Команды проверки (`npm run dev/typecheck/test/e2e/build`) — заявлены спекой, окружение ещё не создано, **не проверены**.
-- Известный техдолг: нет — проект чист; главный открытый риск — R1 (джиттер WebContentsView, спека §9a).
+- Кодовая база: ~18.5k строк TS (main/preload/renderer/shared), 1200 юнитов + 28 e2e, W1–W4 смержены в `main` (`1cc4fe9`). Репозиторий: `https://github.com/prodbyEDDY/respo.git`.
+- Спецификация: [`superpowers/specs/2026-08-28-respo-design.md`](superpowers/specs/2026-08-28-respo-design.md). Реализовано: §4.2 (кроме FileWatcher/Protocol/Updater), §5.1–5.6 (с пробелами), §5.9 частично. Не реализовано: §5.7 (инструменты дизайнера), §5.8 (live-reload), оболочка §5.9 (меню/About/апдейтер/deep-link/справка). Точная матрица — [`research/2026-09-05-spec-vs-code.md`](research/2026-09-05-spec-vs-code.md).
+- Рынок: [`research/2026-09-05-competitors.md`](research/2026-09-05-competitors.md) — must-have-гэпы: media/network/geo/locale-эмуляция, vision-симуляция, MCP; MCP-экосистема — [`research/2026-09-05-mcp-ecosystem.md`](research/2026-09-05-mcp-ecosystem.md).
+- Команды проверки работают (`npm run typecheck/test/e2e/lint/build`, см. CLAUDE.md). Иконка приложения — дефолтная Electron; README/LICENSE/CHANGELOG/CI отсутствуют.
+- Известный техдолг: follow-ups W4 (гонка панели разрешений, Cancel в auth, favicon без content-length); каталог устройств 38 вместо 90+; хоткеи без `tinykeys`; popups блокируются у всех вьюшек (спека §5.4 говорит «у лидера разрешены»).
 
 ## §2. Архитектурные принципы
 
@@ -59,10 +59,20 @@ Responsively App, написанный с нуля (их AGPL-код не исп
 | IMPL-W2 | ✅ | W2 «Sync + Suites» смержена: SyncEngine (CDP-зеркалирование, p99 2.4 мс), Device Manager, сьюты, персистентность, follow-ups W1 | [отчёт W2](progress/W2-sync-suites-2026-08-28.md), 569 unit + 11 e2e |
 | IMPL-W3 | ✅ | W3 «DevTools + Screenshots» смержена: DevTools-док (Chrome-style), инспект, скриншот-пайплайн, zoom-фикс десктопов | [отчёт W3](progress/W3-devtools-screenshots-2026-08-28.md), 757 unit + 16 e2e |
 | IMPL-W4 | ✅ | W4 «Address + Layouts» смержена: раскладки, закладки/история, очистки, разрешения (ask-UI), auth, SSL; корень флейка sync.spec найден | [отчёт W4](progress/W4-address-layouts-2026-09-03.md), 1200 unit + 28 e2e |
-| IMPL-W5 | 🟡 | W5 «Designer Tools + Live Reload»: линейки/направляющие, Design Overlay, симуляция зрения, live-reload file:// — два параллельных worktree-агента | [план W5](superpowers/plans/2026-08-28-w5-designer-tools.md) |
-| PLAN-W4+ | ⬜ | W4 (адресные фичи + раскладки) → W5 (инструменты дизайнера + live-reload) → W6 (полировка/дистрибуция) | карта в конце плана W1 |
+| RESEARCH-02 | ✅ | Разведка перед production-программой: конкуренты (Polypane/Sizzy/Blisk/LT Browser/Responsively), MCP-экосистема (протокол, 17 клиентов, логотипы, prior art), матрица спека↔код | [`research/`](research/) |
+| PLAN-PROD | ✅ | Программа «Production Ready»: три последовательные Fable-волны W5 → W6 → W7 | [диспетч](prompts/_DISPATCH-2026-09-05-W5-W7.md) |
+| IMPL-W5 | 🟡 | W5 «Production Core» (ветка `w5-core`): Emulation pack (media/vision/network/geo/locale/Accept-Language), UA Client Hints, каталог 90+, crash-overlay/scroll-top/reload-no-cache/скроллбары/popups лидера, kebab девайса, console-errors + overflow-диагностика, линейки/направляющие, Design Overlay, live-reload file://, outline. Старый план W5 (два Opus-worktree) отменён, не стартовал | [план W5](superpowers/plans/2026-09-05-w5-production-core.md) |
+| IMPL-W6 | ⬜ | W6 «Production Shell» (ветка `w6-shell`): иконка, нативное меню/About/окно/single-instance/deep-link/CLI, автообновление+логи, реестр хоткеев+справка+палитра, ErrorBoundary, welcome/полировка UX, инсталлятор+CI+README/CHANGELOG, перф-гейт §8; опции: page info, element screenshot, contact sheet, breakpoints→devices | [план W6](superpowers/plans/2026-09-05-w6-production-shell.md) (черновик) |
+| IMPL-W7 | ⬜ | W7 «MCP»: локальный Streamable-HTTP сервер + stdio-мост `--mcp-stdio`, 16 тулов (open/devices/screenshot/snapshot/measure/overflow/console/breakpoints/a11y/emulate/…), экран Connect your agent с логотипами 15+ клиентов, `docs/mcp.md` | [план W7](superpowers/plans/2026-09-05-w7-mcp.md) (черновик) |
+| REL-1.0 | ⬜ | Релиз: тег `v1.0.0-rc.1` после W6, `v1.0.0` после W7; решение владельца по LICENSE и подписи кода (R4) | — |
 
 ## §11. Журнал решений
+
+### 2026-09-05 — Программа «Production Ready»: W5 → W6 → W7 на Fable-исполнителях
+**Контекст:** владелец поставил цель довести Respo до production-ready «до мелочей», с оглядкой на лучших платных конкурентов, и добавить локальный MCP для AI-агентов. Проведена разведка (Sonnet 5): конкуренты, MCP-экосистема, честная матрица спека↔код (§5.7/§5.8 и оболочка §5.9 не реализованы; иконка — дефолт Electron; нет README/CI/апдейтера).
+**Решение:** три последовательные волны, каждая — одна длинная сессия **Fable 5.1** (явное разрешение владельца; политика моделей: ресёрч — Sonnet 5, исполнение — Fable, механика — Haiku/Sonnet-субагенты, ревью — Opus 5). W5 «Production Core» — всё на стороне страницы/CDP + must-have-гэпы конкурентов (media/vision/network/geo/locale-эмуляция, Client Hints, каталог 90+, диагностика ошибок/overflow, линейки, overlay, live-reload). W6 «Production Shell» — оболочка, обновления, хоткеи/палитра, инсталлятор, CI. W7 «MCP» — сервер + Connect-экран. Старый план W5 (два параллельных Opus-worktree) отменён — работа по нему не начиналась; пустые ветки `w5a`/`w5b` и worktree удалены.
+**Причина:** один сильный исполнитель на волну убирает межагентные конфликты в `ipc.ts`/`TopBar` и держит цельность UX; последовательность W5→W6 даёт W6 полный список хоткеев/фич для справки и палитры; MCP последним — опирается на диагностику и эмуляцию W5.
+**Последствия:** планы в `superpowers/plans/2026-09-05-w5|w6|w7-*.md`, диспетч `prompts/_DISPATCH-2026-09-05-W5-W7.md`, research в `docs/research/`; спеку по итогам W5 привести к факту (popups, хоткеи, каталог); LICENSE и подпись кода — открытые решения владельца (REL-1.0).
 
 ### 2026-08-28 — W1 «Foundation» принята и смержена
 **Контекст:** 8 задач W1 исполнены Opus-агентами (сгруппированные диспатчи), финальное ревью всей ветки нашло 1 критикал + 5 важных, фикс-волна закрыла все (ALL ADDRESSED).
