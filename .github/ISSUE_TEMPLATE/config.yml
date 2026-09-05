@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and ideas
+    url: https://github.com/prodbyEDDY/respo/discussions
+    about: Ask a question or discuss an idea before filing an issue.
+  - name: Security vulnerability
+    url: https://github.com/prodbyEDDY/respo/security/advisories/new
+    about: Please do not open a public issue for security problems.

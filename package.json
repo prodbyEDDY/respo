@@ -1,15 +1,30 @@
 {
   "name": "respo",
   "version": "0.1.0",
-  "description": "Desktop app for responsive web development: one page across many device viewports at once",
+  "description": "The open-source responsive design browser: one page on every device at once, real Chromium device emulation, per-device DevTools, screenshots and designer tools.",
+  "keywords": [
+    "responsive-design",
+    "responsive",
+    "device-emulation",
+    "browser",
+    "electron",
+    "chromium",
+    "devtools",
+    "web-development",
+    "screenshots",
+    "responsively-alternative"
+  ],
   "main": "./out/main/index.js",
   "author": "prodbyEDDY",
   "homepage": "https://github.com/prodbyEDDY/respo",
+  "bugs": {
+    "url": "https://github.com/prodbyEDDY/respo/issues"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/prodbyEDDY/respo.git"
   },
-  "license": "UNLICENSED",
+  "license": "MIT",
   "private": true,
   "engines": {
     "node": ">=20.19.0"
