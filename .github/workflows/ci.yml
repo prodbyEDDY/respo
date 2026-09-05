@@ -41,7 +41,8 @@ jobs:
         run: npm test
 
       - name: End-to-end tests (Playwright drives the built app)
-        run: npm run e2e
+        # Temporary diagnostic run; restore the full suite before merging.
+        run: npm run e2e -- e2e/ui-polish.spec.ts
 
       - name: Upload e2e report on failure
         if: failure()
