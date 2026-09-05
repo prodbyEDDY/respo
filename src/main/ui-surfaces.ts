@@ -1,4 +1,4 @@
-import { View, WebContentsView, type BrowserWindow } from 'electron'
+import { nativeImage, View, WebContentsView, type BrowserWindow } from 'electron'
 import type { SurfaceSnapshot } from '@shared/ipc'
 import type { Rect } from '@shared/types'
 
@@ -50,20 +50,49 @@ export class UiSurfaces {
           if (wc.isDestroyed() || wc.isCrashed()) return
           let timer: ReturnType<typeof setTimeout> | undefined
           try {
-            const image = await Promise.race([
-              wc.capturePage(
-                {
-                  x: clip.x - bounds.x,
-                  y: clip.y - bounds.y,
-                  width: clip.width,
-                  height: clip.height
-                },
-                { stayHidden: true }
-              ),
+            let image = await Promise.race([
+              wc
+                .capturePage(
+                  {
+                    x: clip.x - bounds.x,
+                    y: clip.y - bounds.y,
+                    width: clip.width,
+                    height: clip.height
+                  },
+                  { stayHidden: true }
+                )
+                .catch(() => null),
               new Promise<null>((resolve) => {
                 timer = setTimeout(() => resolve(null), 250)
               })
             ])
+            clearTimeout(timer)
+            // Windows services / remote sessions may not expose a compositor
+            // frame. Reuse the device's existing debugger session, capturing
+            // only its widget without changing metrics or rendering a full page.
+            if ((!image || image.isEmpty()) && wc.debugger.isAttached()) {
+              const answer = (await Promise.race([
+                wc.debugger.sendCommand('Page.captureScreenshot', {
+                  format: 'png',
+                  fromSurface: true,
+                  captureBeyondViewport: false
+                }),
+                new Promise<null>((resolve) => {
+                  timer = setTimeout(() => resolve(null), 750)
+                })
+              ])) as { data?: string } | null
+              if (answer?.data) {
+                const widget = nativeImage.createFromBuffer(Buffer.from(answer.data, 'base64'))
+                if (!widget.isEmpty()) {
+                  image = widget.resize({ width: bounds.width, height: bounds.height }).crop({
+                    x: clip.x - bounds.x,
+                    y: clip.y - bounds.y,
+                    width: clip.width,
+                    height: clip.height
+                  })
+                }
+              }
+            }
             if (image && !image.isEmpty()) result.push({ ...clip, image: image.toDataURL() })
           } catch {
             // A closing/crashed view must not block a menu or permission prompt.

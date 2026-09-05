@@ -23,6 +23,13 @@ test('floating UI covers native pages, nested menus and a dock; closing restores
   try {
     const page = await app.firstWindow()
     await expect(page.locator('[data-load-state="ready"]')).toHaveCount(5)
+    // Exercise the real CDP fallback used when Windows cannot supply a native
+    // compositor frame (for example, a service / remote desktop session).
+    await app.evaluate(({ webContents, nativeImage }, url) => {
+      for (const wc of webContents.getAllWebContents()) {
+        if (wc.getURL() === url) wc.capturePage = async () => nativeImage.createEmpty()
+      }
+    }, PROBE_URL)
     // did-finish-load precedes the first native compositor frame on a cold
     // Windows runner. Exercise menus only after a visible preview can be captured.
     await expect
