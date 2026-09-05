@@ -151,6 +151,7 @@ test('the emulation pack reaches every page, survives navigation, and restarts w
     // The host's own reduced-motion setting: the reset check below must not
     // assume a machine that has it off (CI runners have it on).
     const baseline = (await envProbes(app, url))[0]
+    if (baseline === undefined) throw new Error('no device reported a probe')
     await expect(page.locator(EMULATE_BUTTON)).toHaveAttribute('data-emulating', 'off')
     languages.length = 0
 
