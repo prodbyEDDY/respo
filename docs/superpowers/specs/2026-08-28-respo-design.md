@@ -134,7 +134,7 @@ AddressBar → navigation store → один `invoke('navigate', url)` → ViewM
 - Настройки: папка скриншотов, Accept-Language override, формат скриншотов.
 - Тема UI light/dark (независимо от эмуляции страниц). Язык UI — английский.
 - `respo://` deep links, CLI-запуск с URL, `?urlToOpen=` при старте.
-- Автообновление, About (версии, статус апдейтера).
+- Автообновление (факт W6): `electron-updater` + GitHub Releases; проверка при запуске не чаще раза в сутки (+ «Check now» в About, выключается в Settings); при наличии релиза — чип «Update to X» в топ-баре → клик → скачивание с процентами в чипе → «Restart to update» → тихая NSIS-установка и перезапуск. Никаких попапов. Выключено в dev/e2e и под `RESPO_NO_UPDATER=1`. About: версия, Electron/Chromium/Node, статус апдейтера, ссылки GitHub/Issues/Changelog, папка логов, Third-party notices. Файловый лог `userData/logs/main.log` (electron-log, без диалогов). Подробно — [`../../modules/updater.md`](../../modules/updater.md).
 - Нативное меню: File/View/Help (Windows), полный набор на macOS позже.
 - **Не делаем:** спонсорские попапы, release-notes попапы, нотификейшн-лента.
 
@@ -187,7 +187,7 @@ Respo — это браузер, загружающий произвольные
 
 ## 10. Дистрибуция
 
-- Windows: NSIS-инсталлятор + автообновление (GitHub Releases). Подпись кода — позже, отдельным решением.
+- Windows (факт W6): NSIS one-click per-user инсталлятор `Respo-Setup-<version>.exe` (`npm run build:win`, `electron-builder.yml`), автообновление через GitHub Releases (`latest.yml` + `.blockmap`; после первого обновления загрузки дифференциальные). Релиз собирает GitHub Actions по тегу `v*` (`.github/workflows/release.yml`: draft-релиз с ассетами → тело из CHANGELOG через `scripts/release-notes.mjs` → publish); CI (`ci.yml`) на windows-latest — typecheck/lint/unit/e2e/build:unpack. Подпись кода — отложена (R4): SmartScreen предупреждает, README описывает «More info → Run anyway».
 - macOS: отложено; архитектура не должна использовать win-only API вне изолированных мест.
 
 ## 11. Вне скоупа (сейчас)

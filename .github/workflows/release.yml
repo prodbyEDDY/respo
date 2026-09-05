@@ -1,0 +1,79 @@
+name: Release
+
+# A `v*` tag on main builds the Windows installer and publishes it as a GitHub
+# release, with the matching CHANGELOG.md section as the release notes.
+# electron-updater in installed copies of Respo picks the release up from
+# `latest.yml` (electron-builder.yml → publish: github).
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    name: Windows installer → GitHub release
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Tag must match package.json
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version="$(node -p "require('./package.json').version")"
+          if [ "$tag" != "$version" ]; then
+            echo "tag v$tag does not match package.json version $version" >&2
+            exit 1
+          fi
+
+      - name: Release notes from CHANGELOG.md
+        shell: bash
+        run: node scripts/release-notes.mjs "$GITHUB_REF_NAME" > release-notes.md
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build
+        run: npx electron-vite build
+
+      # Creates (or fills) a *draft* release for the tag with
+      # Respo-Setup-<version>.exe, its .blockmap and latest.yml.
+      - name: Package and upload
+        run: npx electron-builder --win --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish the release with notes
+        shell: bash
+        run: |
+          gh release edit "$GITHUB_REF_NAME" \
+            --title "Respo ${GITHUB_REF_NAME#v}" \
+            --notes-file release-notes.md \
+            --draft=false
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Keep the installer as a workflow artifact too
+        uses: actions/upload-artifact@v4
+        with:
+          name: Respo-Setup-${{ github.ref_name }}
+          path: |
+            dist/*.exe
+            dist/*.blockmap
+            dist/latest.yml
+          retention-days: 30

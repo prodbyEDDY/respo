@@ -880,6 +880,9 @@ app.whenReady().then(() => {
     autoUpdater.updateConfigPath = writeFeedConfig(app.getPath('userData'), updaterMode.feedUrl)
   }
   autoUpdater.logger = log
+  // There is no web installer: the installer *is* the artifact. Saying so
+  // keeps electron-updater from warning about it on every download.
+  autoUpdater.disableWebInstaller = true
   const store = persistence
   updater = createUpdater({
     autoUpdater,

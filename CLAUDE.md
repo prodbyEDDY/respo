@@ -44,8 +44,13 @@ npm run typecheck  # typecheck:node + typecheck:web
 npm test           # Vitest (юниты, jsdom для renderer / node для main+shared)
 npm run e2e        # Playwright (_electron.launch; пересобирает out/)
 npm run lint       # ESLint
-npm run build      # прод-сборка + electron-builder
+npm run build      # прод-сборка (typecheck + electron-vite build)
+npm run build:win  # + NSIS-инсталлятор: dist/Respo-Setup-<version>.exe, latest.yml, .blockmap (W6)
+npm run icons      # растры иконки из build/icon.svg (sharp/png-to-ico/png2icons) (W6)
+node scripts/release-notes.mjs 0.1.0   # секция CHANGELOG для тела GitHub-релиза (W6)
 ```
+
+Релиз: тег `v<version>` (= `package.json`) на `main` → `.github/workflows/release.yml` собирает инсталлятор и публикует GitHub Release с телом из CHANGELOG; установленные копии обновляются сами (`docs/modules/updater.md`). Тестовый фид апдейтера: `RESPO_UPDATE_URL=http://127.0.0.1:<port>/` (только loopback), выключить — `RESPO_NO_UPDATER=1`.
 
 Грабли, за которые уже платили: React StrictMode дважды гоняет cleanup эффектов (используй dispose-latch паттерн, см. layout-sync тесты); CDP-эмуляция вьюшки без committed-навигации крашит browser process (вьюшки праймятся `about:blank` — фильтруй его из load-событий); клиппинг вьюшек канвас-слоем — недокументированное поведение Chromium (fallback `RESPO_CANVAS_LAYER=0`); `about:blank`-праймер попадает в navigationHistory (canGoBack лжёт на старте — фильтруется); WebContentsView не виден в `page.screenshot` Playwright (гарды — через `View.children` из main); Escape-хендлеры окна конфликтуют с Radix-диалогами (гард по фокусу и `[data-slot]`); mouseenter над нативной вьюшкой не срабатывает (lead-election — hit-test); electron-store — ESM (`.default` в CJS-бандле main); sandboxed preload не должен делить runtime-модули с другими entry (rollup эмитит незагружаемый chunk); Chromium: mobile-эмуляция игнорирует page zoom (`setZoomFactor` её не уменьшает — телефон рисовался 1:1 и обрезался рамкой; с W6 мобильные вьюшки рисуются через `scale` в `Emulation.setDeviceMetricsOverride`), desktop — нет (метрики пре-делятся на зум); координаты `Input.dispatchMouseEvent` при обоих механизмах — CSS-px страницы при любом зуме (делить ничего не надо, e2e sync/zoom); `BrowserWindow.capturePage` не видит WebContentsView — скриншот окна целиком только OS-уровнем; `Page.captureScreenshot` без `clip` снимает виджет, а не вьюпорт (клип — в CSS-px из `Page.getLayoutMetrics`; ширину брать девайсную — `cssVisualViewport.clientWidth` обрезан скроллбаром); culling layout не распространять на эмуляцию (скрытая вьюшка — живая страница и объект съёмки); zustand-селектор, возвращающий новый объект — бесконечный ре-рендер/пустой DOM (производные через useMemo); тесты гонять фокусно, полный набор — один раз перед коммитом.
 

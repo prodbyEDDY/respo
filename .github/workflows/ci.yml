@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Windows — typecheck, lint, unit, e2e, pack
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      # The runner has no GitHub Releases to talk to, and the e2e suite brings
+      # its own loopback feed where it needs one.
+      RESPO_NO_UPDATER: '1'
+      CI: 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests
+        run: npm test
+
+      - name: End-to-end tests (Playwright drives the built app)
+        run: npm run e2e
+
+      - name: Upload e2e report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            test-results/
+            playwright-report/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Pack (unpacked directory, no installer)
+        run: npm run build:unpack

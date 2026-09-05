@@ -96,6 +96,26 @@ About говорит то же → клик → `quitAndInstall(true, true)` (е
 `app.getVersion()` отдаёт версию Electron (44.0.0) и любой релиз считается даунгрейдом. Остальные spec'и
 запускают по файлу, им версия не важна.
 
+## Сборка и релиз (`electron-builder.yml`, `.github/workflows/*.yml`)
+
+- `npm run build:win` → `dist/Respo-Setup-<version>.exe` (NSIS, `oneClick`, `perMachine: false`,
+  без elevation), `latest.yml`, `.blockmap`; в `resources/` упакованного приложения — `app-update.yml`
+  (`provider: github, owner: prodbyEDDY, repo: respo, updaterCacheDirName: respo-updater`) и `NOTICE.md`
+  (`extraResources`). Сборка **не подписана** (R4): SmartScreen предупреждает.
+- `release.yml`: тег `v*` → проверка «тег = версия package.json» → notes из CHANGELOG
+  (`scripts/release-notes.mjs`) → `npm ci`/typecheck/unit → `electron-builder --win --publish always`
+  (`releaseType: draft` — ассеты попадают в черновик) → `gh release edit --notes-file --draft=false`.
+  Пока релиз черновик, `latest.yml` для установленных копий не виден — пользователи не получают релиз без описания.
+- `ci.yml`: push/PR в `main`, windows-latest — `npm ci`, typecheck, lint, unit, e2e (артефакт
+  `test-results/` при падении), `build:unpack`. `RESPO_NO_UPDATER=1` в окружении.
+- **Проверено фактически (W6 A4):** инсталлятор 0.1.0 поставлен (`%LOCALAPPDATA%\Programs\Respo\Respo.exe`,
+  запись в Uninstall, ярлык, иконка в заголовке окна), затем собран тестовый 0.1.1, `dist/` отдан по
+  loopback, установленный 0.1.0 запущен с `RESPO_UPDATE_URL` → чип «Update to 0.1.1» через 10 с → клик →
+  112 МБ за ~0,6 с → «Restart to update» → клик → `Respo-Setup-0.1.1.exe --updated /S --force-run` →
+  через ~25 с `Respo.exe` версии 0.1.1 запущен сам. После проверки переустановлен 0.1.0.
+- `autoUpdater.disableWebInstaller = true` — web-инсталлятора нет, иначе electron-updater предупреждает
+  на каждой загрузке.
+
 ## Логирование (`src/main/log.ts`)
 
 - `electron-log/main`, только файловый транспорт: `userData/logs/main.log`, ротация на 1 МБ в `main.old.log`.

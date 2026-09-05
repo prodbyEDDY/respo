@@ -1,23 +1,52 @@
+# electron-builder — the Windows installer and the update feed.
+#
+# `npm run build:win` → dist/Respo-Setup-<version>.exe + latest.yml (+ .blockmap).
+# The release workflow (.github/workflows/release.yml) runs the same with
+# `--publish always` on a `v*` tag, and electron-updater in the app reads the
+# GitHub provider below out of resources/app-update.yml.
 appId: com.prodbyeddy.respo
 productName: Respo
+copyright: Copyright © 2026 prodbyEDDY
 directories:
   buildResources: build
 files:
   - '!**/.vscode/*'
-  - '!src/*'
+  - '!src/**'
+  - '!e2e/**'
+  - '!docs/**'
+  - '!scripts/**'
+  - '!build/**'
   - '!electron.vite.config.{js,ts,mjs,cjs}'
-  - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
+  - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml}'
+  - '!{CHANGELOG.md,README.md,CONTRIBUTING.md,SECURITY.md,NOTICE.md,CLAUDE.md}'
   - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
-  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json,vitest.config.ts}'
+  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json,vitest.config.ts,playwright.config.ts}'
+  - '!{.github,.claude,.superpowers,test-results,playwright-report}/**'
+# Third-party notices travel with the app; About → "Third-party notices" opens
+# this copy (`noticesPath` in src/main/index.ts).
+extraResources:
+  - from: NOTICE.md
+    to: NOTICE.md
 asarUnpack:
   - resources/**
 win:
-  executableName: respo
+  executableName: Respo
+  icon: build/icon.ico
+  target:
+    - nsis
 nsis:
-  artifactName: ${name}-${version}-setup.${ext}
+  # One click, per user, no elevation, no wizard: the installer is the update
+  # mechanism too (electron-updater runs it with /S and relaunches).
+  oneClick: true
+  perMachine: false
+  allowElevation: false
+  artifactName: Respo-Setup-${version}.${ext}
+  installerIcon: build/installerIcon.ico
+  uninstallerIcon: build/uninstallerIcon.ico
   shortcutName: ${productName}
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
+  deleteAppDataOnUninstall: false
 mac:
   entitlementsInherit: build/entitlements.mac.plist
   extendInfo:
@@ -27,17 +56,12 @@ mac:
     - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
   notarize: false
 dmg:
-  artifactName: ${name}-${version}.${ext}
-linux:
-  target:
-    - AppImage
-    - snap
-    - deb
-  maintainer: electronjs.org
-  category: Utility
-appImage:
-  artifactName: ${name}-${version}.${ext}
+  artifactName: Respo-${version}.${ext}
 npmRebuild: false
 publish:
-  provider: generic
-  url: https://example.com/auto-updates
+  provider: github
+  owner: prodbyEDDY
+  repo: respo
+  # A draft first: release.yml fills in the notes from CHANGELOG.md and then
+  # publishes, so users never see a release without a description.
+  releaseType: draft
