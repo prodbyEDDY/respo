@@ -60,7 +60,7 @@ export function ClearMenu(): React.JSX.Element {
           onSelect={() => void clearBrowsingData('all')}
         >
           Everything
-          <DropdownMenuShortcut>Ctrl Alt Del</DropdownMenuShortcut>
+          <DropdownMenuShortcut>Ctrl Alt ⌫</DropdownMenuShortcut>
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

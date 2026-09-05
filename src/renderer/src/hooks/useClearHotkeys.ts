@@ -3,12 +3,14 @@ import type { ClearTarget } from '@shared/ipc'
 import { clearBrowsingData } from '@renderer/lib/browsing'
 
 /**
- * `mod+alt+q/a/z/del` clear storage, cookies, the cache, or all three.
+ * `mod+alt+q/a/z/backspace` clear storage, cookies, the cache, or all three.
  *
  * One column of adjacent keys, in the order the menu lists them, because these
  * are the shortcuts of someone iterating: clear, reload, look, clear again.
  * `alt` is what keeps them out of the way of `mod+a` (select all) and `mod+z`
- * (undo) in the fields Respo's own UI has.
+ * (undo) in the fields Respo's own UI has. Backspace rather than Delete for
+ * "all three": `ctrl+alt+delete` is the Windows secure attention sequence,
+ * which the OS takes before any application sees it.
  */
 const TARGETS: readonly { latin: string; cyrillic: string; target: ClearTarget }[] = [
   { latin: 'q', cyrillic: 'й', target: 'storage' },
@@ -19,7 +21,7 @@ const TARGETS: readonly { latin: string; cyrillic: string; target: ClearTarget }
 /** Which clear this event asks for, or `null`. */
 export function clearTargetFor(event: KeyboardEvent): ClearTarget | null {
   if (!(event.ctrlKey || event.metaKey) || !event.altKey || event.shiftKey) return null
-  if (event.key === 'Delete') return 'all'
+  if (event.key === 'Backspace') return 'all'
 
   const key = event.key.toLowerCase()
   return TARGETS.find((entry) => key === entry.latin || key === entry.cyrillic)?.target ?? null

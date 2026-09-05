@@ -24,7 +24,7 @@ describe('the clear hotkeys', () => {
     ['q', 'storage'],
     ['a', 'cookies'],
     ['z', 'cache'],
-    ['Delete', 'all']
+    ['Backspace', 'all']
   ] as const)('mod+alt+%s clears %s', (key, target) => {
     const event = press(key, { ctrlKey: true, altKey: true })
 

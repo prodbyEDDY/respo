@@ -43,10 +43,10 @@ export function UpdateChip(): React.JSX.Element | null {
   const hint = failed
     ? (error ?? 'The download did not finish. Click to try again.')
     : stage === 'downloaded'
-      ? `Respo ${version ?? ''} is ready. Restart to finish installing — it takes a few seconds.`
+      ? `Respo ${version ?? ''} is ready. Restart now to finish installing, or it installs when you quit.`
       : busy
         ? `Downloading Respo ${version ?? ''}`
-        : `Respo ${version ?? ''} is available. Click to download; nothing changes until you restart.`
+        : `Respo ${version ?? ''} is available. Click to download — it installs on the next restart.`
 
   const Icon = failed
     ? ExclamationCircleIcon

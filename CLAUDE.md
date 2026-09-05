@@ -46,7 +46,7 @@ npm run e2e        # Playwright (_electron.launch; пересобирает out/
 npm run lint       # ESLint
 npm run build      # прод-сборка (typecheck + electron-vite build)
 npm run build:win  # + NSIS-инсталлятор: dist/Respo-Setup-<version>.exe, latest.yml, .blockmap (W6)
-npm run icons      # растры иконки из build/icon.svg (sharp/png-to-ico/png2icons) (W6)
+npm run icons      # растры иконки из build/icon.svg — рендерит сам Electron, упаковка png-to-ico/png2icons (W6)
 node scripts/release-notes.mjs 0.1.0   # секция CHANGELOG для тела GitHub-релиза (W6)
 ```
 

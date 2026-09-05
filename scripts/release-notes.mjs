@@ -24,7 +24,8 @@ export function sectionFor(changelog, version) {
 
   let end = lines.length
   for (let i = start + 1; i < lines.length; i += 1) {
-    if (/^## /.test(lines[i])) {
+    // The next section, or the link-reference definitions at the very end.
+    if (/^## /.test(lines[i]) || /^\[[^\]]+\]:\s*\S/.test(lines[i])) {
       end = i
       break
     }

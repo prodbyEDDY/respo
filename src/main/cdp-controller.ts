@@ -526,6 +526,11 @@ export class CDPController {
     const flatten = options.dpr === 1 && spec !== null && spec.dpr !== 1
     const unscale = spec !== null && isMobileDevice(spec) && normalizeZoom(zoom) !== 1
     const override = flatten || unscale
+    // Known and accepted: a zoom change or a device edit that lands *between*
+    // this override and the capture can reassert its own metrics first, and a
+    // mobile shot on a zoomed canvas would then come out at the painting
+    // scale. The window is one CDP round trip wide; serializing captures
+    // against `setZoom`/`applyDevice` per session is the fix if it ever bites.
 
     try {
       if (override && spec !== null) {

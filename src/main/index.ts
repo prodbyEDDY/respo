@@ -523,12 +523,12 @@ function registerIpcHandlers(): void {
     updater?.install()
   })
 
-  registerHandler(
-    'updates:set-auto-check',
-    (_event, enabled) =>
-      updater?.setAutoCheck(validateBoolean(enabled, 'updates:set-auto-check')) ??
-      emptyUpdateState()
-  )
+  registerHandler('updates:set-auto-check', (_event, enabled) => {
+    // Validated before the null check, like every other payload: a malformed
+    // call must reject whether or not the updater exists yet.
+    const next = validateBoolean(enabled, 'updates:set-auto-check')
+    return updater?.setAutoCheck(next) ?? emptyUpdateState()
+  })
 
   registerHandler('app:get-start-url', () => resolveStartUrl())
 

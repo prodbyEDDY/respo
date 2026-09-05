@@ -10,7 +10,7 @@ import {
 import { join } from 'path'
 import { SYNC_CAPTURE_CHANNEL, type LoadState, type LoadStatePayload } from '@shared/ipc'
 import type { DeviceSpec, Rect } from '@shared/types'
-import { CDPController, isMobileDevice } from './cdp-controller'
+import { CDPController } from './cdp-controller'
 import type {
   CreateDevtoolsPanel,
   DevtoolsCommands,
@@ -384,9 +384,6 @@ export function createElectronViewBackend(
         target: wc,
         width: device.width,
         height: device.height,
-        // How a dispatched coordinate is read depends on which emulation this
-        // view is under — see `SyncDeviceRegistration.mobile`.
-        mobile: isMobileDevice(device),
         setCapturing: (capturing) => {
           if (wc.isDestroyed()) return
           wc.send(SYNC_CAPTURE_CHANNEL, capturing)
@@ -475,25 +472,16 @@ export function createElectronViewBackend(
           // the zoom for the page to keep laying out at the device's own width
           // (see `metricsOf` in `cdp-controller`).
           cdp.setZoom(wc, zoom)
-          // The engine dispatches mouse events into this view, and those
-          // coordinates are read in the zoomed widget's space rather than the
-          // page's own (see `SyncRegistry.setZoom`).
-          sync?.setZoom(device.id, zoom)
-          // `inspectElement` reads its point in the same zoomed space, from the
-          // other side: see `inspector.ts`.
+          // `inspectElement` reads its point in widget pixels — page pixels
+          // times this zoom: see `inspector.ts`. Mirrored input needs nothing:
+          // Chromium maps a dispatched coordinate through the emulation itself.
           inspect?.setZoom(device.id, zoom)
         },
         applyDevice(next: DeviceSpec): void {
           if (wc.isDestroyed()) return
           // Rotation and edited metrics change what a normalized coordinate
-          // means here, so the engine has to hear about them too — including
-          // the mobile flag, which an edited device *type* rewrites along with
-          // the user agent it is derived from.
-          sync?.updateDevice(device.id, {
-            width: next.width,
-            height: next.height,
-            mobile: isMobileDevice(next)
-          })
+          // means here, so the engine has to hear about them too.
+          sync?.updateDevice(device.id, { width: next.width, height: next.height })
           // A screenshot's file name carries the viewport it was taken at, so
           // a rotated device has to stop claiming its portrait size.
           shots?.updateDevice(device.id, {

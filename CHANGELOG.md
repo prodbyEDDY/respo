@@ -77,7 +77,7 @@ The first public release: everything built in waves W1–W6.
 
 - History with suggestions (local favicons, no third-party services), bookmarks, a home
   page, Open file… (`Ctrl+O`), clear storage / cookies / cache for the current site
-  (`Ctrl+Alt+Q` / `A` / `Z`, `Ctrl+Alt+Delete` for all).
+  (`Ctrl+Alt+Q` / `A` / `Z`, `Ctrl+Alt+Backspace` for all).
 - Per-site permissions: pages ask, you answer inline; decisions are remembered per site
   and editable from the shield panel.
 - HTTP Basic Auth prompts (one dialog for all devices; passwords are never stored) and
@@ -88,7 +88,7 @@ The first public release: everything built in waves W1–W6.
 - Light and dark themes, system-aware.
 - Automatic updates from GitHub Releases: a daily check on launch (can be turned off),
   a chip in the toolbar when a newer version exists, one click to download, one more to
-  restart into it. No pop-ups.
+  restart into it — a downloaded update also installs when you quit. No pop-ups.
 - About dialog with versions, updater status, links, logs folder and third-party
   notices. A file log in the profile's `logs` folder.
 - Windows installer (NSIS, one click). Builds are not code-signed yet — see the README

@@ -16,9 +16,9 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 45
     env:
-      # The runner has no GitHub Releases to talk to, and the e2e suite brings
-      # its own loopback feed where it needs one.
-      RESPO_NO_UPDATER: '1'
+      # The unpackaged app never checks GitHub on its own (`resolveUpdaterMode`),
+      # and the updater spec brings its own loopback feed — so no RESPO_NO_UPDATER
+      # here: it would switch that spec's feed off too.
       CI: 'true'
     steps:
       - uses: actions/checkout@v4

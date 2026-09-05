@@ -105,7 +105,8 @@ dialogs, no notification feeds. Dark and light themes. No telemetry.
 ### Updates and privacy
 
 - Automatic updates from GitHub Releases: a daily check on launch (can be turned off), a chip in the toolbar
-  when a newer version exists, one click to download, one more to restart into it.
+  when a newer version exists, one click to download, one more to restart into it (a downloaded update also
+  installs when you quit).
 - No telemetry, no analytics, no third-party favicon or update services. Device views run sandboxed with
   context isolation and no Node integration.
 
@@ -116,11 +117,11 @@ corrections are welcome in an issue.
 
 | | **Respo** | Responsively | Polypane | Sizzy | Blisk |
 |---|---|---|---|---|---|
-| Price | Free | Free | $11/mo | $15/mo | ~$8.49/mo |
-| License | MIT | AGPL-3.0 | Proprietary | Proprietary | Proprietary |
+| Price | Free | Free | $11/mo | $15/mo | ~$8.49/mo (2022 data) |
+| License | MIT, free | AGPL-3.0, free | Paid | Paid | Paid |
 | Sync scroll / click / typing | ✅ / ✅ / ✅ | ✅ / ✅ / ✅ | ✅ / ✅ / ✅ | ✅ / ✅ / ✅ | ✅ / — / — |
 | Device presets | 110 + custom + suites | 30+ + custom | ✅ | ✅ | 89 |
-| Media emulation (color scheme, reduced motion, print) | ✅ | — | ✅ | — | ❌ |
+| Media emulation (color scheme, reduced motion, print) | ✅ | ❌ | ✅ | 🟡 | ❌ |
 | Vision deficiency simulation | ✅ 6 types, per device | ❌ | ✅ 8 + dyslexia | ❌ | ❌ |
 | Network throttling | ✅ | ❌ | ✅ | ✅ | — |
 | Geolocation / locale / time zone | ✅ | ❌ | ✅ / ✅ / — | ✅ | ❌ |
@@ -129,7 +130,7 @@ corrections are welcome in an issue.
 | Full-page screenshots | ✅ | — | ✅ | ✅ | ✅ |
 | Console errors surfaced in the UI | ✅ + overflow finder | ❌ | ✅ | ✅ | ✅ |
 | Per-site permissions | ✅ | — | 🟡 | — | — |
-| Live reload | ✅ `file://` | ✅ | ✅ | — | ✅ |
+| Live reload | ✅ `file://` | ✅ | — | — | ✅ |
 | MCP for AI agents | 0.2 | ✅ | ❌ | ❌ | ❌ |
 | Auto-update | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Platforms | Windows (macOS planned) | Win / Mac / Linux | Win / Mac / Linux | Win / Mac | Win / Mac / Linux |
@@ -162,7 +163,7 @@ administrator rights, and updates itself from GitHub Releases.
 | `Ctrl+S` · `Ctrl+Alt+S` | Screenshot every device · full pages |
 | `Ctrl+Shift+L` · `Esc` | Cycle layouts · leave One-device layout |
 | `Alt+R` | Rulers on the device under the pointer (or all) |
-| `Ctrl+Alt+Q` / `A` / `Z` · `Ctrl+Alt+Delete` | Clear storage / cookies / cache for this site · all three |
+| `Ctrl+Alt+Q` / `A` / `Z` · `Ctrl+Alt+Backspace` | Clear storage / cookies / cache for this site · all three |
 | `Ctrl` + mouse wheel | Zoom the canvas |
 
 Cyrillic keyboard layouts are recognised for the letter chords.

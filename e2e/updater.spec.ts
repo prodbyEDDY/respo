@@ -97,17 +97,21 @@ function startFeed(): Promise<Feed> {
 }
 
 function launch(feedUrl: string): Promise<ElectronApplication> {
-  return electron.launch({
-    args: [ROOT, `--user-data-dir=${profile}`],
-    env: {
-      ...(process.env as Record<string, string>),
-      RESPO_START_URL: PROBE_URL,
-      RESPO_UPDATE_URL: feedUrl
-    }
-  })
+  const env: Record<string, string> = {
+    ...(process.env as Record<string, string>),
+    RESPO_START_URL: PROBE_URL,
+    RESPO_UPDATE_URL: feedUrl
+  }
+  // The off switch wins over the feed (`resolveUpdaterMode`); a CI job that
+  // sets it must not switch this spec's feed off with it.
+  delete env['RESPO_NO_UPDATER']
+  return electron.launch({ args: [ROOT, `--user-data-dir=${profile}`], env })
 }
 
 let feed: Feed
+
+// NSIS is the Windows updater; the cache folder below is Windows' too.
+test.skip(process.platform !== 'win32', 'the NSIS update path is Windows-only')
 
 test.beforeAll(async () => {
   rmSync(CACHE_DIR, { recursive: true, force: true })
