@@ -410,6 +410,21 @@ export type DevtoolsPanelName = 'elements' | 'console'
 /** Where one device's document is scrolled to, in its own CSS pixels. */
 export type ScrollStatePayload = { deviceId: string; x: number; y: number }
 
+/**
+ * Live reload, as the address bar shows it.
+ *
+ * `off` for anything that is not a local file — there is nothing to watch
+ * on `http(s)`, and the indicator is simply absent. `paused` keeps the watch
+ * and ignores it: the way to edit a file without every device jumping.
+ */
+export type WatcherState = {
+  state: 'watching' | 'paused' | 'off'
+  /** The watched page's path, for the tooltip. */
+  file: string | null
+  /** When the last change was acted on, epoch milliseconds. */
+  lastReloadAt: number | null
+}
+
 /** A design image main keeps, as the renderer sees it. */
 export type OverlayImage = {
   /** Content id: the first sixteen hex digits of the bytes' SHA-256. */
@@ -470,6 +485,8 @@ export type MainEvent =
    * and only devices with rulers on are asked to report (CLAUDE.md §4).
    */
   | { type: 'scroll-state'; payload: ScrollStatePayload[] }
+  /** The live-reload watcher's state, whenever it changes. Never per file event. */
+  | { type: 'watcher'; payload: WatcherState }
   | { type: 'devtools-state'; payload: DevtoolsStatePayload }
   | { type: 'inspect-mode'; payload: { active: boolean } }
   /**
@@ -848,6 +865,10 @@ export type IpcInvokeMap = {
    * by id in main, so the renderer never ships megabytes per change.
    */
   'overlay:set': { args: [string, OverlayApply | null]; result: void }
+  /** Pause or resume live reload of the local page. Answers with the state. */
+  'watcher:toggle': { args: []; result: WatcherState }
+  /** The watcher's state, for a renderer that has just started. */
+  'watcher:get': { args: []; result: WatcherState }
 }
 
 export type IpcChannel = keyof IpcInvokeMap
@@ -905,7 +926,9 @@ const CHANNEL_REGISTRY: Record<IpcChannel, true> = {
   'guides:set': true,
   'overlay:store-image': true,
   'overlay:image': true,
-  'overlay:set': true
+  'overlay:set': true,
+  'watcher:toggle': true,
+  'watcher:get': true
 }
 
 export const IPC_CHANNELS: readonly IpcChannel[] = Object.keys(CHANNEL_REGISTRY) as IpcChannel[]

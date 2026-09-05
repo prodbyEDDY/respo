@@ -31,6 +31,7 @@ import { attachScrollBridge, useScroll } from '@renderer/stores/scroll'
 import { useSettings } from '@renderer/stores/settings'
 import { attachShotsBridge, useShots } from '@renderer/stores/shots'
 import { useSync } from '@renderer/stores/sync'
+import { attachWatcherBridge } from '@renderer/stores/watcher'
 
 /**
  * Main owns the start url (CLI/deep-link argument, or the default) and has
@@ -160,6 +161,9 @@ function App(): React.JSX.Element {
 
   // Scroll offsets of the devices something follows, batched the same way.
   useEffect(() => attachScrollBridge(), [])
+
+  // Whether a local page is being watched for live reload.
+  useEffect(() => attachWatcherBridge(), [])
 
   // mod+i arms the element picker, Escape puts it away.
   useInspectHotkeys()

@@ -12,6 +12,7 @@ import { useNavigation } from '@renderer/stores/navigation'
 import { AddressSuggestions, type AddressSuggestion } from './AddressSuggestions'
 import { BookmarkStar } from './BookmarkStar'
 import { SiteShield } from './SitePermissions'
+import { WatcherIndicator } from './WatcherIndicator'
 
 /** Long enough to be seen, short enough not to be an error state. */
 const INVALID_HINT_MS = 1500
@@ -149,8 +150,9 @@ export function AddressBar(): React.JSX.Element {
         aria-invalid={invalid || undefined}
         className={cn(
           'h-8 rounded-full pl-9 text-caption',
-          // Room for the star, and for the home button when there is one.
-          homeUrl === '' ? 'pr-9' : 'pr-16',
+          // Room for the star, the home button and the watching dot when
+          // there are any.
+          homeUrl === '' ? 'pr-16' : 'pr-24',
           // Colour only, 150ms — the field must not move (DESIGN-SYSTEM.md).
           'transition-[color,box-shadow,border-color] duration-150 ease-out',
           invalid && 'border-destructive ring-[3px] ring-destructive/30'
@@ -209,6 +211,7 @@ export function AddressBar(): React.JSX.Element {
       />
 
       <div className="absolute right-1 flex items-center gap-0.5">
+        <WatcherIndicator />
         {homeUrl === '' ? null : (
           <Tooltip>
             <TooltipTrigger asChild>

@@ -18,7 +18,8 @@ import {
   type DevtoolsStatePayload,
   type MainEvent,
   type PermissionStatePayload,
-  type ScrollStatePayload
+  type ScrollStatePayload,
+  type WatcherState
 } from '@shared/ipc'
 import { defaultPersistedState } from '@shared/persistence-types'
 import { authHostLabel, authRealmLabel, createAuthManager, type AuthManager } from './auth'
@@ -28,6 +29,7 @@ import { DevtoolsManager } from './devtools-manager'
 import { DesignOverlayManager } from './design-overlay'
 import { DiagnosticsManager } from './diagnostics'
 import { EmulationManager } from './emulation'
+import { chokidarFactory, FileWatcher } from './file-watcher'
 import { GuidesManager } from './guides'
 import { createFaviconFetcher } from './favicons'
 import { createHistory, type History } from './history'
@@ -118,6 +120,10 @@ let diagnostics: DiagnosticsManager | null = null
 let guides: GuidesManager | null = null
 /** Design overlays: the image store, and the CSS layers on the pages. */
 let overlays: DesignOverlayManager | null = null
+/** Live reload of a local page, following the lead's url. */
+let watcher: FileWatcher | null = null
+/** chokidar's `watch`, once its module has loaded. */
+let chokidarReady: import('./file-watcher').WatchFactory | null = null
 /** Scroll offsets of the devices whose rulers are showing, one message per turn. */
 let scrollStates: KeyedBatcher<ScrollStatePayload> | null = null
 /** Devices whose rulers are showing — the only ones whose scroll travels. */
@@ -253,6 +259,8 @@ function createWindow(): void {
     // about *this* site. Costs nothing when it did not: the manager pushes only
     // when the picture it would send actually changed.
     permissions?.refresh()
+    // A local page gets its folder watched; anything else stops the watch.
+    watcher?.follow(lead?.url() ?? null)
   })
 
   // One CDP controller for the window's views, shared with the sync engine:
@@ -355,6 +363,34 @@ function createWindow(): void {
   // Guides are stylesheets on the pages; the manager only needs to measure.
   guides = new GuidesManager({ cdp })
 
+  // Live reload. chokidar is loaded lazily — it is only ever needed once a
+  // local page is open — and the watcher itself is created now so the views
+  // can register with it.
+  const liveReload = new FileWatcher({
+    watch: (root, options) => {
+      // Not yet loaded: a page opened before the module resolved gets its
+      // watcher the moment it does. `follow` re-runs on every load batch.
+      const factory = chokidarReady
+      if (factory === null) throw new Error('watcher not ready')
+      return factory(root, options)
+    },
+    cdp,
+    reloadAll: () => viewManager?.reload(),
+    onState: (state) => {
+      sendMainEvent(mainWindow.webContents, { type: 'watcher', payload: state })
+    }
+  })
+  watcher = liveReload
+  void chokidarFactory().then(
+    (factory) => {
+      chokidarReady = factory
+      liveReload.follow(lead?.url() ?? null)
+    },
+    (error: unknown) => {
+      console.error('live reload is unavailable', error)
+    }
+  )
+
   // Design images live under their own store key — megabytes, not settings —
   // and are decoded by Chromium itself before anything is kept.
   if (storeBackend !== null) {
@@ -380,6 +416,7 @@ function createWindow(): void {
       diagnostics,
       guides,
       ...(overlays === null ? {} : { overlays }),
+      watcher: liveReload,
       // Popups belong to the viewport the user is interacting with — the same
       // election the mirroring follows.
       isLead: (deviceId) => syncEngine?.lead() === deviceId,
@@ -423,6 +460,8 @@ function createWindow(): void {
     guides = null
     overlays?.dispose()
     overlays = null
+    watcher?.dispose()
+    watcher = null
     rulers.clear()
     scrollStates?.cancel()
     scrollStates = null
@@ -873,6 +912,12 @@ function registerIpcHandlers(): void {
     overlays?.set(validateDeviceId(deviceId), validateOptionalOverlayApply(apply))
   )
 
+  // Live reload. No payloads: the watcher follows the canvas on its own, and
+  // the renderer can only pause it or ask where it stands.
+  const OFF: WatcherState = { state: 'off', file: null, lastReloadAt: null }
+  registerHandler('watcher:toggle', () => watcher?.toggle() ?? OFF)
+  registerHandler('watcher:get', () => watcher?.state() ?? OFF)
+
   // The one-way stream from the device views. Its sender is an untrusted page,
   // so the batch is validated (and clamped) before the engine sees any of it;
   // anything malformed is dropped rather than thrown back at the page.
@@ -992,6 +1037,8 @@ app.on('before-quit', () => {
   viewManager = null
   emulation?.dispose()
   emulation = null
+  watcher?.dispose()
+  watcher = null
   overlays?.dispose()
   overlays = null
   guides?.dispose()
