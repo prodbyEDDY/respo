@@ -59,6 +59,7 @@ test('a suite decides which devices are on the canvas, and in what order', async
     expect(await chipOrder(page)).toEqual(before)
 
     // Membership, in one click from the card.
+    await page.getByRole('button', { name: /^Phones/ }).click()
     await page.getByLabel('Add iPhone SE to the suite').click()
     await expect(page.locator('[data-suite-device-id]')).toHaveCount(6)
     expect(await chipOrder(page)).toEqual([...before, 'iphone-se'])

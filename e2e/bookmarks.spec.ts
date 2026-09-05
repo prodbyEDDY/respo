@@ -1,3 +1,4 @@
+import { openSettings, settingsAction } from './settings'
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test'
 import { resolve } from 'node:path'
 import { ownProfile } from './profile'
@@ -59,8 +60,8 @@ test('the star saves a page, and the bookmark outlives the session', async () =>
     // The star is filled in now, and says what a second click would do.
     await expect(window.getByLabel('Edit this bookmark')).toHaveAttribute('data-bookmarked', 'true')
 
-    await window.getByLabel('More options').click()
-    await expect(window.getByRole('menuitem', { name: 'The probe' })).toBeVisible()
+    await openSettings(window, 'Browsing data')
+    await expect(window.getByRole('button', { name: 'The probe' })).toBeVisible()
     await window.keyboard.press('Escape')
   } finally {
     // Closing the window is what flushes the debounced write.
@@ -74,8 +75,8 @@ test('the star saves a page, and the bookmark outlives the session', async () =>
 
     // The document came back, and with it the star's state.
     await expect(window.getByLabel('Edit this bookmark')).toBeVisible()
-    await window.getByLabel('More options').click()
-    await expect(window.getByRole('menuitem', { name: 'The probe' })).toBeVisible()
+    await openSettings(window, 'Browsing data')
+    await expect(window.getByRole('button', { name: 'The probe' })).toBeVisible()
   } finally {
     await second.close()
   }
@@ -124,8 +125,7 @@ test('a home page decides where the next session opens', async () => {
     await address.press('Enter')
     await loaded(first, SECOND_URL)
 
-    await window.getByLabel('More options').click()
-    await window.getByRole('menuitem', { name: 'Set this page as home' }).click()
+    await settingsAction(window, 'General', 'Set this page as home')
     // A home page shows up as a way back to it, beside the star.
     await expect(window.getByLabel('Go to your home page')).toBeVisible()
   } finally {
@@ -153,8 +153,7 @@ test('clearing history stops it being offered', async () => {
     await address.press('Escape')
     await address.blur()
 
-    await window.getByLabel('More options').click()
-    await window.getByRole('menuitem', { name: 'Clear history' }).click()
+    await settingsAction(window, 'Browsing data', 'Clear history')
 
     await address.click()
     // Nothing to suggest, so there is no list at all.

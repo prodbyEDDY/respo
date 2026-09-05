@@ -22,6 +22,21 @@ const app = await electron.launch({
   args: [resolve('out/main/index.js'), `--user-data-dir=${profile}`],
   env: { ...process.env, RESPO_START_URL: 'http://127.0.0.1:4178', RESPO_NO_UPDATER: '1' }
 })
+async function settings(page, section) {
+  const dialog = page.getByRole('dialog', { name: 'Settings', exact: true })
+  if ((await dialog.count()) > 0 && (await dialog.getAttribute('data-state')) === 'closed')
+    await dialog.waitFor({ state: 'detached' })
+  if (!(await dialog.isVisible()))
+    await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  await dialog
+    .getByRole('navigation', { name: 'Settings sections' })
+    .getByRole('button', { name: section, exact: true })
+    .click()
+}
+async function done(page) {
+  await page.getByRole('button', { name: 'Done', exact: true }).click()
+  await page.getByRole('dialog').waitFor({ state: 'detached' })
+}
 try {
   const page = await app.firstWindow()
   await page.locator('[data-load-state="ready"]').first().waitFor({ timeout: 30000 })
@@ -45,20 +60,19 @@ try {
   await page.waitForFunction(
     () => document.querySelectorAll('[data-load-state="ready"]').length === 3
   )
-  await page
-    .getByRole('button', { name: 'Emulate media, vision, network and location', exact: true })
-    .click()
+  await settings(page, 'Emulation')
   await page
     .getByRole('radiogroup', { name: 'Color scheme', exact: true })
     .getByRole('radio', { name: 'Light', exact: true })
     .click()
-  await page.keyboard.press('Escape')
+  await done(page)
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1600, 1000))
   // Use the real zoom control, three rungs from 100% to 67%.
+  await settings(page, 'Canvas')
   for (let i = 0; i < 3; i++) {
-    await page.getByRole('button', { name: 'More options', exact: true }).click()
-    await page.getByRole('menuitem', { name: 'Zoom out', exact: true }).click()
+    await page.getByRole('button', { name: 'Zoom out', exact: true }).click()
   }
+  await done(page)
   await mkdir('docs/assets', { recursive: true })
   const capture = async (name) => {
     await page.mouse.move(2, 46)
@@ -79,26 +93,42 @@ try {
     console.log(`Captured ${name}`)
   }
   await capture('light')
-  await page.getByRole('button', { name: 'Switch to dark theme', exact: true }).click()
+  await settings(page, 'General')
   await page
-    .getByRole('button', { name: 'Emulate media, vision, network and location', exact: true })
+    .getByRole('radiogroup', { name: 'App appearance' })
+    .getByRole('radio', { name: 'Dark', exact: true })
     .click()
+  await done(page)
+  await settings(page, 'Emulation')
   await page
     .getByRole('radiogroup', { name: 'Color scheme', exact: true })
     .getByRole('radio', { name: 'Dark', exact: true })
     .click()
-  await page.keyboard.press('Escape')
+  await done(page)
   await capture('dark')
-  await page
-    .getByRole('button', { name: 'Emulate media, vision, network and location', exact: true })
-    .click()
+  await settings(page, 'Emulation')
   await page.waitForFunction(() => document.querySelector('[data-native-snapshots]') !== null)
   await capture('emulation')
-  await page.keyboard.press('Escape')
-  await page.getByRole('button', { name: 'Switch to light theme', exact: true }).click()
+  await done(page)
+  await settings(page, 'General')
+  await page
+    .getByRole('radiogroup', { name: 'App appearance' })
+    .getByRole('radio', { name: 'Light', exact: true })
+    .click()
+  await done(page)
   await page.getByRole('button', { name: 'Add or edit devices', exact: true }).click()
+  await page.getByRole('button', { name: /^Phones/ }).click()
   await capture('devices')
+  await page.getByRole('button', { name: 'Close devices', exact: true }).click()
+  await settings(page, 'Canvas')
+  await capture('settings')
+  await page.getByRole('radio', { name: /Horizontal row/ }).click()
+  await done(page)
+  await capture('horizontal')
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(720, 480))
+  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  await page.waitForTimeout(400)
+  await page.screenshot({ path: 'output/playwright/settings-compact.png' })
   console.log(
     'Compact window overflow:',
     await page.evaluate(() => ({

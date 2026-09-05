@@ -1,7 +1,5 @@
 import { useState } from 'react'
-import { AdjustmentsHorizontalIcon } from '@heroicons/react/24/outline'
 import {
-  describeEmulation,
   GEOLOCATION_PRESETS,
   geolocationPresetOf,
   LOCALE_PRESETS,
@@ -23,7 +21,6 @@ import { Button } from '@renderer/components/ui/button'
 import { Checkbox } from '@renderer/components/ui/checkbox'
 import { Input } from '@renderer/components/ui/input'
 import { Label } from '@renderer/components/ui/label'
-import { Popover, PopoverContent, PopoverTrigger } from '@renderer/components/ui/popover'
 import {
   Select,
   SelectContent,
@@ -31,8 +28,6 @@ import {
   SelectTrigger,
   SelectValue
 } from '@renderer/components/ui/select'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
-import { cn } from '@renderer/lib/utils'
 import { selectEmulationActive, useEmulation } from '@renderer/stores/emulation'
 
 /** The value the location picker uses for "not one of the cities". */
@@ -185,7 +180,7 @@ function LocationRow({ profile }: { profile: EmulationProfile }): React.JSX.Elem
  * canvas has to stay visible. Every control writes through immediately —
  * there is nothing here to try and then abandon, and Reset all is the undo.
  */
-function EmulateForm(): React.JSX.Element {
+export function EmulateForm(): React.JSX.Element {
   const profile = useEmulation((s) => s.profile)
   const setProfile = useEmulation((s) => s.setProfile)
   const resetAll = useEmulation((s) => s.resetAll)
@@ -316,55 +311,5 @@ function EmulateForm(): React.JSX.Element {
         </Select>
       </Row>
     </div>
-  )
-}
-
-/**
- * The toolbar's way into the emulation pack: one button, with a dot on it
- * whenever anything is switched on.
- *
- * The dot is the answer to "why does this page look strange": a dark-mode or
- * print override restored from yesterday must never be invisible, so the
- * badge is derived from the profile itself and the tooltip lists what is on.
- */
-export function EmulateButton(): React.JSX.Element {
-  const active = useEmulation(selectEmulationActive)
-  const profile = useEmulation((s) => s.profile)
-  const [open, setOpen] = useState(false)
-  const summary = active ? describeEmulation(profile).join(' · ') : ''
-
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <PopoverTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Emulate media, vision, network and location"
-              data-emulating={active ? 'on' : 'off'}
-              className={cn('relative', (active || open) && 'text-primary')}
-            >
-              <AdjustmentsHorizontalIcon />
-              <span
-                aria-hidden="true"
-                data-slot="emulate-badge"
-                className={cn(
-                  'absolute top-1 right-1 size-1.5 rounded-full bg-primary',
-                  'transition-opacity duration-150 ease-out',
-                  active ? 'opacity-100' : 'opacity-0'
-                )}
-              />
-            </Button>
-          </PopoverTrigger>
-        </TooltipTrigger>
-        <TooltipContent>
-          {active ? `Emulating: ${summary}` : 'Emulate media, vision, network and location'}
-        </TooltipContent>
-      </Tooltip>
-      <PopoverContent align="end" className="w-80">
-        <EmulateForm />
-      </PopoverContent>
-    </Popover>
   )
 }

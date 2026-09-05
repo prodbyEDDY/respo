@@ -236,11 +236,11 @@ describe('layout store — canvas arrangement', () => {
   it('cycles column → flex → masonry → individual → column', () => {
     const seen: string[] = []
     useLayout.setState({ mode: 'column' })
-    for (let i = 0; i < 4; i += 1) {
+    for (let i = 0; i < 5; i += 1) {
       useLayout.getState().cycleMode()
       seen.push(useLayout.getState().mode)
     }
-    expect(seen).toEqual(['flex', 'masonry', 'individual', 'column'])
+    expect(seen).toEqual(['flex', 'masonry', 'individual', 'horizontal', 'column'])
   })
 
   it('remembers the arrangement and the zoom one device took the canvas from', () => {

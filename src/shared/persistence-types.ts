@@ -89,15 +89,17 @@ export type DevtoolsSettings = {
  *   dropped into whichever column is currently shortest. Same information as
  *   `flex` with the ragged vertical gaps taken out.
  * - `individual` — one device fills the canvas, the rest wait in a tab strip.
+ * - `horizontal` — one unwrapped row; ordinary canvas wheel input moves sideways.
  */
-export type CanvasLayoutMode = 'column' | 'flex' | 'masonry' | 'individual'
+export type CanvasLayoutMode = 'column' | 'flex' | 'masonry' | 'individual' | 'horizontal'
 
 /** Every canvas layout mode, in the order `mod+shift+l` cycles them. */
 export const CANVAS_LAYOUT_MODES: readonly CanvasLayoutMode[] = [
   'column',
   'flex',
   'masonry',
-  'individual'
+  'individual',
+  'horizontal'
 ]
 
 /**

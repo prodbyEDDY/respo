@@ -1,3 +1,4 @@
+import { settingsAction } from './settings'
 import {
   test,
   expect,
@@ -323,18 +324,8 @@ test('a mirrored click lands in the same place at 50% canvas zoom', async () => 
     const lead = ids[0] as number
 
     // 1 → 0.9 → 0.75 → 0.67 → 0.5, down the ladder the menu steps through.
-    const zoomOut = page.getByRole('menuitem', { name: 'Zoom out' })
     for (let i = 0; i < 4; i += 1) {
-      // The trigger toggles, so the open is retried as a unit: a click that
-      // lands before the window is interactive would otherwise leave the loop
-      // waiting on a menu that was never opened.
-      await expect(async () => {
-        await page.getByLabel('More options').click()
-        await expect(zoomOut).toBeVisible({ timeout: 2_000 })
-      }).toPass({ timeout: 20_000 })
-
-      await zoomOut.click()
-      await expect(zoomOut).toBeHidden()
+      await settingsAction(page, 'Canvas', 'Zoom out')
     }
 
     // The zoom is only really applied once main has told every view about it.

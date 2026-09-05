@@ -115,6 +115,7 @@ function useContentWidth(ref: RefObject<HTMLElement | null>): number {
 const ARRANGEMENT: Record<Exclude<CanvasLayoutMode, 'masonry' | 'individual'>, string> = {
   // One device per row, in suite order: scroll down and you have seen them all.
   column: 'flex flex-col items-start gap-6 p-6',
+  horizontal: 'flex w-max min-w-full flex-nowrap items-start gap-6 p-6',
   // Rows that wrap at the canvas width — each row as tall as its tallest frame.
   flex: 'flex flex-wrap content-start items-start gap-6 p-6'
 }
@@ -210,7 +211,19 @@ export function Canvas({ devices, onLayoutRoundTrip }: CanvasProps): React.JSX.E
 
     const onWheel = (event: WheelEvent): void => {
       // Without ctrl this is an ordinary scroll: leave it to the compositor.
-      if (!event.ctrlKey) return
+      if (!event.ctrlKey) {
+        if (useLayout.getState().mode === 'horizontal' && !event.shiftKey) {
+          const delta =
+            Math.abs(event.deltaX) > Math.abs(event.deltaY)
+              ? event.deltaX
+              : wheelPixels(event, element)
+          if (element.scrollWidth > element.clientWidth) {
+            event.preventDefault()
+            element.scrollLeft += delta
+          }
+        }
+        return
+      }
       // Also stops Chromium page-zooming the whole Respo window.
       event.preventDefault()
       pendingDelta += wheelPixels(event, element)

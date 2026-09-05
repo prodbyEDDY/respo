@@ -29,6 +29,8 @@ files:
 # Third-party notices travel with the app; About → "Third-party notices" opens
 # this copy (`noticesPath` in src/main/index.ts).
 extraResources:
+  - from: build/icon.ico
+    to: respo-${version}.ico
   - from: NOTICE.md
     to: NOTICE.md
 asarUnpack:
@@ -39,6 +41,7 @@ win:
   target:
     - nsis
 nsis:
+  include: build/installer.nsh
   # One click, per user, no elevation, no wizard: the installer is the update
   # mechanism too (electron-updater runs it with /S and relaunches).
   oneClick: true

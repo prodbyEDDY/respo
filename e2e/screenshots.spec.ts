@@ -1,3 +1,4 @@
+import { openSettings, settingsAction } from './settings'
 import {
   test,
   expect,
@@ -234,8 +235,7 @@ test('screenshots: full page, every device, and a batch that fails as a batch', 
     // it: a 1440px monitor shot at 50% zoom is still a 1440px picture. This is
     // the desktop emulation fix seen from the file it produces.
     for (let i = 0; i < 4; i += 1) {
-      await page.getByRole('button', { name: 'More options' }).click()
-      await page.getByRole('menuitem', { name: 'Zoom out' }).click()
+      await settingsAction(page, 'Canvas', 'Zoom out')
     }
 
     expect(pngSize(await captureOne(page, 'desktop-1440'))).toEqual({
@@ -243,8 +243,7 @@ test('screenshots: full page, every device, and a batch that fails as a batch', 
       height: DESKTOP.height
     })
 
-    await page.getByRole('button', { name: 'More options' }).click()
-    await page.getByRole('menuitem', { name: 'Reset zoom' }).click()
+    await settingsAction(page, 'Canvas', 'Reset zoom')
 
     /* ── A whole batch that cannot be written ─────────────────────────────── */
 
@@ -339,8 +338,7 @@ test('the screenshot UI works in both themes, and its settings outlive the app',
 
     /* ── Settings, from the overflow menu ─────────────────────────────────── */
 
-    await page.getByRole('button', { name: 'More options' }).click()
-    await page.getByRole('menuitem', { name: 'Settings…' }).click()
+    await openSettings(page, 'Screenshots')
 
     const dialog = page.getByRole('dialog')
     await expect(dialog).toBeVisible()
@@ -371,7 +369,13 @@ test('the screenshot UI works in both themes, and its settings outlive the app',
 
     /* ── Every device, in the dark theme ──────────────────────────────────── */
 
-    await page.getByRole('button', { name: 'Switch to dark theme' }).click()
+    await openSettings(page, 'General')
+    await page
+      .getByRole('radiogroup', { name: 'App appearance' })
+      .getByRole('radio', { name: 'Dark', exact: true })
+      .click()
+    await page.getByRole('button', { name: 'Done', exact: true }).click()
+    await expect(page.getByRole('dialog')).toHaveCount(0)
     await expect(page.locator('html')).toHaveClass(/dark/)
 
     await page.getByRole('button', { name: 'Screenshot every device' }).click()
@@ -390,8 +394,7 @@ test('the screenshot UI works in both themes, and its settings outlive the app',
     const page = await second.firstWindow()
     await page.waitForFunction(() => 'respo' in window)
 
-    await page.getByRole('button', { name: 'More options' }).click()
-    await page.getByRole('menuitem', { name: 'Settings…' }).click()
+    await openSettings(page, 'Screenshots')
 
     const dialog = page.getByRole('dialog')
     await expect(dialog.getByRole('radio', { name: 'JPEG' })).toHaveAttribute(

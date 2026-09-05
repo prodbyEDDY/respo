@@ -1,3 +1,4 @@
+import { openSettings } from './settings'
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test'
 import { createHash, randomBytes } from 'node:crypto'
 import { readFileSync, rmSync } from 'node:fs'
@@ -173,8 +174,7 @@ test('the launch check finds a release, and the chip downloads and installs it',
     expect(status.lastCheckAt).toBeNull()
 
     // About says the same, from the menu.
-    await window.getByLabel('More options').click()
-    await window.getByRole('menuitem', { name: 'About Respo' }).click()
+    await openSettings(window, 'About & updates')
     const about = window.locator('[data-slot="about-dialog"]')
     await expect(about.locator('[data-slot="about-version"]')).toHaveText(
       `Version ${currentVersion}`

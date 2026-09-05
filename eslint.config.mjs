@@ -8,7 +8,15 @@ import eslintPluginReactRefresh from 'eslint-plugin-react-refresh'
 export default defineConfig(
   {
     // `src/renderer/src/components/ui` is generated and overwritten by the shadcn CLI.
-    ignores: ['**/node_modules', '**/dist', '**/out', 'src/renderer/src/components/ui']
+    ignores: [
+      '**/node_modules',
+      '**/dist',
+      '**/out',
+      'output/**',
+      'test-results/**',
+      'playwright-report/**',
+      'src/renderer/src/components/ui'
+    ]
   },
   tseslint.configs.recommended,
   eslintPluginReact.configs.flat.recommended,

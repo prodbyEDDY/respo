@@ -1,3 +1,4 @@
+import { settingsAction } from './settings'
 import {
   test,
   expect,
@@ -134,8 +135,7 @@ test('guides drawn on a ruler land on the page, per viewport size, at any zoom, 
     // At 50% zoom the strip is half as long, and a click at 100 screen pixels
     // is page x=200 — the ruler measures the page, not the frame.
     for (let i = 0; i < 4; i += 1) {
-      await page.getByRole('button', { name: 'More options' }).click()
-      await page.getByRole('menuitem', { name: 'Zoom out' }).click()
+      await settingsAction(page, 'Canvas', 'Zoom out')
     }
     await expect(phone.locator('div[data-device-id]')).toHaveCSS(
       'width',

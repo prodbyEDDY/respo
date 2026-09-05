@@ -1,3 +1,4 @@
+import { openSettings } from './settings'
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test'
 import { resolve } from 'node:path'
 import { ownProfile } from './profile'
@@ -53,17 +54,9 @@ async function chooseLayout(
   page: Awaited<ReturnType<ElectronApplication['firstWindow']>>,
   label: string
 ): Promise<void> {
-  const item = page.getByRole('menuitemradio', { name: label })
-  // The trigger toggles, so the open is retried as a unit: a click that lands
-  // before the window is interactive would leave this waiting on a menu that
-  // was never opened.
-  await expect(async () => {
-    await page.getByLabel('More options').click()
-    await expect(item).toBeVisible({ timeout: 2_000 })
-  }).toPass({ timeout: 20_000 })
-
-  await item.click()
-  await expect(item).toBeHidden()
+  await openSettings(page, 'Canvas')
+  await page.getByRole('radio', { name: new RegExp(label) }).click()
+  await page.getByRole('button', { name: 'Done', exact: true }).click()
 }
 
 /**
@@ -174,8 +167,8 @@ test('the chosen layout survives a restart', async () => {
   try {
     const page = await first.firstWindow()
     await expect(page.locator('[data-load-state="ready"]')).toHaveCount(DEVICE_COUNT)
-    await chooseLayout(page, 'Column')
-    await expect(page.getByTestId('canvas')).toHaveAttribute('data-layout', 'column')
+    await chooseLayout(page, 'Horizontal row')
+    await expect(page.getByTestId('canvas')).toHaveAttribute('data-layout', 'horizontal')
   } finally {
     // Closing the window is what flushes the debounced write.
     await first.close()
@@ -184,7 +177,7 @@ test('the chosen layout survives a restart', async () => {
   const second = await launch()
   try {
     const page = await second.firstWindow()
-    await expect(page.getByTestId('canvas')).toHaveAttribute('data-layout', 'column')
+    await expect(page.getByTestId('canvas')).toHaveAttribute('data-layout', 'horizontal')
     // And the canvas came back whole: a restored layout must not cost a view.
     await expect(page.locator('[data-load-state="ready"]')).toHaveCount(DEVICE_COUNT)
   } finally {

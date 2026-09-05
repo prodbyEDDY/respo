@@ -1,3 +1,4 @@
+import { openSettings } from './settings'
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test'
 import { resolve } from 'node:path'
 import { ownProfile } from './profile'
@@ -40,10 +41,8 @@ test('floating UI covers native pages, nested menus and a dock; closing restores
         })
       )
       .toBeGreaterThan(0)
-    await page
-      .getByRole('button', { name: 'Emulate media, vision, network and location', exact: true })
-      .click()
-    await expect(page.locator('[data-slot="popover-content"]')).toBeVisible()
+    await openSettings(page, 'Emulation')
+    await expect(page.locator('[data-slot="dialog-content"]')).toBeVisible()
     await expect.poll(() => nativeVisible(app)).toBe(false)
     expect(await page.locator('[data-native-snapshots] img').count()).toBeGreaterThan(0)
     const beforeRefresh = await page
@@ -83,10 +82,10 @@ test('floating UI covers native pages, nested menus and a dock; closing restores
     await expect.poll(() => nativeVisible(app)).toBe(false)
     await page.keyboard.press('Escape')
     await expect(page.getByRole('listbox')).toHaveCount(0)
-    await expect(page.locator('[data-slot="popover-content"]')).toBeVisible()
+    await expect(page.locator('[data-slot="dialog-content"]')).toBeVisible()
     await expect.poll(() => nativeVisible(app)).toBe(false)
     await page.keyboard.press('Escape')
-    await expect(page.locator('[data-slot="popover-content"]')).toHaveCount(0)
+    await expect(page.locator('[data-slot="dialog-content"]')).toHaveCount(0)
     await page.mouse.move(2, 46)
     await expect.poll(() => nativeVisible(app)).toBe(true)
 
@@ -101,8 +100,7 @@ test('floating UI covers native pages, nested menus and a dock; closing restores
       .getByRole('button', { name: 'Open DevTools for this device', exact: true })
       .first()
       .click()
-    await page.getByRole('button', { name: 'More options', exact: true }).click()
-    await page.getByRole('menuitem', { name: 'Settings…', exact: true }).click()
+    await openSettings(page, 'Screenshots')
     await expect(page.getByRole('dialog')).toBeVisible()
     await expect.poll(() => nativeVisible(app)).toBe(false)
     // The whole native layer, including the dock, yields to the dialog.
@@ -110,14 +108,40 @@ test('floating UI covers native pages, nested menus and a dock; closing restores
     await page.mouse.move(2, 46)
     await expect.poll(() => nativeVisible(app)).toBe(true)
 
+    await openSettings(page, 'General')
+    await page.getByRole('textbox', { name: 'Search settings' }).fill('horizontal')
+    const navigation = page.getByRole('navigation', { name: 'Settings sections' })
+    await expect(navigation.getByRole('button')).toHaveCount(1)
+    await navigation.getByRole('button', { name: 'Canvas', exact: true }).click()
+    await expect(page.getByRole('radio', { name: /Horizontal row/ })).toBeVisible()
+    await page.getByRole('button', { name: 'Done', exact: true }).click()
+    await expect(page.getByRole('dialog')).toHaveCount(0)
+
+    await page.getByLabel('Add or edit devices').click()
+    const phones = page.getByRole('button', { name: /^Phones/ })
+    await expect(phones).toHaveAttribute('aria-expanded', 'false')
+    await expect(page.getByLabel('Add iPhone SE to the suite')).toBeHidden()
+    await phones.click()
+    await expect(page.getByLabel('Add iPhone SE to the suite')).toBeVisible()
+    await expect(page.getByRole('button', { name: /^Show all .* phones/ })).toBeVisible()
+    await page.getByLabel('Search devices').fill('Pixel 8')
+    await expect(
+      page.locator('[data-testid="device-manager"] li[data-device-id]:visible')
+    ).toHaveCount(3)
+    await expect(page.getByRole('button', { name: /^Tablets/ })).toHaveCount(0)
+    await page.getByLabel('Search devices').fill('no-device-matches-this')
+    await expect(page.getByText(/Nothing matches/)).toBeVisible()
+    await page.getByLabel('Close devices').click()
+
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(720, 480))
-    await page.getByRole('button', { name: 'More options', exact: true }).click()
-    await page.getByRole('menuitem', { name: 'Dark theme', exact: true }).click()
-    await expect(page.locator('html')).toHaveClass(/dark/)
+    await openSettings(page, 'General')
     await page
-      .getByRole('button', { name: 'Emulate media, vision, network and location', exact: true })
+      .getByRole('radiogroup', { name: 'App appearance' })
+      .getByRole('radio', { name: 'Dark', exact: true })
       .click()
-    const box = await page.locator('[data-slot="popover-content"]').boundingBox()
+    await expect(page.locator('html')).toHaveClass(/dark/)
+    await openSettings(page, 'Emulation')
+    const box = await page.locator('[data-slot="dialog-content"]').boundingBox()
     const viewport = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }))
     expect(box).not.toBeNull()
     expect(box!.y).toBeGreaterThanOrEqual(0)

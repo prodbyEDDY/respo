@@ -1,3 +1,4 @@
+import { openSettings } from './settings'
 import {
   test,
   expect,
@@ -107,7 +108,8 @@ async function reloadAll(
   settled: 'ready' | 'failed'
 ): Promise<void> {
   const before = languages.length
-  await page.keyboard.press('Escape')
+  await page.getByRole('button', { name: 'Done', exact: true }).click()
+  await expect(page.getByRole('dialog')).toHaveCount(0)
   await page.locator('button[aria-label="Reload"]').click()
   if (settled === 'ready')
     await expect.poll(() => languages.length).toBeGreaterThanOrEqual(before + 5)
@@ -121,24 +123,19 @@ function launch(url: string): Promise<ElectronApplication> {
   })
 }
 
-const EMULATE_BUTTON = 'button[aria-label="Emulate media, vision, network and location"]'
+const EMULATE_BUTTON = 'button[aria-label="Settings"]'
 
 async function openEmulate(page: Page): Promise<void> {
   const popover = page.locator('[data-testid="emulate-popover"]')
-  if ((await popover.count()) === 0) await page.locator(EMULATE_BUTTON).click()
+  await openSettings(page, 'Emulation')
   await expect(popover).toBeVisible()
 }
 
 /** Pick one option of a Radix select by its trigger's label. */
 async function pick(page: Page, trigger: string, option: string | RegExp): Promise<void> {
-  // Right after the views reload, the popover can lose focus to a view and
-  // close itself between the open and the click — a race a person would
-  // answer by clicking again. So does this.
-  await expect(async () => {
-    await openEmulate(page)
-    await page.locator(`button[aria-label="${trigger}"]`).click({ timeout: 3000 })
-    await page.getByRole('option', { name: option }).click({ timeout: 3000 })
-  }).toPass({ timeout: 30_000 })
+  await openEmulate(page)
+  await page.getByRole('combobox', { name: trigger, exact: true }).click()
+  await page.getByRole('option', { name: option, exact: true }).click()
 }
 
 test('the emulation pack reaches every page, survives navigation, and restarts with the app', async () => {

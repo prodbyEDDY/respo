@@ -37,7 +37,7 @@ export function NativeSurfaceGuard(): React.JSX.Element | null {
         !open ||
         refreshTimer ||
         refreshing ||
-        !document.querySelector('[data-slot="popover-content"]')
+        !document.querySelector('[data-slot="popover-content"], [data-settings-panel]')
       )
         return
       if (

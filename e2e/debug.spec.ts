@@ -1,3 +1,4 @@
+import { openSettings } from './settings'
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test'
 import { resolve } from 'node:path'
 import { ownProfile } from './profile'
@@ -39,9 +40,9 @@ test('Debug ▸ Outline all elements outlines every page, survives a reload, and
     expect(await outlines(app, PROBE_URL)).toEqual(Array(5).fill('none'))
 
     const toggle = async (): Promise<void> => {
-      await page.getByRole('button', { name: 'More options' }).click()
-      await page.getByRole('menuitem', { name: 'Debug' }).hover()
-      await page.getByRole('menuitemcheckbox', { name: 'Outline all elements' }).click()
+      await openSettings(page, 'Developer tools')
+      await page.getByRole('checkbox', { name: 'Outline all elements' }).click()
+      await page.getByRole('button', { name: 'Done', exact: true }).click()
     }
 
     await toggle()

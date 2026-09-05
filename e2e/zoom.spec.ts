@@ -1,3 +1,4 @@
+import { settingsAction } from './settings'
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -84,8 +85,7 @@ async function zoomOut(
   times: number
 ): Promise<void> {
   for (let i = 0; i < times; i += 1) {
-    await window.getByRole('button', { name: 'More options' }).click()
-    await window.getByRole('menuitem', { name: 'Zoom out' }).click()
+    await settingsAction(window, 'Canvas', 'Zoom out')
   }
 }
 
@@ -118,8 +118,7 @@ test('canvas zoom scales the frame without touching the emulated viewport', asyn
 
     // Two rungs down the ladder: 1 -> 0.9 -> 0.75.
     for (let i = 0; i < 2; i += 1) {
-      await window.getByRole('button', { name: 'More options' }).click()
-      await window.getByRole('menuitem', { name: 'Zoom out' }).click()
+      await settingsAction(window, 'Canvas', 'Zoom out')
     }
 
     await expect
@@ -136,15 +135,14 @@ test('canvas zoom scales the frame without touching the emulated viewport', asyn
     expect(zoomed.mobile).toBe(true)
 
     // Back to 1:1 before rotating, so the two features are tested apart.
-    await window.getByRole('button', { name: 'More options' }).click()
-    await window.getByRole('menuitem', { name: 'Reset zoom' }).click()
+    await settingsAction(window, 'Canvas', 'Reset zoom')
     await expect
       .poll(async () => iphone(await viewStates(app, PROBE_URL)).zoomFactor)
       .toBeCloseTo(1, 2)
 
     // Rotation is the opposite case: it *does* re-run the CDP metrics override,
     // so the page's own idea of its viewport is what changes.
-    await window.getByRole('button', { name: 'Rotate all devices' }).click()
+    await settingsAction(window, 'Canvas', 'Rotate all devices')
 
     await expect
       .poll(async () => iphone(await viewStates(app, PROBE_URL)).innerWidth, {
@@ -215,8 +213,7 @@ test('a desktop device keeps its own viewport at 50% canvas zoom', async () => {
     // Polled, like the way down: `setZoomFactor` is synchronous and the metrics
     // override that answers it is a protocol round trip, so the page is briefly
     // — for about a frame — laid out at the zoom it is leaving.
-    await window.getByRole('button', { name: 'More options' }).click()
-    await window.getByRole('menuitem', { name: 'Reset zoom' }).click()
+    await settingsAction(window, 'Canvas', 'Reset zoom')
     await expect
       .poll(async () => desktop(await viewStates(app, PROBE_URL)).zoomFactor)
       .toBeCloseTo(1, 2)
@@ -258,8 +255,7 @@ test('a mobile device is painted at the canvas zoom, not clipped by it', async (
   try {
     const window = await app.firstWindow()
     await expect(window.locator('[data-load-state="ready"]')).toHaveCount(5)
-    await window.getByRole('button', { name: 'More options' }).click()
-    await window.getByRole('menuitem', { name: 'Reset zoom' }).click()
+    await settingsAction(window, 'Canvas', 'Reset zoom')
     await zoomOut(window, 2)
 
     // The iPhone's surface: its size, and the darkness of the pixels just
