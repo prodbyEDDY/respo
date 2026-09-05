@@ -1,6 +1,9 @@
 import { expect, type Page } from '@playwright/test'
 
 export async function openSettings(page: Page, section: string): Promise<void> {
+  // Radix temporarily hides the parent dialog from the accessibility tree
+  // until a nested select unmounts. Wait before looking for the dialog/trigger.
+  await expect(page.locator('[data-slot="select-content"]')).toHaveCount(0)
   const dialog = page.getByRole('dialog', { name: 'Settings', exact: true })
   if ((await dialog.count()) > 0 && (await dialog.getAttribute('data-state')) === 'closed')
     await expect(dialog).toHaveCount(0)
