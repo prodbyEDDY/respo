@@ -148,6 +148,9 @@ test('the emulation pack reaches every page, survives navigation, and restarts w
   try {
     const page = await app.firstWindow()
     await expectEveryView(app, url, (p) => p.innerWidth > 0, 'views never reported a probe')
+    // The host's own environment, so the reset check below does not assume a
+    // machine without reduced motion (CI runners have it on) in en-US/UTC.
+    const baseline = (await envProbes(app, url))[0]
     await expect(page.locator(EMULATE_BUTTON)).toHaveAttribute('data-emulating', 'off')
     languages.length = 0
 
@@ -216,7 +219,11 @@ test('the emulation pack reaches every page, survives navigation, and restarts w
     await expectEveryView(
       app,
       url,
-      (p) => p.online && !p.reducedMotion && p.language !== 'de-DE' && p.timeZone !== 'Asia/Tokyo',
+      (p) =>
+        p.online &&
+        p.reducedMotion === baseline.reducedMotion &&
+        p.language === baseline.language &&
+        p.timeZone === baseline.timeZone,
       'reset did not restore the real environment'
     )
 
