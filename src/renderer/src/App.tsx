@@ -21,11 +21,13 @@ import { useBookmarks } from '@renderer/stores/bookmarks'
 import { useDevices } from '@renderer/stores/devices'
 import { attachDiagnosticsBridge, useDiagnostics } from '@renderer/stores/diagnostics'
 import { useEmulation } from '@renderer/stores/emulation'
-import { attachGuidesBridge, useGuides } from '@renderer/stores/guides'
+import { useDesignOverlay } from '@renderer/stores/design-overlay'
+import { useGuides } from '@renderer/stores/guides'
 import { applyRotation, useLayout } from '@renderer/stores/layout'
 import { attachNavigationBridge, useNavigation } from '@renderer/stores/navigation'
 import { attachPanelsBridge, selectDockVisible, usePanels } from '@renderer/stores/panels'
 import { attachPermissionsBridge } from '@renderer/stores/permissions'
+import { attachScrollBridge, useScroll } from '@renderer/stores/scroll'
 import { useSettings } from '@renderer/stores/settings'
 import { attachShotsBridge, useShots } from '@renderer/stores/shots'
 import { useSync } from '@renderer/stores/sync'
@@ -87,6 +89,7 @@ function usePersistedState(): boolean {
         // this only mirrors it so the popover and the badge agree with it.
         useEmulation.getState().hydrate(state.emulation)
         useGuides.getState().hydrate(state.guides)
+        useDesignOverlay.getState().hydrate(state.designOverlays)
         // The home page itself is main's to apply — it decides the start url
         // before the renderer has hydrated — so this only mirrors it.
         useBookmarks.getState().hydrate(state)
@@ -155,8 +158,8 @@ function App(): React.JSX.Element {
   // Console errors and overflow per device, batched like load events.
   useEffect(() => attachDiagnosticsBridge(), [])
 
-  // Scroll offsets of the devices showing rulers, batched the same way.
-  useEffect(() => attachGuidesBridge(), [])
+  // Scroll offsets of the devices something follows, batched the same way.
+  useEffect(() => attachScrollBridge(), [])
 
   // mod+i arms the element picker, Escape puts it away.
   useInspectHotkeys()
@@ -193,6 +196,7 @@ function App(): React.JSX.Element {
     useNavigation.getState().pruneDevices(ids)
     useDiagnostics.getState().pruneDevices(ids)
     useGuides.getState().pruneDevices(ids)
+    useScroll.getState().pruneDevices(ids)
   }, [devices])
 
   // Point every view at the start url. It arrives from main a round trip after

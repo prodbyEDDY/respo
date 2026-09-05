@@ -8,6 +8,7 @@ vi.mock('@renderer/lib/persistence', () => ({
 }))
 
 import { __flushGuidesSaveForTests, selectGuides, useGuides } from '../guides'
+import { __resetScrollTrackingForTests, useScroll } from '../scroll'
 
 type InvokeCall = { channel: string; args: unknown[] }
 const calls: InvokeCall[] = []
@@ -19,12 +20,14 @@ beforeEach(() => {
   const respo = {
     invoke: (channel: string, ...args: unknown[]) => {
       calls.push({ channel, args })
-      return Promise.resolve(channel === 'rulers:set' ? scrollAnswer : undefined)
+      return Promise.resolve(channel === 'scroll:track' ? scrollAnswer : undefined)
     },
     onMainEvent: () => () => undefined
   } as unknown as RespoApi
   ;(window as Window & { respo?: RespoApi }).respo = respo
-  useGuides.setState({ rulers: {}, guides: {}, scroll: {} })
+  useGuides.setState({ rulers: {}, guides: {} })
+  useScroll.setState({ positions: {} })
+  __resetScrollTrackingForTests()
   savePersistedState.mockClear()
 })
 
@@ -35,13 +38,13 @@ afterEach(() => {
 })
 
 describe('guides store — rulers', () => {
-  it('tells main when a device shows its rulers, and seeds the scroll offset it answers with', async () => {
+  it('asks main to track the scroll of a device that shows its rulers, and seeds the offset it answers with', async () => {
     scrollAnswer = { deviceId: 'a', x: 0, y: 420 }
     useGuides.getState().setRulers('a', true)
 
     expect(useGuides.getState().rulers).toEqual({ a: true })
-    expect(calls).toEqual([{ channel: 'rulers:set', args: ['a', true] }])
-    await vi.waitFor(() => expect(useGuides.getState().scroll['a']).toEqual({ x: 0, y: 420 }))
+    expect(calls).toEqual([{ channel: 'scroll:track', args: ['a', true] }])
+    await vi.waitFor(() => expect(useScroll.getState().positions['a']).toEqual({ x: 0, y: 420 }))
   })
 
   it('toggles, and says nothing when the state is already what it is', () => {
@@ -113,24 +116,14 @@ describe('guides store — guides', () => {
   })
 })
 
-describe('guides store — scroll and pruning', () => {
-  it('installs a scroll batch per device', () => {
-    useGuides.getState().applyScroll([
-      { deviceId: 'a', x: 0, y: 10 },
-      { deviceId: 'b', x: 5, y: 0 }
-    ])
-    expect(useGuides.getState().scroll).toEqual({ a: { x: 0, y: 10 }, b: { x: 5, y: 0 } })
-  })
-
-  it('forgets the rulers and scroll of a device that left, and keeps the guides', () => {
+describe('guides store — pruning', () => {
+  it('forgets the rulers of a device that left, and keeps the guides', () => {
     useGuides.getState().setRulers('a', true)
-    useGuides.getState().applyScroll([{ deviceId: 'a', x: 0, y: 10 }])
     useGuides.getState().addGuide('393x852', 'v', 10)
 
     useGuides.getState().pruneDevices(['b'])
 
     expect(useGuides.getState().rulers).toEqual({})
-    expect(useGuides.getState().scroll).toEqual({})
     expect(useGuides.getState().guides['393x852']).toEqual({ h: [], v: [10] })
   })
 })

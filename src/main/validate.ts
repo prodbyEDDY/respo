@@ -18,6 +18,8 @@ import {
   type GuideSet,
   type HighlightTarget,
   type InputEventPayload,
+  MAX_OVERLAY_IMAGE_BYTES,
+  type OverlayApply,
   type PermissionDecision,
   type PermissionType,
   type ReloadRequest,
@@ -43,12 +45,16 @@ import {
   MAX_PATH_LENGTH,
   MAX_TITLE_LENGTH,
   MAX_URL_LENGTH,
+  IMAGE_ID_RE,
+  MAX_OVERLAY_SIZES,
   sanitizeGuideAxis,
+  sanitizeOverlay,
   type Bookmark,
   type DevtoolsSettings,
   type EmulationSettings,
   type GuidesDocument,
   type LayoutSettings,
+  type OverlaysDocument,
   type PersistedState,
   type ScreenshotSettings,
   type SecuritySettings,
@@ -236,6 +242,9 @@ export function validatePersistedPatch(
   if (patch['emulation'] !== undefined)
     out.emulation = validateEmulationSettings(patch['emulation'])
   if (patch['guides'] !== undefined) out.guides = validateGuidesDocument(patch['guides'])
+  if (patch['designOverlays'] !== undefined) {
+    out.designOverlays = validateOverlaysDocument(patch['designOverlays'])
+  }
   // `permissions` is deliberately absent, and it is not an oversight: it is
   // main's field, like the screenshots folder above. A patch that could set it
   // would be a renderer writing `{"https://evil.example": {"camera": "allow"}}`
@@ -747,6 +756,71 @@ export function validateOptionalDevtoolsPanel(value: unknown): DevtoolsPanelName
     fail("devtools:open expects 'elements', 'console' or nothing")
   }
   return value
+}
+
+/** The only image types a design overlay may be: what Chromium decodes and CSS paints. */
+const OVERLAY_DATA_URL_RE = /^data:image\/(?:png|jpeg|gif|webp);base64,[A-Za-z0-9+/]+=*$/
+
+/**
+ * Validate an `overlay:store-image` payload: a base64 data url of a raster
+ * type, no larger than the cap. The bytes themselves are decoded in main
+ * afterwards — a data url that parses is not yet an image.
+ */
+export function validateOverlayDataUrl(value: unknown): string {
+  if (typeof value !== 'string' || value === '') fail('overlay:store-image expects a data url')
+  // Base64 grows bytes by 4/3; the prefix is a few dozen characters.
+  if (value.length > Math.ceil((MAX_OVERLAY_IMAGE_BYTES * 4) / 3) + 64) {
+    fail('overlay:store-image image is too large')
+  }
+  if (!OVERLAY_DATA_URL_RE.test(value)) {
+    fail('overlay:store-image expects a png, jpeg, gif or webp data url')
+  }
+  return value
+}
+
+/** Validate an image content id. */
+export function validateImageId(value: unknown): string {
+  if (typeof value !== 'string' || !IMAGE_ID_RE.test(value)) {
+    fail('overlay expects an image id')
+  }
+  return value
+}
+
+/** Validate an `overlay:set` payload, or `null` for "take it off". */
+export function validateOptionalOverlayApply(value: unknown): OverlayApply | null {
+  if (value === null) return null
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    fail('overlay:set expects an overlay or null')
+  }
+  const apply = value as Record<string, unknown>
+  const opacity = apply['opacity']
+  const curtain = apply['curtain']
+  if (typeof opacity !== 'number' || !Number.isFinite(opacity) || opacity < 0 || opacity > 1) {
+    fail('overlay:set opacity must be in [0, 1]')
+  }
+  if (typeof curtain !== 'number' || !Number.isFinite(curtain) || curtain < 0 || curtain > 1) {
+    fail('overlay:set curtain must be in [0, 1]')
+  }
+  return { imageId: validateImageId(apply['imageId']), opacity, curtain }
+}
+
+/** Validate the persisted overlays document. */
+function validateOverlaysDocument(value: unknown): OverlaysDocument {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    fail('store:save designOverlays must be an object')
+  }
+  const entries = Object.entries(value as Record<string, unknown>)
+  if (entries.length > MAX_OVERLAY_SIZES) {
+    fail(`store:save designOverlays accepts at most ${MAX_OVERLAY_SIZES} sizes`)
+  }
+  const out: OverlaysDocument = {}
+  for (const [key, entry] of entries) {
+    if (!/^\d{1,5}x\d{1,5}$/.test(key)) fail('store:save designOverlays keys must be WxH')
+    const overlay = sanitizeOverlay(entry)
+    if (overlay === null) fail('store:save designOverlays entry is not an overlay')
+    out[key] = overlay
+  }
+  return out
 }
 
 /** Validate a boolean argument. `what` names the channel for the error. */

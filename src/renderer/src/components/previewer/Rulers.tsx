@@ -10,6 +10,7 @@ import {
   stripPosition
 } from '@renderer/lib/rulers'
 import { selectGuides, useGuides, type GuideAxis } from '@renderer/stores/guides'
+import { useScroll } from '@renderer/stores/scroll'
 
 /** How far off the strip a marker has to be dragged to be dropped. */
 const DROP_DISTANCE = 24
@@ -287,7 +288,7 @@ export function Rulers({
 }: RulersProps): React.JSX.Element {
   const key = guidesKeyOf(width, height)
   const guides = useGuides((s) => selectGuides(s, key))
-  const scroll = useGuides((s) => s.scroll[deviceId])
+  const scroll = useScroll((s) => s.positions[deviceId])
   const addGuide = useGuides((s) => s.addGuide)
   const moveGuide = useGuides((s) => s.moveGuide)
   const removeGuide = useGuides((s) => s.removeGuide)

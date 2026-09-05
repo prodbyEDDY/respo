@@ -95,6 +95,8 @@ type Entry = {
 export class GuidesManager implements GuidesRegistry {
   private readonly cdp: GuidesCdp
   private readonly devices = new Map<string, Entry>()
+  /** Guides sent for a device that has not registered yet (a restart). */
+  private readonly pending = new Map<string, GuideSet>()
   private disposed = false
 
   constructor(options: { cdp: GuidesCdp }) {
@@ -108,21 +110,29 @@ export class GuidesManager implements GuidesRegistry {
 
   registerDevice(registration: GuidesDeviceRegistration): void {
     if (this.disposed) return
-    this.devices.set(registration.deviceId, {
+    const entry: Entry = {
       deviceId: registration.deviceId,
       target: registration.target,
       css: registration.css,
-      guides: { h: [], v: [] },
+      guides: this.pending.get(registration.deviceId) ?? { h: [], v: [] },
       key: null,
       chain: Promise.resolve()
-    })
+    }
+    this.pending.delete(registration.deviceId)
+    this.devices.set(entry.deviceId, entry)
+    if (entry.guides.h.length > 0 || entry.guides.v.length > 0) void this.apply(entry)
   }
 
   /** Put a set of guides on one device's page. Empty removes the layer. */
   set(deviceId: string, guides: GuideSet): Promise<void> {
+    if (this.disposed) return Promise.resolve()
+    const copy = { h: [...guides.h], v: [...guides.v] }
     const entry = this.devices.get(deviceId)
-    if (entry === undefined || this.disposed) return Promise.resolve()
-    entry.guides = { h: [...guides.h], v: [...guides.v] }
+    if (entry === undefined) {
+      this.pending.set(deviceId, copy)
+      return Promise.resolve()
+    }
+    entry.guides = copy
     return this.apply(entry)
   }
 
@@ -146,10 +156,11 @@ export class GuidesManager implements GuidesRegistry {
 
   unregisterDevice(deviceId: string): void {
     this.devices.delete(deviceId)
+    this.pending.delete(deviceId)
   }
 
   retain(live: ReadonlySet<string>): void {
-    for (const deviceId of [...this.devices.keys()]) {
+    for (const deviceId of [...this.devices.keys(), ...this.pending.keys()]) {
       if (!live.has(deviceId)) this.unregisterDevice(deviceId)
     }
   }
@@ -158,6 +169,7 @@ export class GuidesManager implements GuidesRegistry {
     if (this.disposed) return
     this.disposed = true
     this.devices.clear()
+    this.pending.clear()
   }
 
   private apply(entry: Entry): Promise<void> {

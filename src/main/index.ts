@@ -4,6 +4,7 @@ import {
   clipboard,
   ClipboardItem,
   dialog,
+  nativeImage,
   nativeTheme,
   session,
   shell
@@ -24,6 +25,7 @@ import { authHostLabel, authRealmLabel, createAuthManager, type AuthManager } fr
 import { CDPController } from './cdp-controller'
 import { clearBrowsingData } from './clear-data'
 import { DevtoolsManager } from './devtools-manager'
+import { DesignOverlayManager } from './design-overlay'
 import { DiagnosticsManager } from './diagnostics'
 import { EmulationManager } from './emulation'
 import { GuidesManager } from './guides'
@@ -63,10 +65,13 @@ import {
   validateGuideSet,
   validateHighlightTarget,
   validateHistoryQuery,
+  validateImageId,
   validateLeadDeviceId,
   validateOptionalDeviceId,
   validateOptionalDevtoolsPanel,
+  validateOptionalOverlayApply,
   validateOptionalVisionDeficiency,
+  validateOverlayDataUrl,
   validatePermissionDecision,
   validatePermissionType,
   validatePersistedPatch,
@@ -111,6 +116,8 @@ let emulation: EmulationManager | null = null
 let diagnostics: DiagnosticsManager | null = null
 /** Ruler guides, as CSS layers on the pages. */
 let guides: GuidesManager | null = null
+/** Design overlays: the image store, and the CSS layers on the pages. */
+let overlays: DesignOverlayManager | null = null
 /** Scroll offsets of the devices whose rulers are showing, one message per turn. */
 let scrollStates: KeyedBatcher<ScrollStatePayload> | null = null
 /** Devices whose rulers are showing — the only ones whose scroll travels. */
@@ -348,6 +355,19 @@ function createWindow(): void {
   // Guides are stylesheets on the pages; the manager only needs to measure.
   guides = new GuidesManager({ cdp })
 
+  // Design images live under their own store key — megabytes, not settings —
+  // and are decoded by Chromium itself before anything is kept.
+  if (storeBackend !== null) {
+    overlays = new DesignOverlayManager({
+      backend: storeBackend,
+      decode: (bytes) => {
+        const image = nativeImage.createFromBuffer(bytes)
+        if (image.isEmpty()) return null
+        return image.getSize()
+      }
+    })
+  }
+
   viewManager = new ViewManager(
     createElectronViewBackend(mainWindow, {
       canvasLayer: process.env['RESPO_CANVAS_LAYER'] !== '0',
@@ -359,6 +379,7 @@ function createWindow(): void {
       emulation,
       diagnostics,
       guides,
+      ...(overlays === null ? {} : { overlays }),
       // Popups belong to the viewport the user is interacting with — the same
       // election the mirroring follows.
       isLead: (deviceId) => syncEngine?.lead() === deviceId,
@@ -400,6 +421,8 @@ function createWindow(): void {
     diagnostics = null
     guides?.dispose()
     guides = null
+    overlays?.dispose()
+    overlays = null
     rulers.clear()
     scrollStates?.cancel()
     scrollStates = null
@@ -557,6 +580,7 @@ function registerIpcHandlers(): void {
     emulation?.retain(live)
     diagnostics?.retain(live)
     guides?.retain(live)
+    overlays?.retain(live)
     for (const deviceId of [...rulers]) if (!live.has(deviceId)) rulers.delete(deviceId)
     // A lead that left the canvas must not keep deciding what gets recorded —
     // or whose cookies a clear would take (`lead-tracker.ts`).
@@ -819,9 +843,9 @@ function registerIpcHandlers(): void {
 
   // Rulers and guides. A device with rulers showing reports its scroll
   // offsets (see `scroll-state`); the guides are a stylesheet on its page.
-  registerHandler('rulers:set', async (_event, deviceId, enabled) => {
+  registerHandler('scroll:track', async (_event, deviceId, enabled) => {
     const id = validateDeviceId(deviceId)
-    const on = validateBoolean(enabled, 'rulers:set')
+    const on = validateBoolean(enabled, 'scroll:track')
     if (on) rulers.add(id)
     else rulers.delete(id)
     syncEngine?.setReporting(id, on)
@@ -830,6 +854,23 @@ function registerIpcHandlers(): void {
 
   registerHandler('guides:set', (_event, deviceId, set) =>
     guides?.set(validateDeviceId(deviceId), validateGuideSet(set))
+  )
+
+  // Design overlays. The bytes travel once (`store-image`), then only an id.
+  registerHandler(
+    'overlay:store-image',
+    (_event, dataUrl) =>
+      overlays?.storeImage(validateOverlayDataUrl(dataUrl)) ?? {
+        ok: false,
+        reason: 'unreadable',
+        message: 'Overlays are not available.'
+      }
+  )
+
+  registerHandler('overlay:image', (_event, id) => overlays?.image(validateImageId(id)) ?? null)
+
+  registerHandler('overlay:set', (_event, deviceId, apply) =>
+    overlays?.set(validateDeviceId(deviceId), validateOptionalOverlayApply(apply))
   )
 
   // The one-way stream from the device views. Its sender is an untrusted page,
@@ -951,6 +992,8 @@ app.on('before-quit', () => {
   viewManager = null
   emulation?.dispose()
   emulation = null
+  overlays?.dispose()
+  overlays = null
   guides?.dispose()
   guides = null
   scrollStates?.cancel()

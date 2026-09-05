@@ -133,4 +133,16 @@ describe('GuidesManager', () => {
     expect(css.inserted).toEqual([])
     expect(manager.deviceIds()).toEqual([])
   })
+
+  it('keeps a set that arrived before the view registered, and applies it then', async () => {
+    const early = new GuidesManager({ cdp })
+    await early.set('later', { h: [], v: [100] })
+    expect(cdp.evaluations).toBe(0)
+
+    const layer = fakeCss()
+    early.registerDevice({ deviceId: 'later', target: target(), css: layer })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(layer.inserted).toHaveLength(1)
+    expect(layer.inserted[0]).toContain('transparent 100px')
+  })
 })

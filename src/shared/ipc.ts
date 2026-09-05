@@ -410,6 +410,37 @@ export type DevtoolsPanelName = 'elements' | 'console'
 /** Where one device's document is scrolled to, in its own CSS pixels. */
 export type ScrollStatePayload = { deviceId: string; x: number; y: number }
 
+/** A design image main keeps, as the renderer sees it. */
+export type OverlayImage = {
+  /** Content id: the first sixteen hex digits of the bytes' SHA-256. */
+  id: string
+  width: number
+  height: number
+  bytes: number
+  /** The image itself. Sent on request only — the dialog and the side panel. */
+  dataUrl: string
+}
+
+/** Largest design image worth keeping. Past this it is not a mockup, it is a photo. */
+export const MAX_OVERLAY_IMAGE_BYTES = 10 * 1024 * 1024
+
+export type OverlayStoreResult =
+  | { ok: true; image: Omit<OverlayImage, 'dataUrl'> }
+  /** Larger than `MAX_OVERLAY_IMAGE_BYTES`, or not an image Chromium can decode. */
+  | { ok: false; reason: 'too-large' | 'unreadable'; message: string }
+
+/** How the overlay is shown: over the page, or in a panel beside the frame. */
+export type OverlayMode = 'overlay' | 'side-by-side'
+
+/** What the CSS layer over one page looks like. */
+export type OverlayApply = {
+  imageId: string
+  /** 0..1. */
+  opacity: number
+  /** How much of the image, from the left, is hidden: 0..1. */
+  curtain: number
+}
+
 /**
  * The guides of one viewport size: `h` are horizontal lines (y positions),
  * `v` vertical ones (x positions), in the page's CSS pixels from the
@@ -786,18 +817,37 @@ export type IpcInvokeMap = {
   /** Every device's diagnostics, for a renderer that has just started. */
   'diagnostics:get': { args: []; result: DiagnosticsPayload[] }
   /**
-   * Show or hide one device's rulers, as far as main is concerned: a device
-   * with rulers reports its scroll offsets (see `scroll-state`). Answers with
-   * where the page is right now, so the ruler starts in the right place
-   * rather than at zero until the first scroll.
+   * Ask one device to report its scroll offsets, or stop (see `scroll-state`).
+   * The rulers and a side-by-side overlay both need it; the renderer counts
+   * the reasons and main sees a boolean. Answers with where the page is right
+   * now, so a ruler starts in the right place rather than at zero until the
+   * first scroll.
    */
-  'rulers:set': { args: [string, boolean]; result: ScrollStatePayload | null }
+  'scroll:track': { args: [string, boolean]; result: ScrollStatePayload | null }
   /**
    * Put a set of guides on one device's page, as a CSS layer that scrolls
    * with the document. An empty set removes the layer. The renderer sends
    * the set for the device's current size; the document is its to keep.
    */
   'guides:set': { args: [string, GuideSet]; result: void }
+  /**
+   * Keep a design image the user picked.
+   *
+   * The renderer reads the file it was handed (`<input type="file">` — it
+   * learns no path and writes nothing) and sends the data url once; main
+   * checks the size and that it decodes as an image, stores it under a
+   * content id in its own store key (100 MB total, least recently used goes
+   * first), and answers with the id and the dimensions.
+   */
+  'overlay:store-image': { args: [string]; result: OverlayStoreResult }
+  /** A stored image, for the dialog's thumbnail and the side-by-side panel. `null` if evicted. */
+  'overlay:image': { args: [string]; result: OverlayImage | null }
+  /**
+   * Put a design image over one device's page as a CSS layer, or (`null`)
+   * take it off. Opacity and curtain travel with it; the image is looked up
+   * by id in main, so the renderer never ships megabytes per change.
+   */
+  'overlay:set': { args: [string, OverlayApply | null]; result: void }
 }
 
 export type IpcChannel = keyof IpcInvokeMap
@@ -851,8 +901,11 @@ const CHANNEL_REGISTRY: Record<IpcChannel, true> = {
   'emulation:get': true,
   'diagnostics:highlight': true,
   'diagnostics:get': true,
-  'rulers:set': true,
-  'guides:set': true
+  'scroll:track': true,
+  'guides:set': true,
+  'overlay:store-image': true,
+  'overlay:image': true,
+  'overlay:set': true
 }
 
 export const IPC_CHANNELS: readonly IpcChannel[] = Object.keys(CHANNEL_REGISTRY) as IpcChannel[]

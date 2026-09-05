@@ -17,6 +17,7 @@ import type {
   DevtoolsPanel,
   DevtoolsRegistry
 } from './devtools-manager'
+import type { OverlayRegistry } from './design-overlay'
 import type { DiagnosticsRegistry } from './diagnostics'
 import type { EmulationRegistry } from './emulation'
 import type { GuidesRegistry } from './guides'
@@ -229,6 +230,8 @@ export type ElectronViewBackendOptions = {
   diagnostics?: DiagnosticsRegistry
   /** Told the same, so ruler guides are put back on every new document. */
   guides?: GuidesRegistry
+  /** Told the same, so a design overlay is put back on every new document. */
+  overlays?: OverlayRegistry
   /**
    * Told which icons a page declared, so history can cache one.
    *
@@ -373,6 +376,7 @@ export function createElectronViewBackend(
   const emulation = options.emulation ?? null
   const diagnostics = options.diagnostics ?? null
   const guides = options.guides ?? null
+  const overlays = options.overlays ?? null
   const isLead = options.isLead ?? null
   const onFavicon = options.onFavicon ?? null
   /** Windows pages opened from the lead. Closed with the canvas. */
@@ -522,6 +526,7 @@ export function createElectronViewBackend(
         }
         await diagnostics?.registerDevice({ deviceId: device.id, target: wc, css })
         guides?.registerDevice({ deviceId: device.id, target: wc, css })
+        overlays?.registerDevice({ deviceId: device.id, target: wc, css })
       })
 
       // A finished document is what the overflow scan looks at, and what the
@@ -532,6 +537,7 @@ export function createElectronViewBackend(
         if (wc.isDestroyed() || isPrimer(wc.getURL())) return
         diagnostics?.refresh(device.id)
         guides?.refresh(device.id)
+        overlays?.refresh(device.id)
       })
 
       return {
@@ -637,6 +643,7 @@ export function createElectronViewBackend(
           emulation?.unregisterDevice(device.id)
           diagnostics?.unregisterDevice(device.id)
           guides?.unregisterDevice(device.id)
+          overlays?.unregisterDevice(device.id)
           // Before the `webContents` goes: the manager still has to close a
           // panel that was open on it, and destroy the frontend behind it.
           devtools?.unregisterDevice(device.id)

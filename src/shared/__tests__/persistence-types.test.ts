@@ -731,3 +731,58 @@ describe('the guides slice', () => {
     expect(merged.guides['393x852']).not.toBe(guides['393x852'])
   })
 })
+
+describe('the design overlays slice', () => {
+  function stored(over: Record<string, unknown>): PersistedState {
+    return migratePersistedState({ ...defaultPersistedState(), ...over }).state
+  }
+
+  it('starts empty', () => {
+    expect(defaultPersistedState().designOverlays).toEqual({})
+  })
+
+  it('reads an overlay back, repairing the fractions and dropping one without an image', () => {
+    const state = stored({
+      designOverlays: {
+        '393x852': { imageId: '0123456789abcdef', mode: 'side-by-side', opacity: 7, curtain: 'x' },
+        '1440x900': { mode: 'overlay', opacity: 1 },
+        phone: { imageId: '0123456789abcdef' }
+      }
+    })
+    expect(state.designOverlays).toEqual({
+      '393x852': {
+        imageId: '0123456789abcdef',
+        mode: 'side-by-side',
+        opacity: 1,
+        curtain: 0,
+        enabled: true
+      }
+    })
+  })
+
+  it('only a literal false switches an overlay off', () => {
+    expect(
+      stored({ designOverlays: { '393x852': { imageId: '0123456789abcdef', enabled: false } } })
+        .designOverlays['393x852']?.enabled
+    ).toBe(false)
+    expect(
+      stored({ designOverlays: { '393x852': { imageId: '0123456789abcdef', enabled: 'no' } } })
+        .designOverlays['393x852']?.enabled
+    ).toBe(true)
+  })
+
+  it('merges by copy', () => {
+    const designOverlays = {
+      '393x852': {
+        imageId: '0123456789abcdef',
+        mode: 'overlay' as const,
+        opacity: 0.5,
+        curtain: 0,
+        enabled: true
+      }
+    }
+    const merged = mergePersistedState(defaultPersistedState(), { designOverlays })
+    expect(merged.designOverlays).toEqual(designOverlays)
+    expect(merged.designOverlays['393x852']).not.toBe(designOverlays['393x852'])
+  })
+})

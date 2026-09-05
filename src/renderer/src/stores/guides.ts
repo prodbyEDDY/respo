@@ -1,26 +1,25 @@
 import { create } from 'zustand'
-import type { GuideSet, MainEvent, RespoApi, ScrollStatePayload } from '@shared/ipc'
+import type { GuideSet } from '@shared/ipc'
 import {
   MAX_GUIDES_PER_AXIS,
   sanitizeGuideAxis,
   type GuidesDocument
 } from '@shared/persistence-types'
-import { ipcBridge } from '@renderer/lib/ipc'
 import { savePersistedState } from '@renderer/lib/persistence'
+import { useScroll } from './scroll'
 
 export type GuideAxis = 'h' | 'v'
 
 /**
  * The renderer's half of rulers and guides.
  *
- * Three things, three lifetimes:
+ * Two things, two lifetimes:
  * - `rulers` — which devices show their rulers. A view mode, so it lives for
- *   the session and is not written down.
+ *   the session and is not written down. A device with rulers is asked to
+ *   report its scroll offset (`stores/scroll.ts`), which the strips follow.
  * - `guides` — the lines, by viewport size (`393x852`). The document's, and
  *   written on a debounce: a marker being dragged is one guide moving, not a
  *   hundred documents.
- * - `scroll` — where each ruler-bearing device's page is, as main last said.
- *   Main only asks a device to report while its rulers are showing.
  *
  * The lines themselves are drawn in the page by main (`guides:set`); the
  * frame sends its size's set whenever it changes. See `main/guides.ts`.
@@ -28,7 +27,6 @@ export type GuideAxis = 'h' | 'v'
 export interface GuidesState {
   rulers: Record<string, true>
   guides: GuidesDocument
-  scroll: Record<string, { x: number; y: number }>
 
   /** Show or hide one device's rulers. */
   setRulers: (deviceId: string, on: boolean) => void
@@ -42,8 +40,6 @@ export interface GuidesState {
   removeGuide: (key: string, axis: GuideAxis, index: number) => void
   /** Drop every guide of one viewport size. */
   clearGuides: (key: string) => void
-  /** Install one batched `scroll-state` event. Never called per event. */
-  applyScroll: (batch: readonly ScrollStatePayload[]) => void
   /** Forget devices that are no longer on the canvas. */
   pruneDevices: (deviceIds: readonly string[]) => void
   /** Install what main restored at boot. Writes nothing back. */
@@ -58,15 +54,6 @@ export const NO_GUIDES: GuideSet = { h: [], v: [] }
  * change per frame; the write happens once the pointer has settled.
  */
 export const GUIDES_SAVE_DEBOUNCE_MS = 250
-
-function withBridge<T>(run: (bridge: RespoApi) => Promise<T>, then?: (answer: T) => void): void {
-  const bridge = ipcBridge()
-  // Absent outside Electron (unit tests, the dev server in a plain browser).
-  if (bridge === null) return
-  void run(bridge).then(then, (error: unknown) => {
-    console.error('guides ipc failed', error)
-  })
-}
 
 let saveTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -98,7 +85,6 @@ function withAxis(
 export const useGuides = create<GuidesState>((set, get) => ({
   rulers: {},
   guides: {},
-  scroll: {},
 
   setRulers: (deviceId, on) => {
     const { rulers } = get()
@@ -107,15 +93,8 @@ export const useGuides = create<GuidesState>((set, get) => ({
     if (on) next[deviceId] = true
     else delete next[deviceId]
     set({ rulers: next })
-    // Main answers with where the page is, so the ruler starts in the right
-    // place rather than at zero until the first scroll.
-    withBridge(
-      (bridge) => bridge.invoke('rulers:set', deviceId, on),
-      (position) => {
-        if (position === null || !get().rulers[deviceId]) return
-        set({ scroll: { ...get().scroll, [deviceId]: { x: position.x, y: position.y } } })
-      }
-    )
+    if (on) useScroll.getState().track(deviceId, 'rulers')
+    else useScroll.getState().untrack(deviceId, 'rulers')
   },
 
   toggleRulers: (deviceId) => {
@@ -161,23 +140,13 @@ export const useGuides = create<GuidesState>((set, get) => ({
     scheduleSave()
   },
 
-  applyScroll: (batch) => {
-    if (batch.length === 0) return
-    const scroll = { ...get().scroll }
-    for (const payload of batch) scroll[payload.deviceId] = { x: payload.x, y: payload.y }
-    set({ scroll })
-  },
-
   pruneDevices: (deviceIds) => {
     const live = new Set(deviceIds)
-    const { rulers, scroll } = get()
-    const gone = [...Object.keys(rulers), ...Object.keys(scroll)].some((id) => !live.has(id))
-    if (!gone) return
+    const { rulers } = get()
+    if (Object.keys(rulers).every((id) => live.has(id))) return
     const nextRulers: Record<string, true> = {}
     for (const id of Object.keys(rulers)) if (live.has(id)) nextRulers[id] = true
-    const nextScroll: Record<string, { x: number; y: number }> = {}
-    for (const [id, position] of Object.entries(scroll)) if (live.has(id)) nextScroll[id] = position
-    set({ rulers: nextRulers, scroll: nextScroll })
+    set({ rulers: nextRulers })
   },
 
   hydrate: (guides) => {
@@ -196,34 +165,4 @@ export function __flushGuidesSaveForTests(): void {
   clearTimeout(saveTimer)
   saveTimer = null
   savePersistedState({ guides: useGuides.getState().guides })
-}
-
-let unsubscribe: (() => void) | null = null
-let subscribers = 0
-
-/**
- * Subscribe the store to main's batched `scroll-state` events. Reference-
- * counted like the other bridges, for StrictMode.
- */
-export function attachGuidesBridge(): () => void {
-  subscribers += 1
-
-  if (unsubscribe === null) {
-    const bridge = ipcBridge()
-    unsubscribe =
-      bridge?.onMainEvent((event: MainEvent) => {
-        if (event.type !== 'scroll-state') return
-        useGuides.getState().applyScroll(event.payload)
-      }) ?? (() => undefined)
-  }
-
-  let released = false
-  return () => {
-    if (released) return
-    released = true
-    subscribers -= 1
-    if (subscribers > 0) return
-    unsubscribe?.()
-    unsubscribe = null
-  }
 }

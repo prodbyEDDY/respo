@@ -15,6 +15,7 @@ import {
   EyeIcon,
   FaceFrownIcon,
   LinkIcon,
+  PhotoIcon,
   LinkSlashIcon,
   ViewfinderCircleIcon
 } from '@heroicons/react/24/outline'
@@ -41,6 +42,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
 import { ipcBridge } from '@renderer/lib/ipc'
 import { cn } from '@renderer/lib/utils'
+import { useDesignOverlay } from '@renderer/stores/design-overlay'
 import { useEmulation } from '@renderer/stores/emulation'
 import { NO_GUIDES, useGuides } from '@renderer/stores/guides'
 import { useLayout } from '@renderer/stores/layout'
@@ -49,7 +51,9 @@ import { useNotices } from '@renderer/stores/notices'
 import { selectIsOpen, usePanels } from '@renderer/stores/panels'
 import { selectIsBusy, useShots } from '@renderer/stores/shots'
 import { useSync } from '@renderer/stores/sync'
+import { DesignOverlayDialog } from './DesignOverlayDialog'
 import { DiagnosticsChips } from './DiagnosticsChips'
+import { OverlayPanel } from './OverlayPanel'
 import { Rulers } from './Rulers'
 
 export type DeviceFrameProps = {
@@ -144,6 +148,56 @@ function PageCrashed({
         Restart
       </Button>
     </div>
+  )
+}
+
+/**
+ * The way into the design overlay dialog, from the device's menu.
+ */
+function OverlayItem({ deviceId }: { deviceId: string }): React.JSX.Element {
+  const openDialog = useDesignOverlay((s) => s.openDialog)
+  return (
+    <DropdownMenuItem onSelect={() => requestAnimationFrame(() => openDialog(deviceId))}>
+      <PhotoIcon />
+      Design overlay…
+    </DropdownMenuItem>
+  )
+}
+
+/**
+ * The one visible sign that a mockup is on this page (or beside it). Any
+ * active emulation must be visible where it applies; a page with a
+ * half-transparent design over it is the last thing that should be a
+ * mystery. Clicking it opens the controls.
+ */
+function OverlayChip({
+  deviceId,
+  guidesKey
+}: {
+  deviceId: string
+  guidesKey: string
+}): React.JSX.Element | null {
+  const overlay = useDesignOverlay((s) => s.overlays[guidesKey])
+  const openDialog = useDesignOverlay((s) => s.openDialog)
+  if (overlay === undefined || !overlay.enabled) return null
+  const label = overlay.mode === 'overlay' ? 'Overlay' : 'Side by side'
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="ghost"
+          size="xs"
+          aria-label={`Design ${label.toLowerCase()} on this device — adjust`}
+          data-overlay-mode={overlay.mode}
+          onClick={() => openDialog(deviceId)}
+          className="h-5 rounded-full bg-primary/10 px-1.5 text-primary hover:bg-primary/15 hover:text-primary"
+        >
+          <PhotoIcon />
+          {label}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>Design {label.toLowerCase()} — click to adjust or remove</TooltipContent>
+    </Tooltip>
   )
 }
 
@@ -299,6 +353,7 @@ function DeviceMenu({ deviceId }: { deviceId: string }): React.JSX.Element {
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <RulersItem deviceId={deviceId} />
+        <OverlayItem deviceId={deviceId} />
         <VisionItems deviceId={deviceId} />
         <DropdownMenuSeparator />
         <DropdownMenuItem disabled={url === ''} onSelect={copyUrl}>
@@ -558,6 +613,26 @@ export function DeviceFrame({ device, zoom, viewportRef }: DeviceFrameProps): Re
   const rulers = useGuides((s) => s.rulers[device.id] === true)
   const guidesKey = guidesKeyOf(device.width, device.height)
   const guides = useGuides((s) => s.guides[guidesKey])
+  const overlay = useDesignOverlay((s) => s.overlays[guidesKey])
+  const overlayDialogOpen = useDesignOverlay((s) => s.dialogDeviceId === device.id)
+  const openOverlayDialog = useDesignOverlay((s) => s.openDialog)
+  const closeOverlayDialog = useDesignOverlay((s) => s.closeDialog)
+  const sideBySide = overlay !== undefined && overlay.enabled && overlay.mode === 'side-by-side'
+
+  // The overlay mode is a stylesheet main puts on the page; the frame sends
+  // what this size's settings say whenever they change, and nothing when the
+  // mockup is off or shown beside the frame instead.
+  useEffect(() => {
+    const bridge = ipcBridge()
+    if (bridge === null) return
+    const apply =
+      overlay !== undefined && overlay.enabled && overlay.mode === 'overlay'
+        ? { imageId: overlay.imageId, opacity: overlay.opacity, curtain: overlay.curtain }
+        : null
+    void bridge.invoke('overlay:set', device.id, apply).catch((error: unknown) => {
+      console.error('overlay:set failed', error)
+    })
+  }, [device.id, overlay])
 
   // The lines live in the page (main draws them as a stylesheet), and they
   // show only while the rulers do: a line with no ruler to read it against is
@@ -624,6 +699,7 @@ export function DeviceFrame({ device, zoom, viewportRef }: DeviceFrameProps): Re
         {/* What the page is complaining about, and what sets this device apart. */}
         <DiagnosticsChips deviceId={device.id} />
         <VisionChip deviceId={device.id} />
+        <OverlayChip deviceId={device.id} guidesKey={guidesKey} />
         {/*
           Next to the caption rather than pushed to the far edge: a 1920px
           frame would put a right-aligned control most of a screen away from
@@ -663,14 +739,35 @@ export function DeviceFrame({ device, zoom, viewportRef }: DeviceFrameProps): Re
             {load?.state === 'crashed' ? <PageCrashed deviceId={device.id} state={load} /> : null}
           </div>
         )
-        return rulers ? (
+        const framed = rulers ? (
           <Rulers deviceId={device.id} width={device.width} height={device.height} zoom={zoom}>
             {viewport}
           </Rulers>
         ) : (
           viewport
         )
+        // The side-by-side panel is a sibling of the frame, never inside it:
+        // the measured box has to stay exactly the device.
+        return sideBySide && overlay !== undefined ? (
+          <div className="flex items-start gap-2">
+            {framed}
+            <OverlayPanel
+              deviceId={device.id}
+              imageId={overlay.imageId}
+              width={device.width}
+              height={device.height}
+              zoom={zoom}
+            />
+          </div>
+        ) : (
+          framed
+        )
       })()}
+      <DesignOverlayDialog
+        device={device}
+        open={overlayDialogOpen}
+        onOpenChange={(open) => (open ? openOverlayDialog(device.id) : closeOverlayDialog())}
+      />
     </section>
   )
 }

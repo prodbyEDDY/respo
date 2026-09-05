@@ -14,7 +14,9 @@ import {
   validateHomeUrl,
   validateLeadDeviceId,
   validateOptionalDevtoolsPanel,
+  validateOptionalOverlayApply,
   validateOptionalVisionDeficiency,
+  validateOverlayDataUrl,
   validatePermissionDecision,
   validatePermissionType,
   validatePersistedPatch,
@@ -892,6 +894,79 @@ describe('guides payloads', () => {
     ['an array', { guides: [] }],
     ['a junk set', { guides: { '393x852': 'yes' } }]
   ])('rejects store:save guides with %s', (_label, patch) => {
+    expect(() => validatePersistedPatch(patch)).toThrow(/invalid ipc payload/i)
+  })
+})
+
+describe('overlay payloads', () => {
+  const png = `data:image/png;base64,${Buffer.alloc(30, 1).toString('base64')}`
+
+  it('accepts a raster data url and refuses anything else', () => {
+    expect(validateOverlayDataUrl(png)).toBe(png)
+    for (const bad of [
+      '',
+      'data:text/html;base64,AAAA',
+      'data:image/svg+xml;base64,AAAA',
+      'data:image/png,plain',
+      'https://example.com/a.png',
+      42
+    ]) {
+      expect(() => validateOverlayDataUrl(bad)).toThrow(/invalid ipc payload/i)
+    }
+  })
+
+  it('refuses a data url past the size cap', () => {
+    const huge = `data:image/png;base64,${'A'.repeat(14 * 1024 * 1024)}`
+    expect(() => validateOverlayDataUrl(huge)).toThrow(/too large/i)
+  })
+
+  it('accepts an overlay to apply, or null', () => {
+    expect(
+      validateOptionalOverlayApply({
+        imageId: '0123456789abcdef',
+        opacity: 0.5,
+        curtain: 0,
+        extra: 1
+      })
+    ).toEqual({ imageId: '0123456789abcdef', opacity: 0.5, curtain: 0 })
+    expect(validateOptionalOverlayApply(null)).toBeNull()
+    for (const bad of [
+      { imageId: 'nope', opacity: 0.5, curtain: 0 },
+      { imageId: '0123456789abcdef', opacity: 2, curtain: 0 },
+      { imageId: '0123456789abcdef', opacity: 0.5, curtain: -1 },
+      { imageId: '0123456789abcdef', opacity: '1', curtain: 0 },
+      'overlay',
+      []
+    ]) {
+      expect(() => validateOptionalOverlayApply(bad)).toThrow(/invalid ipc payload/i)
+    }
+  })
+
+  it('carries the persisted overlays through store:save, repaired', () => {
+    expect(
+      validatePersistedPatch({
+        designOverlays: {
+          '393x852': { imageId: '0123456789abcdef', mode: 'weird', opacity: 3, curtain: 0.5 }
+        }
+      })
+    ).toEqual({
+      designOverlays: {
+        '393x852': {
+          imageId: '0123456789abcdef',
+          mode: 'overlay',
+          opacity: 1,
+          curtain: 0.5,
+          enabled: true
+        }
+      }
+    })
+  })
+
+  it.each([
+    ['a junk key', { designOverlays: { phone: { imageId: '0123456789abcdef' } } }],
+    ['a missing image id', { designOverlays: { '393x852': { opacity: 1 } } }],
+    ['an array', { designOverlays: [] }]
+  ])('rejects store:save designOverlays with %s', (_label, patch) => {
     expect(() => validatePersistedPatch(patch)).toThrow(/invalid ipc payload/i)
   })
 })

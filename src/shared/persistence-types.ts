@@ -24,6 +24,7 @@ import {
   normalizeUrl,
   type DockPosition,
   type GuideSet,
+  type OverlayMode,
   type PermissionType,
   type ShotDpr,
   type ShotFormat,
@@ -211,6 +212,26 @@ export const MAX_GUIDES_PER_AXIS = 50
 /** Furthest a guide may sit from the document's origin, in CSS pixels. */
 export const MAX_GUIDE_POSITION = 100_000
 
+/**
+ * One design overlay, by viewport size like the guides: a mockup exported at
+ * 393px belongs on the 393px frames. The image itself lives under its own
+ * store key in main (`overlayImages`) and is referenced by content id.
+ */
+export type OverlaySettings = {
+  imageId: string
+  mode: OverlayMode
+  /** 0..1. */
+  opacity: number
+  /** How much of the image, from the left, is hidden: 0..1. */
+  curtain: number
+  enabled: boolean
+}
+
+export type OverlaysDocument = Record<string, OverlaySettings>
+
+/** How many viewport sizes may keep an overlay. */
+export const MAX_OVERLAY_SIZES = 100
+
 /** The document key for a viewport: `393x852`. */
 export function guidesKeyOf(width: number, height: number): string {
   return `${Math.round(width)}x${Math.round(height)}`
@@ -278,6 +299,8 @@ export type PersistedState = {
   emulation: EmulationSettings
   /** Ruler guides, by viewport size. See `GuidesDocument`. */
   guides: GuidesDocument
+  /** Design overlays, by viewport size. See `OverlaysDocument`. */
+  designOverlays: OverlaysDocument
   /**
    * The page every session opens on, or `''` for "no home page".
    *
@@ -357,6 +380,7 @@ export function defaultPersistedState(): PersistedState {
     emulation: { profile: defaultEmulationProfile(), deviceVision: {} },
     // No guides anywhere: they are drawn by the user, one ruler click at a time.
     guides: {},
+    designOverlays: {},
     homeUrl: ''
   }
 }
@@ -390,6 +414,7 @@ export function mergePersistedState(
     security: { ...(patch.security ?? base.security) },
     emulation: cloneEmulation(patch.emulation ?? base.emulation),
     guides: cloneGuides(patch.guides ?? base.guides),
+    designOverlays: cloneOverlays(patch.designOverlays ?? base.designOverlays),
     homeUrl: patch.homeUrl ?? base.homeUrl,
     schemaVersion: SCHEMA_VERSION
   }
@@ -455,10 +480,60 @@ export function migratePersistedState(raw: unknown): MigrationResult {
       security: sanitizeSecurity(doc['security']),
       emulation: sanitizeEmulation(doc['emulation']),
       guides: sanitizeGuides(doc['guides']),
+      designOverlays: sanitizeOverlays(doc['designOverlays']),
       homeUrl: sanitizeHomeUrl(doc['homeUrl'])
     },
     backup: null
   }
+}
+
+function cloneOverlays(overlays: OverlaysDocument): OverlaysDocument {
+  const out: OverlaysDocument = {}
+  for (const [key, settings] of Object.entries(overlays)) out[key] = { ...settings }
+  return out
+}
+
+/** A content id as `overlay:store-image` mints them: sixteen hex digits. */
+export const IMAGE_ID_RE = /^[0-9a-f]{16}$/
+
+/** A fraction, clamped. Anything that is not a number reads as `fallback`. */
+export function clampUnit(value: unknown, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback
+  return Math.min(1, Math.max(0, value))
+}
+
+/**
+ * Repair one overlay, or drop it. The image id is the one field with no
+ * repair: without it there is nothing to show, and a junk one is dropped
+ * rather than kept pointing at nothing.
+ */
+export function sanitizeOverlay(value: unknown): OverlaySettings | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
+  const overlay = value as Record<string, unknown>
+  const imageId = overlay['imageId']
+  if (typeof imageId !== 'string' || !IMAGE_ID_RE.test(imageId)) return null
+  return {
+    imageId,
+    mode: overlay['mode'] === 'side-by-side' ? 'side-by-side' : 'overlay',
+    opacity: clampUnit(overlay['opacity'], 0.5),
+    curtain: clampUnit(overlay['curtain'], 0),
+    enabled: overlay['enabled'] !== false
+  }
+}
+
+function sanitizeOverlays(value: unknown): OverlaysDocument {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return {}
+  const out: OverlaysDocument = {}
+  let sizes = 0
+  for (const [key, entry] of Object.entries(value)) {
+    if (sizes >= MAX_OVERLAY_SIZES) break
+    if (!GUIDES_KEY_RE.test(key)) continue
+    const overlay = sanitizeOverlay(entry)
+    if (overlay === null) continue
+    out[key] = overlay
+    sizes += 1
+  }
+  return out
 }
 
 function cloneGuides(guides: GuidesDocument): GuidesDocument {
