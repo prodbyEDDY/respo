@@ -24,7 +24,15 @@ irm https://raw.githubusercontent.com/prodbyEDDY/respo/main/scripts/install.ps1 
 
 Installs for your user without administrator access. Respo checks for updates daily; the **Update** chip lets you download and restart into the next version.
 
-Builds are not code-signed yet, so Windows SmartScreen may ask for confirmation. macOS and Linux installers are not available yet.
+**Unsigned release:** Respo does not yet have a code-signing certificate. Windows may show an “Unknown publisher” or SmartScreen warning when you download or run the installer. This is expected for an unsigned app; the warning alone does not mean malware was detected. Download from this repository's [official releases](https://github.com/prodbyEDDY/respo/releases/latest). See [Microsoft's explanation of SmartScreen reputation](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation).
+
+macOS and Linux installers are not available yet.
+
+## Privacy
+
+**No telemetry, usage analytics or automatic crash-report uploads.** Respo stores settings, device suites, bookmarks, browsing history and diagnostic logs locally. Screenshots are saved to the folder you choose. Respo does not upload this data to the developer or a cloud service.
+
+Website previews connect directly to the sites you open, just like a browser; those sites may have their own analytics and data collection. Update checks and downloads connect to GitHub and its release infrastructure, which receive normal network request information such as your IP address. Automatic update checks can be disabled in **Settings → About & updates**; downloads only start when you choose to update.
 
 ## Quick start
 
@@ -125,15 +133,6 @@ npm run build:win  # Windows NSIS installer in dist/
 To refresh the README captures on Windows, build the app and run `node scripts/screenshots.mjs`. It uses a separate temporary profile and serves [the demo](docs/assets/demo.html) on loopback port 4178. `node scripts/icon-options.mjs && npm run icons` regenerates the icon assets.
 
 Electron · WebContentsView · React · TypeScript · Zustand · shadcn/ui · Tailwind. See [CONTRIBUTING.md](CONTRIBUTING.md) and the [architecture documentation](docs/README.md) (Russian).
-
-## Star history
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/star-history-dark.svg">
-  <img src="docs/assets/star-history-light.svg" alt="Respo star history" width="800">
-</picture>
-
-Cumulative starred-at dates of current stargazers from GitHub. Removed stars are not included. Refresh with `node scripts/star-history.mjs` (requires an authenticated GitHub CLI).
 
 ## License
 
