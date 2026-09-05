@@ -18,7 +18,8 @@
 | [design/DESIGN-SYSTEM.md](design/DESIGN-SYSTEM.md) | Дизайн-система (токены Family, тёмная тема, плотность, анимации) — обязательный контекст UI-задач |
 | [superpowers/plans/](superpowers/plans/) | Планы волн реализации (W1–W7); актуальные — `2026-09-05-w5|w6|w7-*.md` |
 | [research/](research/) | Исследования: конкуренты, MCP-экосистема, матрица спека↔код (2026-09-05) |
-| Реверс-доки модулей (`modules/`) | ⬜ появятся по мере волн W5–W7 (по одному файлу на модуль main) |
+| [modules/updater.md](modules/updater.md) | Автообновление (electron-updater + чип Update), About, файловый лог (electron-log), тестовый loopback-фид для e2e |
+| Реверс-доки модулей (`modules/`) | остальные — по мере волн W5–W7 (по одному файлу на модуль main) |
 
 ## Управление проектом
 

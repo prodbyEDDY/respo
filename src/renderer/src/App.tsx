@@ -24,6 +24,7 @@ import { attachPermissionsBridge } from '@renderer/stores/permissions'
 import { useSettings } from '@renderer/stores/settings'
 import { attachShotsBridge, useShots } from '@renderer/stores/shots'
 import { useSync } from '@renderer/stores/sync'
+import { attachUpdatesBridge } from '@renderer/stores/updates'
 
 /**
  * Main owns the start url (CLI/deep-link argument, or the default) and has
@@ -142,6 +143,10 @@ function App(): React.JSX.Element {
   // Servers asking for a username and password. Coalesced in main, so this is
   // one dialog however many viewports hit the same host.
   useEffect(() => attachAuthBridge(), [])
+
+  // Whether there is a newer Respo. Main checks on its own schedule and pushes;
+  // the toolbar chip is the only thing that listens.
+  useEffect(() => attachUpdatesBridge(), [])
 
   // mod+i arms the element picker, Escape puts it away.
   useInspectHotkeys()

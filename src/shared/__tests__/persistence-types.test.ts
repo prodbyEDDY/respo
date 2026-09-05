@@ -573,3 +573,59 @@ describe('the safety switches', () => {
     expect(mergePersistedState(base, { homeUrl: '' }).security).toEqual(base.security)
   })
 })
+
+describe('the updater’s memory', () => {
+  function stored(over: Record<string, unknown>): PersistedState {
+    return migratePersistedState({ ...defaultPersistedState(), ...over }).state
+  }
+
+  it('starts never checked, checking daily', () => {
+    expect(defaultPersistedState().updates).toEqual({ lastCheckAt: null, autoCheck: true })
+  })
+
+  it('reads back a stamp and an opt-out', () => {
+    expect(
+      stored({ updates: { lastCheckAt: 1_700_000_000_000, autoCheck: false } }).updates
+    ).toEqual({
+      lastCheckAt: 1_700_000_000_000,
+      autoCheck: false
+    })
+  })
+
+  it.each([
+    ['a stamp from the future', { lastCheckAt: Date.now() + 60_000, autoCheck: true }],
+    ['a negative stamp', { lastCheckAt: -1, autoCheck: true }],
+    ['a string stamp', { lastCheckAt: '2026-09-05', autoCheck: true }],
+    ['nothing at all', {}]
+  ])('reads %s as never checked', (_label, updates) => {
+    expect(stored({ updates }).updates.lastCheckAt).toBeNull()
+  })
+
+  it('reads anything but an explicit false as checking daily', () => {
+    expect(stored({ updates: { autoCheck: 'no' } }).updates.autoCheck).toBe(true)
+    expect(stored({ updates: { autoCheck: 0 } }).updates.autoCheck).toBe(true)
+    expect(stored({ updates: { autoCheck: false } }).updates.autoCheck).toBe(false)
+  })
+
+  it.each([
+    ['not an object', 'yes'],
+    ['an array', []],
+    ['null', null]
+  ])('reads a slice that is %s as the default', (_label, updates) => {
+    expect(stored({ updates }).updates).toEqual({ lastCheckAt: null, autoCheck: true })
+  })
+
+  it('a document written before the slice existed reads as the default', () => {
+    const doc = { ...defaultPersistedState() } as Record<string, unknown>
+    delete doc['updates']
+    expect(migratePersistedState(doc).state.updates).toEqual({ lastCheckAt: null, autoCheck: true })
+  })
+
+  it('merges like every other slice, without aliasing the patch', () => {
+    const patch = { lastCheckAt: 5, autoCheck: false }
+    const merged = mergePersistedState(defaultPersistedState(), { updates: patch })
+    expect(merged.updates).toEqual(patch)
+    expect(merged.updates).not.toBe(patch)
+    expect(mergePersistedState(merged, { homeUrl: '' }).updates).toEqual(patch)
+  })
+})

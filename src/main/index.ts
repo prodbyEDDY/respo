@@ -11,12 +11,14 @@ import {
 import { join } from 'path'
 import { pathToFileURL } from 'node:url'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
+import { autoUpdater } from 'electron-updater'
 import {
   DEFAULT_PERMISSION_DECISIONS,
   normalizeUrl,
   type DevtoolsStatePayload,
   type MainEvent,
-  type PermissionStatePayload
+  type PermissionStatePayload,
+  type UpdateStatePayload
 } from '@shared/ipc'
 import { defaultPersistedState } from '@shared/persistence-types'
 import { authHostLabel, authRealmLabel, createAuthManager, type AuthManager } from './auth'
@@ -28,6 +30,7 @@ import { createHistory, type History } from './history'
 import { Inspector } from './inspector'
 import { registerHandler, registerInputListener, sendMainEvent } from './ipc'
 import { createLeadTracker, type LeadTracker } from './lead-tracker'
+import { ensureLogsDirectory, installLogging, watchRendererErrors } from './log'
 import {
   createBackupFileIO,
   createElectronStoreBackend,
@@ -47,7 +50,9 @@ import {
   shouldTrustCertificate
 } from './security'
 import { SyncEngine } from './sync-engine'
+import { createUpdater, resolveUpdaterMode, writeFeedConfig, type Updater } from './updater'
 import {
+  validateAppResource,
   validateAuthCredentials,
   validateBoolean,
   validateBounds,
@@ -74,6 +79,12 @@ import { createLoadStateBatcher, type LoadStateBatcher } from './load-state-batc
 import { startPerfMonitor, type PerfMonitor } from './perf'
 import { runScrollSpike } from './spike'
 import icon from '../../resources/icon.png?asset'
+
+/**
+ * The file log, up before anything else: an exception thrown while the store
+ * is being read is exactly the kind that has to land somewhere (`log.ts`).
+ */
+const log = installLogging({ dev: is.dev })
 
 let viewManager: ViewManager | null = null
 let loadStates: LoadStateBatcher | null = null
@@ -103,6 +114,11 @@ let permissions: PermissionsManager | null = null
  * hydrating.
  */
 let auth: AuthManager | null = null
+/**
+ * The update state machine. App-scoped: it outlives the window (an install
+ * closes the window first) and its launch timer is armed once per process.
+ */
+let updater: Updater | null = null
 /**
  * Device names, by id, as the renderer last reported them.
  *
@@ -345,6 +361,10 @@ function createWindow(): void {
     return { action: 'deny' }
   })
 
+  // What Respo's own window prints at `error`, into the log file. The
+  // development branch below already puts the same lines on stdout.
+  if (!is.dev) watchRendererErrors(mainWindow.webContents, log)
+
   if (is.dev) {
     // Renderer instrumentation is part of the R1 evidence; surface it on the
     // same stdout as the main-process numbers.
@@ -389,6 +409,36 @@ function emptyDevtoolsState(): DevtoolsStatePayload {
  */
 function emptyPermissionState(): PermissionStatePayload {
   return { origin: null, decisions: { ...DEFAULT_PERMISSION_DECISIONS }, prompts: [] }
+}
+
+/**
+ * What the update channels answer with before the updater exists. Nothing is
+ * known and nothing is running — the honest picture of a process still coming
+ * up, and of a unit test that never creates one.
+ */
+function emptyUpdateState(): UpdateStatePayload {
+  return {
+    stage: 'idle',
+    enabled: false,
+    autoCheck: persistence?.load().updates.autoCheck ?? true,
+    current: app.getVersion(),
+    version: null,
+    percent: null,
+    error: null,
+    lastCheckAt: null
+  }
+}
+
+/**
+ * Where the bundled third-party notices are. `extraResources` puts the file
+ * beside the asar in a packaged build; in development it is the repository's
+ * own copy, two levels up from `out/main` — not `app.getAppPath()`, which is
+ * whatever the launcher pointed Electron at (a file, in e2e).
+ */
+function noticesPath(): string {
+  return app.isPackaged
+    ? join(process.resourcesPath, 'NOTICE.md')
+    : join(__dirname, '..', '..', 'NOTICE.md')
 }
 
 /**
@@ -438,6 +488,47 @@ function installNetworkPrompts(): void {
  */
 function registerIpcHandlers(): void {
   registerHandler('app:get-version', () => app.getVersion())
+
+  registerHandler('app:get-info', () => ({
+    version: app.getVersion(),
+    electron: process.versions.electron,
+    chromium: process.versions.chrome,
+    node: process.versions.node,
+    platform: process.platform,
+    arch: process.arch
+  }))
+
+  // The renderer names a kind of thing; the path is resolved here, and it is
+  // one of two (CLAUDE.md §7). `openPath` answers with an error string, or ''.
+  registerHandler('app:open-resource', async (_event, resource) => {
+    const which = validateAppResource(resource)
+    const target = which === 'logs' ? ensureLogsDirectory() : noticesPath()
+    const failure = await shell.openPath(target)
+    if (failure !== '') {
+      log.warn(`could not open ${which} (${target}): ${failure}`)
+      return false
+    }
+    return true
+  })
+
+  // Updates. Every call answers with the whole state; the machine pushes
+  // `update-state` on its own when a download moves or a launch check lands.
+  registerHandler('updates:get', () => updater?.state() ?? emptyUpdateState())
+
+  registerHandler('updates:check', () => updater?.check() ?? emptyUpdateState())
+
+  registerHandler('updates:download', () => updater?.download() ?? emptyUpdateState())
+
+  registerHandler('updates:install', () => {
+    updater?.install()
+  })
+
+  registerHandler(
+    'updates:set-auto-check',
+    (_event, enabled) =>
+      updater?.setAutoCheck(validateBoolean(enabled, 'updates:set-auto-check')) ??
+      emptyUpdateState()
+  )
 
   registerHandler('app:get-start-url', () => resolveStartUrl())
 
@@ -730,6 +821,8 @@ app.whenReady().then(() => {
 
   if (is.dev) perf = startPerfMonitor()
 
+  log.info(`Respo ${app.getVersion()} starting (${process.platform} ${process.arch})`)
+
   // Before the first handler can be called, and before the window asks.
   //
   // One backend for both documents: `electron-store` caches the file it owns,
@@ -775,9 +868,38 @@ app.whenReady().then(() => {
   })
   installNetworkPrompts()
 
+  // Updates. Off in development and under `RESPO_NO_UPDATER=1`; a loopback
+  // `RESPO_UPDATE_URL` swaps the GitHub feed for a local one (`updater.ts`).
+  // The `updates` slice of the document is main's, written here and never by
+  // a renderer patch (`validate.ts`).
+  const updaterMode = resolveUpdaterMode(process.env, app.isPackaged, log)
+  if (updaterMode.enabled && updaterMode.feedUrl !== null) {
+    // The config file is what a packaged build reads too; written into the
+    // profile so nothing in the repository has to exist for a test feed.
+    autoUpdater.forceDevUpdateConfig = true
+    autoUpdater.updateConfigPath = writeFeedConfig(app.getPath('userData'), updaterMode.feedUrl)
+  }
+  autoUpdater.logger = log
+  const store = persistence
+  updater = createUpdater({
+    autoUpdater,
+    currentVersion: app.getVersion(),
+    mode: updaterMode,
+    store: {
+      read: () => store.load().updates,
+      write: (next) => store.save({ updates: next })
+    },
+    onState: (payload) => pushToWindow({ type: 'update-state', payload }),
+    log
+  })
+
   registerIpcHandlers()
 
   createWindow()
+
+  // After the window: the check is the least urgent thing at launch, and its
+  // answer has somewhere to go.
+  updater.scheduleStartupCheck()
 
   app.on('activate', function () {
     // On macOS it's common to re-create a window in the app when the
@@ -796,6 +918,9 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  // A launch check that has not fired yet has nowhere to report to.
+  updater?.dispose()
+  updater = null
   // Before the store is flushed: a question answered in the last moment of the
   // session is a decision that still has to reach disk. Everything left waiting
   // is denied — nothing may be left holding a callback nobody can answer.

@@ -11,6 +11,7 @@ import {
   isPermissionDecision,
   isPermissionType,
   normalizeUrl,
+  type AppResource,
   type AuthCredentials,
   type ClearTarget,
   type DockPosition,
@@ -220,6 +221,10 @@ export function validatePersistedPatch(
   // into the document and skipping the question entirely. The only doors into
   // that slice are answering a prompt and the permission panel, and both of
   // them go through `permissions:*`, where main supplies the origin.
+  //
+  // `updates` is absent for the same reason: `lastCheckAt` is the updater's own
+  // stamp, and the one preference in the slice has its own channel
+  // (`updates:set-auto-check`).
 
   return out
 }
@@ -715,6 +720,17 @@ const MAX_BOUNDS = 100_000
 export function validateThemeSource(value: unknown): ThemeSource {
   if (value !== 'light' && value !== 'dark' && value !== 'system') {
     fail("theme:set-source expects 'light', 'dark' or 'system'")
+  }
+  return value
+}
+
+/**
+ * Validate an `app:open-resource` payload. A closed set: the renderer names a
+ * *kind* of thing, never a path, and there are exactly two kinds.
+ */
+export function validateAppResource(value: unknown): AppResource {
+  if (value !== 'logs' && value !== 'notices') {
+    fail("app:open-resource expects 'logs' or 'notices'")
   }
   return value
 }

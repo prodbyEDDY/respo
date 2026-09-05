@@ -15,6 +15,7 @@ import { Label } from '@renderer/components/ui/label'
 import { cn } from '@renderer/lib/utils'
 import { useSettings } from '@renderer/stores/settings'
 import { useShots } from '@renderer/stores/shots'
+import { useUpdates } from '@renderer/stores/updates'
 
 export type SettingsDialogProps = {
   open: boolean
@@ -142,6 +143,42 @@ function InsecureCertificates(): React.JSX.Element {
 }
 
 /**
+ * The daily launch check, as a preference.
+ *
+ * The only thing about updates that *is* a preference: what happens after a
+ * check is the toolbar chip's business, and checking by hand lives in About.
+ * Off in a build that never checks, with the label saying why, rather than a
+ * checkbox that would silently do nothing.
+ */
+function AutoUpdateCheck(): React.JSX.Element {
+  const enabled = useUpdates((s) => s.status.enabled)
+  const autoCheck = useUpdates((s) => s.status.autoCheck)
+  const setAutoCheck = useUpdates((s) => s.setAutoCheck)
+
+  return (
+    <div className="flex items-start gap-2 rounded-md border border-border p-2.5">
+      <Checkbox
+        id="auto-check-updates"
+        checked={autoCheck}
+        disabled={!enabled}
+        className="mt-0.5"
+        onCheckedChange={(next) => setAutoCheck(next === true)}
+      />
+      <div className="flex min-w-0 flex-col gap-0.5">
+        <Label htmlFor="auto-check-updates" className={cn(enabled && 'cursor-pointer')}>
+          Check for updates automatically
+        </Label>
+        <p className="text-micro text-muted-foreground">
+          {enabled
+            ? 'Once a day, when Respo starts. Nothing is downloaded until you click the update chip.'
+            : 'Updates are off in this build.'}
+        </p>
+      </div>
+    </div>
+  )
+}
+
+/**
  * Everything about Respo that is a preference rather than a step in a task.
  *
  * Screenshots and one security switch, which is why there is still no
@@ -223,6 +260,11 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps): Rea
           <div className="flex flex-col gap-1.5">
             <Label>Security</Label>
             <InsecureCertificates />
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label>Updates</Label>
+            <AutoUpdateCheck />
           </div>
         </div>
 

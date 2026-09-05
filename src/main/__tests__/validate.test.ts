@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { DeviceSpec } from '@shared/types'
 import {
+  validateAppResource,
   validateAuthCredentials,
   validateBoolean,
   validateBookmarks,
@@ -714,5 +715,32 @@ describe('the security slice of store:save', () => {
     ['an array', { security: [] }]
   ])('rejects %s', (_label, payload) => {
     expect(() => validatePersistedPatch(payload)).toThrow(/invalid ipc payload/i)
+  })
+})
+
+describe('the updates slice of store:save', () => {
+  it('is dropped: it is main’s field, whatever the patch says', () => {
+    expect(
+      validatePersistedPatch({
+        updates: { lastCheckAt: 1, autoCheck: false },
+        homeUrl: ''
+      })
+    ).toEqual({ homeUrl: '' })
+  })
+})
+
+describe('validateAppResource', () => {
+  it('accepts the two things main knows how to open', () => {
+    expect(validateAppResource('logs')).toBe('logs')
+    expect(validateAppResource('notices')).toBe('notices')
+  })
+
+  it.each([
+    ['a path', 'C:/Users/me/logs'],
+    ['a url', 'file:///etc/passwd'],
+    ['an object', { resource: 'logs' }],
+    ['undefined', undefined]
+  ])('rejects %s', (_label, value) => {
+    expect(() => validateAppResource(value)).toThrow(/invalid ipc payload/i)
   })
 })

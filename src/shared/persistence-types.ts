@@ -167,6 +167,21 @@ export type SecuritySettings = {
 }
 
 /**
+ * What the updater remembers between launches.
+ *
+ * Main's field, like `permissions`: the renderer's patches never carry it. The
+ * one preference in it (`autoCheck`) travels through `updates:set-auto-check`,
+ * and `lastCheckAt` is stamped by the updater itself — a renderer that could
+ * write it could silence the daily check without turning it off.
+ */
+export type UpdateSettings = {
+  /** When the last check that found nothing finished; `null` = never checked. */
+  lastCheckAt: number | null
+  /** Check on launch, at most once a day. */
+  autoCheck: boolean
+}
+
+/**
  * More sites than anyone reviews by hand. A document past this is not a list of
  * decisions any more, and the oldest entries are the ones nobody remembers.
  */
@@ -222,6 +237,8 @@ export type PersistedState = {
   permissions: PermissionsDocument
   /** The switches that trade safety for reach. See `SecuritySettings`. */
   security: SecuritySettings
+  /** What the updater remembers between launches. Main's field. See `UpdateSettings`. */
+  updates: UpdateSettings
   /**
    * The page every session opens on, or `''` for "no home page".
    *
@@ -296,6 +313,9 @@ export function defaultPersistedState(): PersistedState {
     // Off. A browser that accepts a broken certificate out of the box is a
     // browser that lies about what it is showing you.
     security: { allowInsecureCertificates: false },
+    // Never checked, and checking daily: a tool that stops telling you about
+    // fixes is a tool that quietly gets worse.
+    updates: { lastCheckAt: null, autoCheck: true },
     homeUrl: ''
   }
 }
@@ -327,6 +347,7 @@ export function mergePersistedState(
     bookmarks: (patch.bookmarks ?? base.bookmarks).map(cloneBookmark),
     permissions: clonePermissions(patch.permissions ?? base.permissions),
     security: { ...(patch.security ?? base.security) },
+    updates: { ...(patch.updates ?? base.updates) },
     homeUrl: patch.homeUrl ?? base.homeUrl,
     schemaVersion: SCHEMA_VERSION
   }
@@ -390,6 +411,7 @@ export function migratePersistedState(raw: unknown): MigrationResult {
       bookmarks: sanitizeBookmarks(doc['bookmarks']),
       permissions: sanitizePermissions(doc['permissions']),
       security: sanitizeSecurity(doc['security']),
+      updates: sanitizeUpdates(doc['updates']),
       homeUrl: sanitizeHomeUrl(doc['homeUrl'])
     },
     backup: null
@@ -525,6 +547,25 @@ function sanitizeSecurity(value: unknown): SecuritySettings {
   return {
     allowInsecureCertificates:
       (value as Record<string, unknown>)['allowInsecureCertificates'] === true
+  }
+}
+
+/**
+ * Repair the updater's memory. A document written before this field existed
+ * has none, and "never checked, checking daily" is the right reading of that:
+ * the first launch on the new build checks once, and the user is not asked
+ * anything. A timestamp from the future is as good as no timestamp.
+ */
+function sanitizeUpdates(value: unknown): UpdateSettings {
+  const defaults: UpdateSettings = { lastCheckAt: null, autoCheck: true }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return defaults
+
+  const updates = value as Record<string, unknown>
+  const at = updates['lastCheckAt']
+  return {
+    lastCheckAt:
+      typeof at === 'number' && Number.isFinite(at) && at > 0 && at <= Date.now() ? at : null,
+    autoCheck: updates['autoCheck'] !== false
   }
 }
 

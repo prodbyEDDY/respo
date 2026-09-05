@@ -11,6 +11,7 @@ import {
   DocumentArrowUpIcon,
   EllipsisVerticalIcon,
   HomeIcon,
+  InformationCircleIcon,
   LinkIcon,
   LinkSlashIcon,
   MagnifyingGlassMinusIcon,
@@ -26,6 +27,7 @@ import {
 } from '@heroicons/react/24/outline'
 import type { DockPosition } from '@shared/ipc'
 import type { CanvasLayoutMode } from '@shared/persistence-types'
+import { AboutDialog } from '@renderer/components/about/AboutDialog'
 import { SuiteSelector } from '@renderer/components/device-manager/SuiteSelector'
 import { SettingsDialog } from '@renderer/components/settings/SettingsDialog'
 import { Button } from '@renderer/components/ui/button'
@@ -55,6 +57,7 @@ import { ClearMenu } from './ClearMenu'
 import { NavControls } from './NavControls'
 import { Notice } from './Notice'
 import { ShotAllButton, ShotNotice } from './ShotControls'
+import { UpdateChip } from './UpdateChip'
 
 type IconButtonProps = {
   label: string
@@ -347,7 +350,12 @@ function PageItems(): React.JSX.Element {
   )
 }
 
-function OverflowMenu({ onOpenSettings }: { onOpenSettings: () => void }): React.JSX.Element {
+type OverflowMenuProps = {
+  onOpenSettings: () => void
+  onOpenAbout: () => void
+}
+
+function OverflowMenu({ onOpenSettings, onOpenAbout }: OverflowMenuProps): React.JSX.Element {
   const zoom = useLayout((s) => s.zoom)
   const zoomIn = useLayout((s) => s.zoomIn)
   const zoomOut = useLayout((s) => s.zoomOut)
@@ -399,6 +407,10 @@ function OverflowMenu({ onOpenSettings }: { onOpenSettings: () => void }): React
           <Cog6ToothIcon />
           Settings…
         </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => requestAnimationFrame(onOpenAbout)}>
+          <InformationCircleIcon />
+          About Respo
+        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   )
@@ -415,6 +427,7 @@ function OverflowMenu({ onOpenSettings }: { onOpenSettings: () => void }): React
 export function TopBar(): React.JSX.Element {
   const rotateAll = useLayout((s) => s.rotateAll)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [aboutOpen, setAboutOpen] = useState(false)
 
   return (
     <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border bg-card px-2">
@@ -428,6 +441,8 @@ export function TopBar(): React.JSX.Element {
       <ShotNotice />
       {/* Everything else worth one line of feedback: a bookmark, a clear. */}
       <Notice />
+      {/* A newer Respo, while there is one. Renders nothing the rest of the time. */}
+      <UpdateChip />
       <div className="flex items-center gap-1">
         <ClearMenu />
         <SuiteSelector />
@@ -439,9 +454,13 @@ export function TopBar(): React.JSX.Element {
           <ArrowPathRoundedSquareIcon />
         </IconButton>
         <ThemeToggle />
-        <OverflowMenu onOpenSettings={() => setSettingsOpen(true)} />
+        <OverflowMenu
+          onOpenSettings={() => setSettingsOpen(true)}
+          onOpenAbout={() => setAboutOpen(true)}
+        />
       </div>
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+      <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
     </header>
   )
 }

@@ -309,6 +309,67 @@ export type AuthCredentials = { username: string; password: string }
 
 export type LoadState = 'loading' | 'ready' | 'failed'
 
+/**
+ * Where the updater is in its life.
+ *
+ * `idle` is "nothing known" — a fresh launch before the first check, or a build
+ * where updates are off. `available` through `downloaded` is the one path the
+ * toolbar chip walks: it is visible for exactly those three, plus an `error`
+ * that happened *on* that path (a download that failed is worth a retry
+ * button; a check that failed is not worth a word in the toolbar).
+ */
+export type UpdateStage =
+  'idle' | 'checking' | 'up-to-date' | 'available' | 'downloading' | 'downloaded' | 'error'
+
+/**
+ * The whole updater picture, pushed as `update-state` whenever it changes and
+ * answered by `updates:get`. The whole state rather than a delta, like every
+ * other main -> renderer message.
+ */
+export type UpdateStatePayload = {
+  stage: UpdateStage
+  /**
+   * Whether this build checks at all. Off in development, in e2e, and under
+   * `RESPO_NO_UPDATER=1`; the About dialog says so instead of offering a check
+   * that would do nothing.
+   */
+  enabled: boolean
+  /** The daily check on launch. A preference; manual checks ignore it. */
+  autoCheck: boolean
+  /** The version that is running. */
+  current: string
+  /** The version an update is (or was) about. `null` before one is known. */
+  version: string | null
+  /** 0..100 while `downloading`, `null` otherwise. */
+  percent: number | null
+  /** Why the last step failed. Set on `error` only. */
+  error: string | null
+  /**
+   * When the last check that found nothing finished, epoch milliseconds.
+   *
+   * Deliberately *not* stamped when a check finds an update: the next launch
+   * then checks again and the chip comes straight back, instead of an update
+   * being forgotten for a day because the chip was not clicked.
+   */
+  lastCheckAt: number | null
+}
+
+/** What the About dialog shows under the version. */
+export type AppInfo = {
+  version: string
+  electron: string
+  chromium: string
+  node: string
+  platform: string
+  arch: string
+}
+
+/**
+ * Things main can open on the user's behalf that are neither a url nor a path
+ * the renderer names: the log folder, and the bundled third-party notices.
+ */
+export type AppResource = 'logs' | 'notices'
+
 export type LoadStatePayload = {
   deviceId: string
   state: LoadState
@@ -360,6 +421,11 @@ export type MainEvent =
    * image on every viewport is one message, not ten.
    */
   | { type: 'auth-state'; payload: AuthPrompt[] }
+  /**
+   * The updater moved. Pushed on stage changes and on whole-percent steps of a
+   * download — at most a hundred messages for a download, not one per chunk.
+   */
+  | { type: 'update-state'; payload: UpdateStatePayload }
 
 /**
  * One interaction captured in a device view, in device-independent terms.
@@ -622,6 +688,30 @@ export type IpcInvokeMap = {
    * 401 page, which is a perfectly good thing to be looking at.
    */
   'auth:respond': { args: [string, AuthCredentials | null]; result: void }
+  /** Versions and platform, for the About dialog. */
+  'app:get-info': { args: []; result: AppInfo }
+  /**
+   * Open the log folder or the bundled notices. Main resolves the path; the
+   * renderer only names which one (CLAUDE.md §7). `false` when it could not.
+   */
+  'app:open-resource': { args: [AppResource]; result: boolean }
+  /**
+   * Updates. Every call answers with the whole state, and main pushes
+   * `update-state` whenever the updater moves on its own — a download
+   * progressing, a check the launch timer started.
+   */
+  'updates:get': { args: []; result: UpdateStatePayload }
+  /** A manual check. Ignored while one is already running. */
+  'updates:check': { args: []; result: UpdateStatePayload }
+  /**
+   * Start downloading the update the last check found. Nothing downloads
+   * without this: the chip's click is the only caller.
+   */
+  'updates:download': { args: []; result: UpdateStatePayload }
+  /** Quit and install what was downloaded. Silent install, app relaunches. */
+  'updates:install': { args: []; result: void }
+  /** The daily launch check on or off. Persisted by main. */
+  'updates:set-auto-check': { args: [boolean]; result: UpdateStatePayload }
 }
 
 export type IpcChannel = keyof IpcInvokeMap
@@ -667,7 +757,14 @@ const CHANNEL_REGISTRY: Record<IpcChannel, true> = {
   'permissions:dismiss': true,
   'permissions:set': true,
   'permissions:reset': true,
-  'auth:respond': true
+  'auth:respond': true,
+  'app:get-info': true,
+  'app:open-resource': true,
+  'updates:get': true,
+  'updates:check': true,
+  'updates:download': true,
+  'updates:install': true,
+  'updates:set-auto-check': true
 }
 
 export const IPC_CHANNELS: readonly IpcChannel[] = Object.keys(CHANNEL_REGISTRY) as IpcChannel[]
