@@ -18,7 +18,14 @@
 | [design/DESIGN-SYSTEM.md](design/DESIGN-SYSTEM.md) | Дизайн-система (токены Family, тёмная тема, плотность, анимации) — обязательный контекст UI-задач |
 | [superpowers/plans/](superpowers/plans/) | Планы волн реализации (W1–W7); актуальные — `2026-09-05-w5|w6|w7-*.md` |
 | [research/](research/) | Исследования: конкуренты, MCP-экосистема, матрица спека↔код (2026-09-05) |
-| Реверс-доки модулей (`modules/`) | ⬜ появятся по мере волн W5–W7 (по одному файлу на модуль main) |
+| [modules/device-catalog.md](modules/device-catalog.md) | Каталог устройств: источники, лицензия, стабильность id, приближения |
+| [modules/emulation.md](modules/emulation.md) | Emulation pack + Client Hints: EmulationManager, CDP-методы, vision пер-девайс |
+| [modules/reliability.md](modules/reliability.md) | Краш-оверлей и restart, reload/scroll-to-top пер-девайс, политика popups |
+| [modules/diagnostics.md](modules/diagnostics.md) | Счётчики ошибок консоли и overflow-скан, чипы и подсветка |
+| [modules/guides.md](modules/guides.md) | Линейки и направляющие: canvas-полосы, CSS-слой, скролл-трекинг без нового IPC-потока |
+| [modules/design-overlay.md](modules/design-overlay.md) | Design Overlay: хранилище картинок, CSS-слой, side-by-side, ограничение CSP |
+| [modules/file-watcher.md](modules/file-watcher.md) | Live-reload для `file://`: chokidar, css hot-swap, индикатор |
+| [modules/debug-css.md](modules/debug-css.md) | Debug ▸ Outline all elements: глобальный CSS-слой |
 
 ## Управление проектом
 
