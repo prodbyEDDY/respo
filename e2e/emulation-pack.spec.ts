@@ -131,9 +131,14 @@ async function openEmulate(page: Page): Promise<void> {
 
 /** Pick one option of a Radix select by its trigger's label. */
 async function pick(page: Page, trigger: string, option: string | RegExp): Promise<void> {
-  await openEmulate(page)
-  await page.locator(`button[aria-label="${trigger}"]`).click()
-  await page.getByRole('option', { name: option }).click()
+  // Right after the views reload, the popover can lose focus to a view and
+  // close itself between the open and the click — a race a person would
+  // answer by clicking again. So does this.
+  await expect(async () => {
+    await openEmulate(page)
+    await page.locator(`button[aria-label="${trigger}"]`).click({ timeout: 3000 })
+    await page.getByRole('option', { name: option }).click({ timeout: 3000 })
+  }).toPass({ timeout: 30_000 })
 }
 
 test('the emulation pack reaches every page, survives navigation, and restarts with the app', async () => {

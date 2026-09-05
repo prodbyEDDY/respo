@@ -81,3 +81,9 @@
 - **Сделано:** `main/debug-css.ts` (DebugCssManager): один глобальный тумблер, слой `insertCSS` на каждом девайсе — `* { outline: 1px solid rgba(255, 62, 0, 0.6) !important; }` (ember-оранжевый дизайн-системы); тот же реестр, что у guides/overlay (`registerDevice` с общим `css`-слоем из view-backend, `refresh` на `did-finish-load` → реинжект в новый документ, `retain`/`dispose`); девайс, добавленный при включённом тумблере, получает слой при регистрации; выключение — `removeInsertedCSS` по ключу, следа не остаётся. IPC `debug:set-outline [boolean]` (`validateBoolean`) / `debug:get` → `{outline}`. **Session-режим**, не персистится (канвас, открывшийся завтра весь в оранжевых рамках — загадка, а не настройка); рендерер спрашивает `debug:get` на старте, чтобы после перезагрузки окна чекбокс совпадал со страницами. Renderer: `stores/debug.ts`, чекбокс **⋯ → Debug ▸ Outline all elements** — рядом с «Rulers on all devices», без новых элементов в баре.
 - **Проверено e2e** (`debug.spec.ts`): 5 вьюшек `outlineStyle: none` → тумблер → `solid` на всех 5 → Reload → снова `solid` на всех 5 (реинжект) → тумблер → `none` на всех 5.
 - **Цифры:** юниты +7 (manager 5, store 2); e2e +1.
+
+## Task 11 — Доки, перф-гейт, ревью, отчёт ✅ (координатор)
+
+- Сессия исполнителя оборвалась после запуска фоновых субагентов; реверс-доки (7 файлов `docs/modules/`), спека/CLAUDE/README закоммичены координатором (`96b317a`), перф-гейт был закоммичен исполнителем (`92363f5`).
+- Два ревью Opus → C1 + I1–I3 + минорные закрыты вручную (см. коммит «W5 Task 11: правки по ревью»); фокусные e2e (overlay, diagnostics, rulers, live-reload, reliability, perf-budget) 6/6, p99 10.2 мс.
+- Отчёт: `W5-production-core-2026-09-05.md`.

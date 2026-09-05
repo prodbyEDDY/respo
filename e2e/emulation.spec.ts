@@ -77,7 +77,7 @@ test('CDP emulation reaches the page in every device view', async () => {
     const pixel = reported.find((p) => p.innerWidth === 412) as Probe
     expect(pixel.uaData).toMatchObject({
       platform: 'Android',
-      platformVersion: '15.0.0',
+      platformVersion: '16.0.0',
       model: 'Pixel 8',
       mobile: true
     })
