@@ -2,6 +2,7 @@ import * as React from 'react'
 import { Popover as PopoverPrimitive } from 'radix-ui'
 
 import { cn } from '@renderer/lib/utils'
+import { suppressRestoredTooltip } from '@renderer/lib/floating-focus'
 
 function Popover(props: React.ComponentProps<typeof PopoverPrimitive.Root>): React.JSX.Element {
   return <PopoverPrimitive.Root data-slot="popover" {...props} />
@@ -31,6 +32,7 @@ function PopoverContent({
   className,
   align = 'center',
   sideOffset = 6,
+  onCloseAutoFocus,
   ...props
 }: React.ComponentProps<typeof PopoverPrimitive.Content>): React.JSX.Element {
   return (
@@ -39,8 +41,13 @@ function PopoverContent({
         data-slot="popover-content"
         align={align}
         sideOffset={sideOffset}
+        collisionPadding={12}
+        onCloseAutoFocus={(event) => {
+          suppressRestoredTooltip()
+          onCloseAutoFocus?.(event)
+        }}
         className={cn(
-          'z-50 w-72 rounded-lg border border-border bg-popover p-3 text-popover-foreground shadow-soft outline-hidden',
+          'z-50 max-h-(--radix-popover-content-available-height) max-w-[calc(100vw-24px)] w-72 overflow-y-auto overscroll-contain rounded-lg border border-border bg-popover p-3 text-popover-foreground shadow-soft outline-hidden',
           // Motion budget: transform/opacity only, 120-180ms (DESIGN-SYSTEM.md).
           'origin-(--radix-popover-content-transform-origin) duration-150 ease-out',
           'data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95',

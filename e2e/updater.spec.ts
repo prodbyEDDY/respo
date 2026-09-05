@@ -1,6 +1,6 @@
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test'
 import { createHash, randomBytes } from 'node:crypto'
-import { rmSync } from 'node:fs'
+import { readFileSync, rmSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import { join, resolve } from 'node:path'
 import type { AddressInfo } from 'node:net'
@@ -9,7 +9,7 @@ import { PROBE_URL } from './probe'
 
 /**
  * Launched by *directory*, unlike the other specs: Electron then reads the
- * project's `package.json` and `app.getVersion()` answers `0.1.0`. Launched by
+ * project's `package.json` and `app.getVersion()` answers the product version. Launched by
  * the entry file it answers Electron's own version, and a 44.0.0 app has no
  * update to 0.1.1 ("downgrade is disallowed").
  */
@@ -26,7 +26,11 @@ const ROOT = resolve(__dirname, '..')
  * not a test of anything. A real install is verified by hand with a real
  * build (W6 log, Task A4).
  */
-const NEXT_VERSION = '0.1.1'
+const currentVersion = (
+  JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { version: string }
+).version
+const [major, minor, patch] = currentVersion.split('.')
+const NEXT_VERSION = `${major}.${minor}.${Number(patch) + 1}`
 const INSTALLER_NAME = `Respo-Setup-${NEXT_VERSION}.exe`
 const INSTALLER_BYTES = 3 * 1024 * 1024
 /** Sent in slices, so the download is long enough to show a percentage. */
@@ -172,7 +176,9 @@ test('the launch check finds a release, and the chip downloads and installs it',
     await window.getByLabel('More options').click()
     await window.getByRole('menuitem', { name: 'About Respo' }).click()
     const about = window.locator('[data-slot="about-dialog"]')
-    await expect(about.locator('[data-slot="about-version"]')).toHaveText('Version 0.1.0')
+    await expect(about.locator('[data-slot="about-version"]')).toHaveText(
+      `Version ${currentVersion}`
+    )
     await expect(about.locator('[data-slot="update-summary"]')).toHaveText(
       `Respo ${NEXT_VERSION} is ready to install.`
     )

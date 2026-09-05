@@ -39,6 +39,24 @@ export function Segmented<T extends string | number>({
           type="button"
           role="radio"
           aria-checked={choice.value === value}
+          tabIndex={choice.value === value ? 0 : -1}
+          onKeyDown={(event) => {
+            const index = choices.findIndex((item) => item.value === choice.value)
+            const delta =
+              event.key === 'ArrowRight' || event.key === 'ArrowDown'
+                ? 1
+                : event.key === 'ArrowLeft' || event.key === 'ArrowUp'
+                  ? -1
+                  : 0
+            if (!delta) return
+            event.preventDefault()
+            const nextIndex = (index + delta + choices.length) % choices.length
+            const next = choices[nextIndex]
+            if (next) onChange(next.value)
+            event.currentTarget.parentElement
+              ?.querySelectorAll<HTMLButtonElement>('[role="radio"]')
+              [nextIndex]?.focus()
+          }}
           onClick={() => onChange(choice.value)}
           className={cn(
             'flex flex-1 items-center justify-center rounded-sm px-2 py-0.5',

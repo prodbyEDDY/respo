@@ -93,6 +93,26 @@ describe('ViewManager.syncDevices', () => {
     expect(backend.order).toEqual(['a', 'b'])
   })
 
+  it('positions a view when its layout arrived before device creation', () => {
+    manager.applyLayout([rect('a', { x: 20, y: 60, zoom: 0.5 })], CANVAS)
+    manager.syncDevices([device('a')])
+
+    const view = backend.views.get('a')
+    expect(view?.setBounds).toHaveBeenCalledWith({ x: 20, y: 60, width: 390, height: 844 })
+    expect(view?.setZoomFactor).toHaveBeenCalledWith(0.5)
+    expect(view?.setVisible).toHaveBeenLastCalledWith(true)
+  })
+
+  it('uses the newest layout, including a canvas hidden before devices arrive', () => {
+    manager.applyLayout([rect('a')], CANVAS)
+    manager.applyLayout([], CANVAS)
+    manager.syncDevices([device('a')])
+
+    const view = backend.views.get('a')
+    expect(view?.setBounds).not.toHaveBeenCalled()
+    expect(view?.setVisible).toHaveBeenLastCalledWith(false)
+  })
+
   it('reuses views for devices that are still present', () => {
     manager.syncDevices([device('a'), device('b')])
     manager.syncDevices([device('a'), device('b'), device('c')])

@@ -28,6 +28,7 @@ import { authHostLabel, authRealmLabel, createAuthManager, type AuthManager } fr
 import { CDPController } from './cdp-controller'
 import { clearBrowsingData } from './clear-data'
 import { DevtoolsManager } from './devtools-manager'
+import { UiSurfaces } from './ui-surfaces'
 import { DebugCssManager } from './debug-css'
 import { DesignOverlayManager } from './design-overlay'
 import { DiagnosticsManager } from './diagnostics'
@@ -240,6 +241,8 @@ function resolveStartUrl(): string {
   return DEFAULT_START_URL
 }
 
+let uiSurfaces: UiSurfaces | null = null
+
 function createWindow(): void {
   // Wide enough that a handful of device frames fit side by side; this is a
   // multi-viewport browser, not a single-page window.
@@ -267,6 +270,7 @@ function createWindow(): void {
   // Managers created before the window (the permission policy) push through
   // this; it is cleared again on `closed`.
   appWindow = mainWindow
+  uiSurfaces = new UiSurfaces(mainWindow)
 
   // Which page the session is on, folded out of the same batch: history records
   // one visit for five viewports, and a clear knows whose data it would delete.
@@ -320,7 +324,7 @@ function createWindow(): void {
   // that has it open, and the single dock they take turns in. The dock edge is
   // restored here so the first panel opens where the user left the last one.
   devtools = new DevtoolsManager({
-    createPanel: createDevtoolsPanelFactory(mainWindow),
+    createPanel: createDevtoolsPanelFactory(mainWindow, uiSurfaces.root),
     dock: persistence?.load().devtools.dock ?? 'bottom',
     deviceName: (deviceId) => deviceNames.get(deviceId),
     // The window is what says how big a docked strip may be; the rect the
@@ -436,6 +440,7 @@ function createWindow(): void {
 
   viewManager = new ViewManager(
     createElectronViewBackend(mainWindow, {
+      surfaceRoot: uiSurfaces.root,
       canvasLayer: process.env['RESPO_CANVAS_LAYER'] !== '0',
       cdp,
       sync: syncEngine,
@@ -747,6 +752,11 @@ function registerIpcHandlers(): void {
     const startedAt = performance.now()
     viewManager.applyLayout(rects, viewport)
     perf?.recordLayoutApply(performance.now() - startedAt)
+  })
+
+  registerHandler('ui:surface-snapshots', () => uiSurfaces?.snapshots() ?? [])
+  registerHandler('ui:cover-surfaces', (_event, covered) => {
+    uiSurfaces?.setCovered(validateBoolean(covered, 'ui:cover-surfaces'))
   })
 
   registerHandler('nav:navigate', (_event, url) => {

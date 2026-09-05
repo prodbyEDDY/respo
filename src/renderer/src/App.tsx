@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { DeviceManagerView } from '@renderer/components/device-manager/DeviceManagerView'
+import { NativeSurfaceGuard } from '@renderer/components/common/NativeSurfaceGuard'
 import { DevtoolsDock } from '@renderer/components/devtools/DevtoolsDock'
 import { Canvas } from '@renderer/components/previewer/Canvas'
 import { AuthDialog } from '@renderer/components/toolbar/AuthDialog'
@@ -238,6 +239,7 @@ function App(): React.JSX.Element {
 
   return (
     <TooltipProvider>
+      <NativeSurfaceGuard />
       <div className="flex h-full flex-col bg-background">
         <TopBar />
 

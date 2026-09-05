@@ -104,6 +104,10 @@
   --border: #f2f0ed;
   --input: #f2f0ed;
   --ring: #0086fc;
+  --scrollbar-thumb: #ccc8c2;
+  --scrollbar-hover: #aaa59e;
+  --icon-toolbar: 20px;
+  --icon-control: 16px;
   --radius: 10px;
 
   --sidebar: #f6f4ef;
@@ -141,6 +145,8 @@
   --border: #2a2927;
   --input: #2a2927;
   --ring: #4da3ff;
+  --scrollbar-thumb: #494640;
+  --scrollbar-hover: #6b665e;
 
   --sidebar: #1e1d1b;
   --sidebar-foreground: #f2f0ed;
@@ -248,5 +254,78 @@
     margin: 0;
     overflow: hidden;
     user-select: none;
+  }
+
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  *::-webkit-scrollbar-track,
+  *::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+    border: 2px solid transparent;
+    border-radius: 8px;
+    background-clip: padding-box;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: var(--scrollbar-hover);
+  }
+  *::-webkit-scrollbar-button {
+    display: none;
+  }
+  input,
+  textarea {
+    user-select: text;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+/* The toolbar stays usable down to the native window's 720px minimum. */
+.app-toolbar {
+  position: relative;
+  z-index: 30;
+}
+.app-toolbar [data-size='icon-sm'] > svg {
+  width: var(--icon-toolbar);
+  height: var(--icon-toolbar);
+}
+.device-caption {
+  container-type: inline-size;
+}
+.device-caption h2 {
+  font-size: 13px;
+  line-height: 18px;
+}
+@container (max-width: 300px) {
+  .device-caption .device-secondary {
+    display: none;
+  }
+}
+@container (max-width: 180px) {
+  .device-caption .device-quick-actions {
+    display: none;
+  }
+}
+@media (max-width: 1000px) {
+  .app-toolbar {
+    gap: 4px;
+    padding-inline: 6px;
+  }
+  .app-toolbar [data-testid='suite-selector'] {
+    max-width: 90px;
+  }
+  .app-toolbar .toolbar-secondary {
+    display: none;
   }
 }

@@ -19,6 +19,8 @@ import type { DeviceSpec, Rect } from './types'
  * multiplied by `zoom`. Main restores the logical viewport with
  * `webContents.setZoomFactor(zoom)`.
  */
+export type SurfaceSnapshot = Rect & { image: string }
+
 export type ViewRect = {
   deviceId: string
   x: number
@@ -672,6 +674,8 @@ export type ReloadRequest = {
 
 /** renderer -> main request/response channels. Extended by later tasks. */
 export type IpcInvokeMap = {
+  'ui:surface-snapshots': { args: []; result: SurfaceSnapshot[] }
+  'ui:cover-surfaces': { args: [boolean]; result: void }
   'app:get-version': { args: []; result: string }
   /**
    * The url the session opens on: a CLI/deep-link argument when there is one,
@@ -979,6 +983,8 @@ const CHANNEL_REGISTRY: Record<IpcChannel, true> = {
   'app:get-version': true,
   'app:get-start-url': true,
   'views:set-layout': true,
+  'ui:surface-snapshots': true,
+  'ui:cover-surfaces': true,
   'views:sync-devices': true,
   'nav:navigate': true,
   'nav:back': true,

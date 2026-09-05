@@ -43,6 +43,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui
 import { ipcBridge } from '@renderer/lib/ipc'
 import { cn } from '@renderer/lib/utils'
 import { useDesignOverlay } from '@renderer/stores/design-overlay'
+import { useDevices } from '@renderer/stores/devices'
 import { useEmulation } from '@renderer/stores/emulation'
 import { NO_GUIDES, useGuides } from '@renderer/stores/guides'
 import { useLayout } from '@renderer/stores/layout'
@@ -314,6 +315,13 @@ function VisionChip({ deviceId }: { deviceId: string }): React.JSX.Element | nul
  * down, so the header stays the same width whatever a device can do.
  */
 function DeviceMenu({ deviceId }: { deviceId: string }): React.JSX.Element {
+  const device = useDevices((s) => s.allDevices.find((d) => d.id === deviceId))
+  const rotate = useLayout((s) => s.rotate)
+  const enterIndividual = useLayout((s) => s.enterIndividual)
+  const toggleMirror = useSync((s) => s.toggleDevice)
+  const muted = useSync((s) => s.disabled[deviceId] === true)
+  const toggleTools = usePanels((s) => s.toggle)
+  const capture = useShots((s) => s.capture)
   const reload = useNavigation((s) => s.reload)
   const scrollToTop = useNavigation((s) => s.scrollToTop)
   const url = useNavigation((s) => s.perDevice[deviceId]?.url ?? '')
@@ -339,6 +347,24 @@ function DeviceMenu({ deviceId }: { deviceId: string }): React.JSX.Element {
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start">
+        <DropdownMenuItem onSelect={() => enterIndividual(deviceId)}>
+          <ArrowsPointingOutIcon /> Show only this device
+        </DropdownMenuItem>
+        {device && isRotatable(device) ? (
+          <DropdownMenuItem onSelect={() => rotate(deviceId)}>
+            <ArrowPathRoundedSquareIcon /> Rotate this device
+          </DropdownMenuItem>
+        ) : null}
+        <DropdownMenuCheckboxItem checked={!muted} onCheckedChange={() => toggleMirror(deviceId)}>
+          Mirror interactions
+        </DropdownMenuCheckboxItem>
+        <DropdownMenuItem onSelect={() => capture(deviceId)}>
+          <CameraIcon /> Screenshot this device
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => toggleTools(deviceId)}>
+          <CodeBracketIcon /> Toggle DevTools
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={() => reload({ deviceId })}>
           <ArrowPathIcon />
           Reload
@@ -532,7 +558,7 @@ function ShotButton({ deviceId }: { deviceId: string }): React.JSX.Element {
             variant="ghost"
             size="icon-xs"
             aria-label="Screenshot options"
-            className="-ml-1.5 w-3 text-muted-foreground hover:text-foreground"
+            className="w-5 text-muted-foreground hover:text-foreground"
           >
             <ChevronDownIcon />
           </Button>
@@ -689,32 +715,42 @@ export function DeviceFrame({ device, zoom, viewportRef }: DeviceFrameProps): Re
         )}
       />
 
-      <header className="flex items-center gap-2 px-0.5">
-        <h2 className="text-caption font-medium text-foreground">{device.name}</h2>
-        <p className="text-micro tabular-nums text-muted-foreground">
-          {device.width} × {device.height}
-          {zoom === 1 ? '' : ` · ${Math.round(zoom * 100)}%`}
-        </p>
-        {load?.state === 'loading' ? <Spinner /> : null}
-        {/* What the page is complaining about, and what sets this device apart. */}
-        <DiagnosticsChips deviceId={device.id} />
-        <VisionChip deviceId={device.id} />
-        <OverlayChip deviceId={device.id} guidesKey={guidesKey} />
-        {/*
+      <header className="device-caption flex h-10 items-center gap-1 px-0.5" style={{ width }}>
+        <div className="min-w-0 flex-1">
+          <h2 className="truncate font-medium text-foreground" title={device.name}>
+            {device.name}
+          </h2>
+          <p className="truncate text-micro tabular-nums text-muted-foreground">
+            {device.width} × {device.height}
+            {zoom === 1 ? '' : ` · ${Math.round(zoom * 100)}%`}
+          </p>
+        </div>
+        <span className="flex shrink-0 items-center gap-0.5">
+          {load?.state === 'loading' ? <Spinner /> : null}
+          {/* What the page is complaining about, and what sets this device apart. */}
+          <DiagnosticsChips deviceId={device.id} />
+          <VisionChip deviceId={device.id} />
+          <OverlayChip deviceId={device.id} guidesKey={guidesKey} />
+        </span>
+        <span className="device-secondary flex shrink-0 items-center gap-0.5">
+          {/*
           Next to the caption rather than pushed to the far edge: a 1920px
           frame would put a right-aligned control most of a screen away from
           the name it belongs to.
         */}
-        <MirrorToggle deviceId={device.id} />
-        {isRotatable(device) ? <RotateToggle deviceId={device.id} /> : null}
-        <ShotButton deviceId={device.id} />
-        <DevtoolsToggle deviceId={device.id} />
-        {/*
+          <MirrorToggle deviceId={device.id} />
+          {isRotatable(device) ? <RotateToggle deviceId={device.id} /> : null}
+        </span>
+        <span className="device-quick-actions flex shrink-0 items-center gap-0.5">
+          <ShotButton deviceId={device.id} />
+          <DevtoolsToggle deviceId={device.id} />
+          {/*
           Last in the row: it changes what the *canvas* shows rather than
           anything about this device, so it reads as the way out of the row
           instead of one more device control.
         */}
-        {expandable ? <ExpandButton deviceId={device.id} /> : null}
+          {expandable ? <ExpandButton deviceId={device.id} /> : null}
+        </span>
         <DeviceMenu deviceId={device.id} />
       </header>
 

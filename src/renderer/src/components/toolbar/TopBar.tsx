@@ -451,6 +451,15 @@ function OverflowMenu({ onOpenSettings, onOpenAbout }: OverflowMenuProps): React
           <ComputerDesktopIcon />
           Use system theme
         </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => setTheme('light')}>
+          <SunIcon /> Light theme
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => setTheme('dark')}>
+          <MoonIcon /> Dark theme
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => useLayout.getState().rotateAll()}>
+          <ArrowPathRoundedSquareIcon /> Rotate all devices
+        </DropdownMenuItem>
         <DropdownMenuSeparator />
         {/*
           Radix returns focus to the trigger as the menu closes, and a dialog
@@ -484,7 +493,7 @@ export function TopBar(): React.JSX.Element {
   const [aboutOpen, setAboutOpen] = useState(false)
 
   return (
-    <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border bg-card px-2">
+    <header className="app-toolbar flex h-12 shrink-0 items-center gap-2 border-b border-border bg-card px-2">
       <NavControls />
       <AddressBar />
       {/*
@@ -505,10 +514,12 @@ export function TopBar(): React.JSX.Element {
         <SyncChip />
         <InspectToggle />
         <ShotAllButton />
-        <IconButton label="Rotate all devices" onClick={rotateAll}>
-          <ArrowPathRoundedSquareIcon />
-        </IconButton>
-        <ThemeToggle />
+        <span className="toolbar-secondary flex">
+          <IconButton label="Rotate all devices" onClick={rotateAll}>
+            <ArrowPathRoundedSquareIcon />
+          </IconButton>
+          <ThemeToggle />
+        </span>
         <OverflowMenu
           onOpenSettings={() => setSettingsOpen(true)}
           onOpenAbout={() => setAboutOpen(true)}

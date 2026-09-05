@@ -1,17 +1,1 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
-  <!--
-    Respo mark. One page on every device: a desktop frame with a phone in
-    front of it, on link-blue (#0086fc, DESIGN-SYSTEM.md). No text — it has
-    to read at 16 px in the taskbar. Source of truth for every raster in
-    build/ and resources/ (scripts/icons.mjs).
-  -->
-  <rect width="1024" height="1024" rx="228" fill="#0086fc"/>
-  <!-- Desktop viewport: an outline, so the tile shows through as the screen. -->
-  <rect x="180" y="248" width="596" height="420" rx="60" fill="none" stroke="#ffffff" stroke-width="76"/>
-  <!-- Knockout gap so the phone separates from the frame behind it. -->
-  <rect x="566" y="416" width="330" height="464" rx="88" fill="#0086fc"/>
-  <!-- Phone viewport, solid — the one that is closest. -->
-  <rect x="612" y="462" width="238" height="372" rx="44" fill="#ffffff"/>
-  <!-- Its screen. -->
-  <rect x="648" y="512" width="166" height="252" rx="18" fill="#0086fc"/>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024"><rect width="1024" height="1024" rx="224" fill="#0086fc"/><path d="M240 240h200v88H328v152h-88zm0 368h88v120h112v88H240zM552 240h104q152 0 152 144v40q0 144-152 144h-16l204 248H722L488 536v-56h164q56 0 56-56v-40q0-56-56-56H552z" fill="white"/></svg>

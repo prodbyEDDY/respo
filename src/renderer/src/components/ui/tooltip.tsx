@@ -2,6 +2,7 @@ import * as React from 'react'
 import { Tooltip as TooltipPrimitive } from 'radix-ui'
 
 import { cn } from '@renderer/lib/utils'
+import { isRestoringFocus } from '@renderer/lib/floating-focus'
 
 /** One provider per window; nested providers would each keep their own timers. */
 function TooltipProvider({
@@ -21,10 +22,23 @@ function Tooltip(props: React.ComponentProps<typeof TooltipPrimitive.Root>): Rea
   return <TooltipPrimitive.Root data-slot="tooltip" {...props} />
 }
 
-function TooltipTrigger(
-  props: React.ComponentProps<typeof TooltipPrimitive.Trigger>
-): React.JSX.Element {
-  return <TooltipPrimitive.Trigger data-slot="tooltip-trigger" {...props} />
+function TooltipTrigger({
+  onFocus,
+  ...props
+}: React.ComponentProps<typeof TooltipPrimitive.Trigger>): React.JSX.Element {
+  return (
+    <TooltipPrimitive.Trigger
+      data-slot="tooltip-trigger"
+      {...props}
+      onFocus={(event) => {
+        onFocus?.(event)
+        // Restoring focus after a pointer-opened menu must not immediately open a
+        // second floating surface. Keyboard focus still receives its tooltip.
+        if (isRestoringFocus() || !event.currentTarget.matches(':focus-visible'))
+          event.preventDefault()
+      }}
+    />
+  )
 }
 
 function TooltipContent({
@@ -38,8 +52,9 @@ function TooltipContent({
       <TooltipPrimitive.Content
         data-slot="tooltip-content"
         sideOffset={sideOffset}
+        collisionPadding={8}
         className={cn(
-          'z-50 w-fit rounded-md border border-border bg-popover px-2 py-1 text-micro text-popover-foreground shadow-soft',
+          'z-[70] w-fit max-w-xs text-balance rounded-md border border-border bg-popover px-2 py-1 text-micro text-popover-foreground shadow-soft',
           // Motion budget: transform/opacity only, 120-180ms (DESIGN-SYSTEM.md).
           'origin-(--radix-tooltip-content-transform-origin) duration-150 ease-out',
           'data-[state=delayed-open]:animate-in data-[state=delayed-open]:fade-in-0 data-[state=delayed-open]:zoom-in-95',

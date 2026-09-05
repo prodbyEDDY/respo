@@ -2,7 +2,8 @@
 #
 # `npm run build:win` → dist/Respo-Setup-<version>.exe + latest.yml (+ .blockmap).
 # The release workflow (.github/workflows/release.yml) runs the same with
-# `--publish always` on a `v*` tag, and electron-updater in the app reads the
+# `--publish never` on a `v*` tag, then uploads all assets to one release.
+# electron-updater in the app reads the
 # GitHub provider below out of resources/app-update.yml.
 appId: com.prodbyeddy.respo
 productName: Respo
@@ -10,6 +11,9 @@ copyright: Copyright © 2026 prodbyEDDY
 directories:
   buildResources: build
 files:
+  - '!**/*.log*'
+  - '!components.json'
+  - '!output/**'
   - '!**/.vscode/*'
   - '!src/**'
   - '!e2e/**'

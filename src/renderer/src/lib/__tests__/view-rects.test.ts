@@ -3,6 +3,10 @@ import { measureRects, measureViewport, sameLayoutFrame, type LayoutFrame } from
 
 function elementAt(x: number, y: number, width: number, height: number): HTMLElement {
   const element = document.createElement('div')
+  Object.defineProperties(element, {
+    clientWidth: { value: width, configurable: true },
+    clientHeight: { value: height, configurable: true }
+  })
   element.getBoundingClientRect = () =>
     ({ x, y, width, height, top: y, left: x, right: x + width, bottom: y + height }) as DOMRect
   return element
@@ -35,6 +39,11 @@ describe('measureRects', () => {
 })
 
 describe('measureViewport', () => {
+  it('keeps native content out of scrollbar gutters', () => {
+    const element = elementAt(0, 48, 1200, 800)
+    Object.defineProperties(element, { clientWidth: { value: 1192 }, clientHeight: { value: 792 } })
+    expect(measureViewport(element)).toEqual({ x: 0, y: 48, width: 1192, height: 792 })
+  })
   it('reports the canvas region in window coordinates', () => {
     expect(measureViewport(elementAt(0, 48, 1200, 800))).toEqual({
       x: 0,

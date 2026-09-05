@@ -29,6 +29,10 @@ function fakeFrames(): Frames {
 }
 
 function boxed(element: HTMLElement, x: number, y: number, width: number, height: number): void {
+  Object.defineProperties(element, {
+    clientWidth: { value: width, configurable: true },
+    clientHeight: { value: height, configurable: true }
+  })
   element.getBoundingClientRect = () =>
     ({ x, y, width, height, top: y, left: x, right: x + width, bottom: y + height }) as DOMRect
 }

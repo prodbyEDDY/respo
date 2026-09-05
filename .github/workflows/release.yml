@@ -51,16 +51,18 @@ jobs:
       - name: Build
         run: npx electron-vite build
 
-      # Creates (or fills) a *draft* release for the tag with
-      # Respo-Setup-<version>.exe, its .blockmap and latest.yml.
-      - name: Package and upload
-        run: npx electron-builder --win --publish always
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Package locally, then upload all three files to one release. Concurrent
+      # electron-builder publishers previously created duplicate draft releases
+      # and stranded the .blockmap away from the published installer.
+      - name: Package
+        run: npx electron-builder --win --publish never
 
       - name: Publish the release with notes
         shell: bash
         run: |
+          gh release create "$GITHUB_REF_NAME" --draft --verify-tag \
+            --title "Respo ${GITHUB_REF_NAME#v}" --notes-file release-notes.md
+          gh release upload "$GITHUB_REF_NAME" dist/*.exe dist/*.blockmap dist/latest.yml
           gh release edit "$GITHUB_REF_NAME" \
             --title "Respo ${GITHUB_REF_NAME#v}" \
             --notes-file release-notes.md \

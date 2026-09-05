@@ -54,7 +54,7 @@ function devtoolsGeometry(app: ElectronApplication, url: string): Promise<Devtoo
     const docked =
       window === undefined
         ? undefined
-        : window.contentView.children.find((child) => frontendOf(child) !== undefined)
+        : window.contentView.children[0]?.children.find((child) => frontendOf(child) !== undefined)
 
     // `devToolsWebContents` rather than `isDevToolsOpened()`: the latter only
     // answers for a frontend Electron manages itself, and Respo always supplies

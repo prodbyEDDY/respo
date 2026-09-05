@@ -20,6 +20,7 @@ test-results/
 playwright-report/
 blob-report/
 .playwright/
+output/playwright/
 
 # claude: версионируем только команды
 .claude/*

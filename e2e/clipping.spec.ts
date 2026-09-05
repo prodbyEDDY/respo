@@ -42,7 +42,7 @@ function geometry(app: ElectronApplication, url: string): Promise<Geometry> {
       return wc !== undefined && !wc.isDestroyed() && wc.getURL() === probeUrl
     }
 
-    const root = window.contentView
+    const root = window.contentView.children[0] ?? window.contentView
     // The canvas layer is whichever child holds the device views. Without one
     // they are children of the window itself, which is the failure this guards.
     const layer = root.children.find((child) => child.children.some(isDeviceView))

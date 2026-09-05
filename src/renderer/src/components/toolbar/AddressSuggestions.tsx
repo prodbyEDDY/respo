@@ -45,6 +45,7 @@ export function AddressSuggestions({
 
   return (
     <ul
+      data-slot="address-suggestions"
       id={id}
       role="listbox"
       aria-label="Suggestions"
