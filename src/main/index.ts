@@ -26,6 +26,7 @@ import { authHostLabel, authRealmLabel, createAuthManager, type AuthManager } fr
 import { CDPController } from './cdp-controller'
 import { clearBrowsingData } from './clear-data'
 import { DevtoolsManager } from './devtools-manager'
+import { DebugCssManager } from './debug-css'
 import { DesignOverlayManager } from './design-overlay'
 import { DiagnosticsManager } from './diagnostics'
 import { EmulationManager } from './emulation'
@@ -122,6 +123,8 @@ let guides: GuidesManager | null = null
 let overlays: DesignOverlayManager | null = null
 /** Live reload of a local page, following the lead's url. */
 let watcher: FileWatcher | null = null
+/** Debug layers over every page: the outline switch. */
+let debugCss: DebugCssManager | null = null
 /** chokidar's `watch`, once its module has loaded. */
 let chokidarReady: import('./file-watcher').WatchFactory | null = null
 /** Scroll offsets of the devices whose rulers are showing, one message per turn. */
@@ -362,6 +365,8 @@ function createWindow(): void {
 
   // Guides are stylesheets on the pages; the manager only needs to measure.
   guides = new GuidesManager({ cdp })
+  // So is the outline switch.
+  debugCss = new DebugCssManager()
 
   // Live reload. chokidar is loaded lazily — it is only ever needed once a
   // local page is open — and the watcher itself is created now so the views
@@ -417,6 +422,7 @@ function createWindow(): void {
       guides,
       ...(overlays === null ? {} : { overlays }),
       watcher: liveReload,
+      debug: debugCss,
       // Popups belong to the viewport the user is interacting with — the same
       // election the mirroring follows.
       isLead: (deviceId) => syncEngine?.lead() === deviceId,
@@ -462,6 +468,8 @@ function createWindow(): void {
     overlays = null
     watcher?.dispose()
     watcher = null
+    debugCss?.dispose()
+    debugCss = null
     rulers.clear()
     scrollStates?.cancel()
     scrollStates = null
@@ -620,6 +628,7 @@ function registerIpcHandlers(): void {
     diagnostics?.retain(live)
     guides?.retain(live)
     overlays?.retain(live)
+    debugCss?.retain(live)
     for (const deviceId of [...rulers]) if (!live.has(deviceId)) rulers.delete(deviceId)
     // A lead that left the canvas must not keep deciding what gets recorded —
     // or whose cookies a clear would take (`lead-tracker.ts`).
@@ -918,6 +927,12 @@ function registerIpcHandlers(): void {
   registerHandler('watcher:toggle', () => watcher?.toggle() ?? OFF)
   registerHandler('watcher:get', () => watcher?.state() ?? OFF)
 
+  // Debug layers. One boolean, every device.
+  registerHandler('debug:set-outline', (_event, on) => {
+    debugCss?.setOutline(validateBoolean(on, 'debug:set-outline'))
+  })
+  registerHandler('debug:get', () => debugCss?.state() ?? { outline: false })
+
   // The one-way stream from the device views. Its sender is an untrusted page,
   // so the batch is validated (and clamped) before the engine sees any of it;
   // anything malformed is dropped rather than thrown back at the page.
@@ -1037,6 +1052,8 @@ app.on('before-quit', () => {
   viewManager = null
   emulation?.dispose()
   emulation = null
+  debugCss?.dispose()
+  debugCss = null
   watcher?.dispose()
   watcher = null
   overlays?.dispose()

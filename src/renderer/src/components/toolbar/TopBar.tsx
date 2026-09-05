@@ -49,6 +49,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui
 import { openLocalFile } from '@renderer/lib/browsing'
 import { cn } from '@renderer/lib/utils'
 import { useBookmarks } from '@renderer/stores/bookmarks'
+import { useDebug } from '@renderer/stores/debug'
 import { useDevices } from '@renderer/stores/devices'
 import { useGuides } from '@renderer/stores/guides'
 import { useHistory } from '@renderer/stores/history'
@@ -366,6 +367,8 @@ function DebugItems(): React.JSX.Element {
   const rulers = useGuides((s) => s.rulers)
   const setRulersAll = useGuides((s) => s.setRulersAll)
   const allRulers = active.length > 0 && active.every((device) => rulers[device.id] === true)
+  const outline = useDebug((s) => s.outline)
+  const setOutline = useDebug((s) => s.setOutline)
 
   return (
     <DropdownMenuSub>
@@ -384,6 +387,12 @@ function DebugItems(): React.JSX.Element {
           }
         >
           Rulers on all devices
+        </DropdownMenuCheckboxItem>
+        <DropdownMenuCheckboxItem
+          checked={outline}
+          onCheckedChange={(checked) => setOutline(checked === true)}
+        >
+          Outline all elements
         </DropdownMenuCheckboxItem>
       </DropdownMenuSubContent>
     </DropdownMenuSub>

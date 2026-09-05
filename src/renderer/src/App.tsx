@@ -21,6 +21,7 @@ import { useBookmarks } from '@renderer/stores/bookmarks'
 import { useDevices } from '@renderer/stores/devices'
 import { attachDiagnosticsBridge, useDiagnostics } from '@renderer/stores/diagnostics'
 import { useEmulation } from '@renderer/stores/emulation'
+import { hydrateDebug } from '@renderer/stores/debug'
 import { useDesignOverlay } from '@renderer/stores/design-overlay'
 import { useGuides } from '@renderer/stores/guides'
 import { applyRotation, useLayout } from '@renderer/stores/layout'
@@ -164,6 +165,9 @@ function App(): React.JSX.Element {
 
   // Whether a local page is being watched for live reload.
   useEffect(() => attachWatcherBridge(), [])
+
+  // The debug switches are a session mode main holds; ask once.
+  useEffect(() => hydrateDebug(), [])
 
   // mod+i arms the element picker, Escape puts it away.
   useInspectHotkeys()

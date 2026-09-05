@@ -869,6 +869,14 @@ export type IpcInvokeMap = {
   'watcher:toggle': { args: []; result: WatcherState }
   /** The watcher's state, for a renderer that has just started. */
   'watcher:get': { args: []; result: WatcherState }
+  /**
+   * Outline every element on every device, or stop. A session mode, not a
+   * setting: a canvas that opened tomorrow full of outlines would be a
+   * mystery. The layer is a stylesheet, put back on every new document.
+   */
+  'debug:set-outline': { args: [boolean]; result: void }
+  /** The debug switches, for a renderer that has just started. */
+  'debug:get': { args: []; result: { outline: boolean } }
 }
 
 export type IpcChannel = keyof IpcInvokeMap
@@ -928,7 +936,9 @@ const CHANNEL_REGISTRY: Record<IpcChannel, true> = {
   'overlay:image': true,
   'overlay:set': true,
   'watcher:toggle': true,
-  'watcher:get': true
+  'watcher:get': true,
+  'debug:set-outline': true,
+  'debug:get': true
 }
 
 export const IPC_CHANNELS: readonly IpcChannel[] = Object.keys(CHANNEL_REGISTRY) as IpcChannel[]

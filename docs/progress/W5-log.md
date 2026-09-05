@@ -74,3 +74,10 @@
 - **Проверено e2e** (`live-reload.spec.ts`, папка во временном каталоге, файлы пишутся тестом): точка видна и `watcher:get.file` = путь страницы; правка css → цвет меняется на всех 5 **без перезагрузки** (маркер `window.__respoMarker` на месте); правка html → reload всех (новый title, маркер пропал); пауза → правка игнорируется 1.2 с, возобновление → применяется; `nav:navigate` на http → точка исчезла, состояние `off`.
 - **Решение:** css-hot-swap по подмене `href` (а не `CSS.setStyleSheetText` из спеки §4.2): не требует `CSS.enable`/`DOM.enable` и stylesheetId, работает через один evaluate; спека будет приведена к факту.
 - **Цифры:** юниты +14 (`file-watcher.test.ts`); e2e +1.
+- Коммит `cdaccb6`.
+
+## Task 10 — Debug ▸ Outline all elements ✅
+
+- **Сделано:** `main/debug-css.ts` (DebugCssManager): один глобальный тумблер, слой `insertCSS` на каждом девайсе — `* { outline: 1px solid rgba(255, 62, 0, 0.6) !important; }` (ember-оранжевый дизайн-системы); тот же реестр, что у guides/overlay (`registerDevice` с общим `css`-слоем из view-backend, `refresh` на `did-finish-load` → реинжект в новый документ, `retain`/`dispose`); девайс, добавленный при включённом тумблере, получает слой при регистрации; выключение — `removeInsertedCSS` по ключу, следа не остаётся. IPC `debug:set-outline [boolean]` (`validateBoolean`) / `debug:get` → `{outline}`. **Session-режим**, не персистится (канвас, открывшийся завтра весь в оранжевых рамках — загадка, а не настройка); рендерер спрашивает `debug:get` на старте, чтобы после перезагрузки окна чекбокс совпадал со страницами. Renderer: `stores/debug.ts`, чекбокс **⋯ → Debug ▸ Outline all elements** — рядом с «Rulers on all devices», без новых элементов в баре.
+- **Проверено e2e** (`debug.spec.ts`): 5 вьюшек `outlineStyle: none` → тумблер → `solid` на всех 5 → Reload → снова `solid` на всех 5 (реинжект) → тумблер → `none` на всех 5.
+- **Цифры:** юниты +7 (manager 5, store 2); e2e +1.
