@@ -12,6 +12,7 @@ Release notes on GitHub are generated from this file (`scripts/release-notes.mjs
 
 ### Fixed
 
+- Retained the latest canvas geometry when it arrives before native device creation, preventing loaded previews from remaining invisible until the next resize or scroll.
 - Menus, nested dropdowns, selections, tooltips and dialogs now display above native device previews and docked DevTools. Visible previews are briefly represented by stills while floating UI is open; closing restores the live surfaces without reloading pages.
 - Fixed custom typography tokens being silently removed by class merging when a text color was also set.
 - Kept native device views out of the canvas scrollbar gutter, so the scrollbar remains accessible.

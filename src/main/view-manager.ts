@@ -107,6 +107,7 @@ export class ViewManager {
   private readonly onLoadState: ReportLoadState | null
   private readonly entries = new Map<string, Entry>()
   private canvas: Rect | null = null
+  private layoutRects: readonly ViewRect[] = []
   private url: string | null = null
   private destroyed = false
 
@@ -163,6 +164,10 @@ export class ViewManager {
       // A device that joins mid-session catches up with everyone else.
       if (this.url !== null) view.loadUrl(this.url)
     }
+    // React can measure placeholders before its device-sync effect reaches
+    // main. The renderer deduplicates unchanged geometry, so retain and replay
+    // that frame when views arrive instead of waiting for a resize or scroll.
+    if (this.canvas !== null) this.applyLayout(this.layoutRects, this.canvas)
   }
 
   /**
@@ -171,6 +176,7 @@ export class ViewManager {
    */
   applyLayout(rects: readonly ViewRect[], viewport: Rect): void {
     if (this.destroyed) return
+    this.layoutRects = rects
 
     if (!sameRect(this.canvas, viewport)) {
       this.canvas = { ...viewport }
