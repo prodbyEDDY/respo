@@ -3,6 +3,7 @@ import { XMarkIcon } from '@heroicons/react/24/outline'
 import { Dialog as DialogPrimitive } from 'radix-ui'
 
 import { cn } from '@renderer/lib/utils'
+import { suppressRestoredTooltip } from '@renderer/lib/floating-focus'
 
 function Dialog(props: React.ComponentProps<typeof DialogPrimitive.Root>): React.JSX.Element {
   return <DialogPrimitive.Root data-slot="dialog" {...props} />
@@ -42,6 +43,7 @@ function DialogContent({
   className,
   children,
   showCloseButton = true,
+  onCloseAutoFocus,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean
@@ -51,8 +53,12 @@ function DialogContent({
       <DialogOverlay />
       <DialogPrimitive.Content
         data-slot="dialog-content"
+        onCloseAutoFocus={(event) => {
+          suppressRestoredTooltip()
+          onCloseAutoFocus?.(event)
+        }}
         className={cn(
-          'fixed top-1/2 left-1/2 z-50 grid w-full max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4',
+          'fixed top-1/2 left-1/2 z-50 grid max-h-[calc(100dvh-32px)] w-[calc(100%-32px)] max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 overflow-y-auto overscroll-contain',
           'rounded-xl border border-border bg-popover p-5 text-popover-foreground shadow-float',
           'duration-150 ease-out',
           'data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95',

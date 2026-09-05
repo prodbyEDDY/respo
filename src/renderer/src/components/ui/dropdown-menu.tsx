@@ -3,6 +3,7 @@ import { CheckIcon, ChevronRightIcon } from '@heroicons/react/24/outline'
 import { DropdownMenu as DropdownMenuPrimitive } from 'radix-ui'
 
 import { cn } from '@renderer/lib/utils'
+import { suppressRestoredTooltip } from '@renderer/lib/floating-focus'
 
 function DropdownMenu(
   props: React.ComponentProps<typeof DropdownMenuPrimitive.Root>
@@ -19,6 +20,7 @@ function DropdownMenuTrigger(
 function DropdownMenuContent({
   className,
   sideOffset = 6,
+  onCloseAutoFocus,
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Content>): React.JSX.Element {
   return (
@@ -26,6 +28,11 @@ function DropdownMenuContent({
       <DropdownMenuPrimitive.Content
         data-slot="dropdown-menu-content"
         sideOffset={sideOffset}
+        collisionPadding={8}
+        onCloseAutoFocus={(event) => {
+          suppressRestoredTooltip()
+          onCloseAutoFocus?.(event)
+        }}
         className={cn(
           'z-50 max-h-(--radix-dropdown-menu-content-available-height) min-w-[9rem] overflow-x-hidden overflow-y-auto rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-soft',
           // Motion budget: transform/opacity only, 120-180ms (DESIGN-SYSTEM.md).
@@ -206,7 +213,7 @@ function DropdownMenuSubContent({
     <DropdownMenuPrimitive.SubContent
       data-slot="dropdown-menu-sub-content"
       className={cn(
-        'z-50 min-w-[9rem] overflow-hidden rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-soft',
+        'z-[60] max-h-(--radix-dropdown-menu-content-available-height) min-w-[9rem] overflow-y-auto rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-soft',
         // Motion budget: transform/opacity only, 120-180ms (DESIGN-SYSTEM.md).
         'origin-(--radix-dropdown-menu-content-transform-origin) duration-150 ease-out',
         'data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95',

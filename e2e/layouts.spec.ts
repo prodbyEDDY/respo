@@ -41,7 +41,7 @@ function visibleViews(app: ElectronApplication): Promise<number> {
       return wc !== undefined && !wc.isDestroyed() && wc.getURL() === probeUrl
     }
 
-    const root = window.contentView
+    const root = window.contentView.children[0] ?? window.contentView
     const layer = root.children.find((child) => child.children.some(isDeviceView))
     const holder = layer ?? root
     return holder.children.filter(isDeviceView).filter((view) => view.getVisible()).length

@@ -3,6 +3,7 @@ import { CheckIcon, ChevronDownIcon, ChevronUpIcon } from '@heroicons/react/24/o
 import { Select as SelectPrimitive } from 'radix-ui'
 
 import { cn } from '@renderer/lib/utils'
+import { suppressRestoredTooltip } from '@renderer/lib/floating-focus'
 
 function Select(props: React.ComponentProps<typeof SelectPrimitive.Root>): React.JSX.Element {
   return <SelectPrimitive.Root data-slot="select" {...props} />
@@ -49,6 +50,7 @@ function SelectContent({
   className,
   children,
   position = 'popper',
+  onCloseAutoFocus,
   ...props
 }: React.ComponentProps<typeof SelectPrimitive.Content>): React.JSX.Element {
   return (
@@ -56,6 +58,11 @@ function SelectContent({
       <SelectPrimitive.Content
         data-slot="select-content"
         position={position}
+        collisionPadding={8}
+        onCloseAutoFocus={(event) => {
+          suppressRestoredTooltip()
+          onCloseAutoFocus?.(event)
+        }}
         className={cn(
           'relative z-50 max-h-(--radix-select-content-available-height) min-w-[8rem] overflow-x-hidden overflow-y-auto rounded-lg border border-border bg-popover text-popover-foreground shadow-soft',
           // Motion budget: transform/opacity only, 120-180ms (DESIGN-SYSTEM.md).

@@ -37,5 +37,11 @@
 
 ## Анимации
 
+Полировка 0.1.1: [UI surfaces](../modules/ui-surfaces.md). Иконки тулбара 20px,
+компактных кнопок 16px; шапки устройств 40px. Тонкие скроллбары оболочки имеют
+отдельные токены в обеих темах. Custom font-size классы зарегистрированы в `cn`.
+Иконка приложения: выбранная владельцем монограмма R, источник `build/icon.svg`;
+варианты в `docs/design/icons/`, генератор `scripts/icon-options.mjs`.
+
 Плавные и лёгкие: только transform/opacity, 120–180ms, `ease-out`; никаких
 layout-анимаций на канвасе (двигается через transform), respects `prefers-reduced-motion`.

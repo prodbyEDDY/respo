@@ -37,7 +37,14 @@ export function measureRects(frames: FrameElements, zoom: number): ViewRect[] {
 /** The scroll container's box — the region views are culled against. */
 export function measureViewport(container: Element): Rect {
   const box = container.getBoundingClientRect()
-  return { x: box.x, y: box.y, width: box.width, height: box.height }
+  // Native views must stop before the canvas scrollbar gutter, otherwise the
+  // view itself intercepts dragging the scrollbar at the edge of the window.
+  return {
+    x: box.x + container.clientLeft,
+    y: box.y + container.clientTop,
+    width: container.clientWidth,
+    height: container.clientHeight
+  }
 }
 
 function sameRect(a: Rect, b: Rect): boolean {

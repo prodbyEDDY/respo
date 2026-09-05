@@ -189,6 +189,7 @@ export function watchLoadState(wc: WebContents, deviceId: string, report: Report
 }
 
 export type ElectronViewBackendOptions = {
+  surfaceRoot?: View
   /**
    * Parent the device views to a canvas layer instead of the window itself.
    *
@@ -298,7 +299,10 @@ export function showFrontendPanel(frontend: WebContents, name: string): void {
  * identically — Electron is never asked to make a DevTools window of its own,
  * so it never has one to position, size or close behind our back.
  */
-export function createDevtoolsPanelFactory(window: BaseWindow): CreateDevtoolsPanel {
+export function createDevtoolsPanelFactory(
+  window: BaseWindow,
+  surfaceRoot = window.contentView
+): CreateDevtoolsPanel {
   return ({ mode, title }): DevtoolsPanel => {
     if (mode === 'window') {
       const host = new BrowserWindow({ ...DEVTOOLS_WINDOW_SIZE, title, autoHideMenuBar: true })
@@ -337,7 +341,7 @@ export function createDevtoolsPanelFactory(window: BaseWindow): CreateDevtoolsPa
     view.setBounds({ x: 0, y: 0, width: 0, height: 0 })
     // Added after the canvas layer, so it composites above it — though the
     // renderer reserves the strip, so the two never actually overlap.
-    window.contentView.addChildView(view)
+    surfaceRoot.addChildView(view)
 
     return {
       frontend: view.webContents,
@@ -357,7 +361,7 @@ export function createDevtoolsPanelFactory(window: BaseWindow): CreateDevtoolsPa
         // The dock is closed through the manager, never around it.
       },
       destroy(): void {
-        window.contentView.removeChildView(view)
+        surfaceRoot.removeChildView(view)
         if (!view.webContents.isDestroyed()) view.webContents.close()
       }
     }
@@ -373,7 +377,8 @@ export function createElectronViewBackend(
 
   const views = new Set<WebContentsView>()
   const layer = useLayer ? new View() : null
-  const parent = layer ?? window.contentView
+  const surfaceRoot = options.surfaceRoot ?? window.contentView
+  const parent = layer ?? surfaceRoot
   const cdp = options.cdp ?? new CDPController()
   const sync = options.sync ?? null
   const devtools = options.devtools ?? null
@@ -395,7 +400,7 @@ export function createElectronViewBackend(
     // Off-screen until the renderer reports the canvas, so nothing flashes at
     // (0, 0) before the first layout.
     layer.setBounds({ x: 0, y: 0, width: 0, height: 0 })
-    window.contentView.addChildView(layer)
+    surfaceRoot.addChildView(layer)
   }
 
   return {
@@ -684,7 +689,7 @@ export function createElectronViewBackend(
         if (!view.webContents.isDestroyed()) view.webContents.close()
       }
       views.clear()
-      if (layer !== null) window.contentView.removeChildView(layer)
+      if (layer !== null) surfaceRoot.removeChildView(layer)
     }
   }
 }

@@ -24,15 +24,15 @@ export const CANVAS_PADDING = 24
 /**
  * The caption strip above every frame, in CSS pixels.
  *
- * Its real height is the browser's business (one line of `text-caption` plus
- * `gap-1`), and this is a close constant rather than a measurement on purpose:
+ * The two-line header is `h-10` plus `gap-1`. This is an estimate rather than
+ * a runtime measurement on purpose:
  * it is only ever used to *estimate* how tall a frame will be, and every use is
  * a heuristic — which masonry column is currently shortest, and whether a
  * device fits the canvas. A pixel or two of error changes neither answer, and
  * measuring would put a layout read on a path that has no reason to touch the
  * DOM at all.
  */
-export const FRAME_CAPTION_HEIGHT = 28
+export const FRAME_CAPTION_HEIGHT = 44
 
 /** How tall one frame draws at `zoom`, caption included. */
 export function frameHeight(device: DeviceSpec, zoom: number): number {

@@ -1,6 +1,6 @@
 {
   "name": "respo",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "The open-source responsive design browser: one page on every device at once, real Chromium device emulation, per-device DevTools, screenshots and designer tools.",
   "keywords": [
     "responsive-design",

@@ -8,6 +8,25 @@ Release notes on GitHub are generated from this file (`scripts/release-notes.mjs
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-09-05
+
+### Fixed
+
+- Menus, nested dropdowns, selections, tooltips and dialogs now display above native device previews and docked DevTools. Visible previews are briefly represented by stills while floating UI is open; closing restores the live surfaces without reloading pages.
+- Fixed custom typography tokens being silently removed by class merging when a text color was also set.
+- Kept native device views out of the canvas scrollbar gutter, so the scrollbar remains accessible.
+- Prevented focus restoration after Escape from reopening a tooltip and holding the native surfaces hidden.
+- Bounded popovers and dialogs to the window with internal scrolling, including the minimum 720×480 window.
+- Release packaging uploads the installer, update manifest and blockmap to a single draft before publishing, avoiding duplicate drafts and missing differential-update assets.
+
+### Changed
+
+- Thin themed shell scrollbars, consistent 20px toolbar and 16px device-action icons, and a larger screenshot-options target.
+- Two-line device captions with truncated names and adaptive quick actions; device actions remain available from the menu at small canvas zoom.
+- Theme and rotation actions remain available through the main menu in compact windows. Motion respects the system reduced-motion preference.
+- New R monogram selected by the maintainer, regenerated Windows/macOS icon formats, and three editable vector concepts.
+- Refreshed README with real compositor screenshots, a responsive demo and a reproducible capture script. Removed the dated competitor comparison and redundant marketing claims.
+
 ## [0.1.0] - 2026-09-05
 
 The first public release: everything built in waves W1–W6.
