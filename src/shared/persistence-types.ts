@@ -644,7 +644,7 @@ function sanitizeEmulation(value: unknown): EmulationSettings {
   const deviceVision: Record<string, VisionDeficiency> = {}
   if (typeof raw === 'object' && raw !== null && !Array.isArray(raw)) {
     for (const [id, vision] of Object.entries(raw).slice(0, MAX_DEVICE_VISION)) {
-      if (id.length === 0 || !isVisionDeficiency(vision)) continue
+      if (id.length === 0 || id.length > 200 || !isVisionDeficiency(vision)) continue
       deviceVision[id] = vision
     }
   }

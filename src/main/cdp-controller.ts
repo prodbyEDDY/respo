@@ -87,6 +87,9 @@ const MAX_REATTACHES = 3
 /** Touch points a touch device reports. Chrome's own emulation uses 1..5. */
 const MAX_TOUCH_POINTS = 5
 
+/** How long `evaluate` waits for a page before treating it as not answering. */
+const EVALUATE_TIMEOUT_MS = 5000
+
 /**
  * What the environment emulation puts on one view — the emulation pack
  * resolved for *this* device (its vision simulation may differ from the
@@ -592,11 +595,24 @@ export class CDPController {
    */
   async evaluate<T>(target: CdpTarget, expression: string): Promise<T | null> {
     if (!this.live(target)) return null
-    const answer = await this.request<{ result?: { value?: unknown }; exceptionDetails?: unknown }>(
-      target,
-      'Runtime.evaluate',
-      { expression, returnByValue: true, awaitPromise: false, userGesture: false }
-    )
+    // A page whose main thread is blocked (`while (true)`, a debugger pause)
+    // never answers. Everything that waits on an evaluate — the guides chain,
+    // a `scroll:track` invoke, the live-reload swap — would hang with it, so
+    // an unanswered evaluate is `null`, like any other refusal.
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const timeout = new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), EVALUATE_TIMEOUT_MS)
+      timer.unref?.()
+    })
+    const answer = await Promise.race([
+      this.request<{ result?: { value?: unknown }; exceptionDetails?: unknown }>(
+        target,
+        'Runtime.evaluate',
+        { expression, returnByValue: true, awaitPromise: false, userGesture: false }
+      ),
+      timeout
+    ])
+    if (timer !== null) clearTimeout(timer)
     if (answer === null || answer.exceptionDetails !== undefined) return null
     return (answer.result?.value as T | undefined) ?? null
   }

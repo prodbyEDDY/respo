@@ -87,10 +87,22 @@ export function overlayCss(
     `html::before { content: '' !important; position: absolute !important; top: 0 !important; left: 50% !important; ` +
     `transform: translateX(-50%) !important; width: ${Math.round(image.width)}px !important; max-width: 100% !important; ` +
     `aspect-ratio: ${Math.round(image.width)} / ${Math.round(image.height)} !important; height: auto !important; ` +
-    `background: url(${image.dataUrl}) no-repeat 0 0 / 100% 100% !important; ` +
+    `background: url("${image.dataUrl}") no-repeat 0 0 / 100% 100% !important; ` +
     `opacity: ${apply.opacity} !important; clip-path: inset(0 0 0 ${curtain}%) !important; ` +
     `pointer-events: none !important; z-index: 2147483646 !important; }`
   )
+}
+
+/**
+ * What a stored data url must look like — the same shape the IPC validator
+ * accepts on the way in. The store is read back from disk, so the reading
+ * side is as strict as the writing side; no quote or slash can reach the
+ * `url("…")` it is painted with.
+ */
+const STORED_DATA_URL_RE = /^data:image\/(?:png|jpeg);base64,[A-Za-z0-9+/]+=*$/
+
+function isFiniteCount(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
 }
 
 function isStoredImage(value: unknown): value is StoredImage {
@@ -98,13 +110,23 @@ function isStoredImage(value: unknown): value is StoredImage {
   const image = value as Record<string, unknown>
   return (
     typeof image['dataUrl'] === 'string' &&
-    image['dataUrl'].startsWith('data:image/') &&
-    typeof image['width'] === 'number' &&
-    typeof image['height'] === 'number' &&
-    typeof image['bytes'] === 'number' &&
-    typeof image['usedAt'] === 'number'
+    STORED_DATA_URL_RE.test(image['dataUrl']) &&
+    isFiniteCount(image['width']) &&
+    isFiniteCount(image['height']) &&
+    isFiniteCount(image['bytes']) &&
+    isFiniteCount(image['usedAt'])
   )
 }
+
+/** How long a burst of reads may go on before the LRU stamps reach disk. */
+const LRU_WRITE_DELAY_MS = 1000
+
+/**
+ * Ceiling on settings kept for devices that have not registered. A frame
+ * sends one per device it mounts; a compromised renderer could otherwise
+ * grow the map with ids no layout will ever mention.
+ */
+const MAX_PENDING = 64
 
 type Entry = {
   deviceId: string
@@ -113,6 +135,8 @@ type Entry = {
   apply: OverlayApply | null
   key: string | null
   chain: Promise<void>
+  /** Bumped on every request; a queued replace that is no longer newest is skipped. */
+  gen: number
 }
 
 export class DesignOverlayManager implements OverlayRegistry {
@@ -129,6 +153,8 @@ export class DesignOverlayManager implements OverlayRegistry {
    */
   private readonly pending = new Map<string, OverlayApply | null>()
   private images: ImagesDocument | null = null
+  /** The debounced LRU write, if one is armed. Reads touch memory; disk waits. */
+  private lruWrite: ReturnType<typeof setTimeout> | null = null
   private disposed = false
 
   constructor(options: DesignOverlayManagerOptions) {
@@ -182,14 +208,20 @@ export class DesignOverlayManager implements OverlayRegistry {
     }
   }
 
-  /** A stored image, touched as recently used. `null` once evicted. */
+  /**
+   * A stored image, touched as recently used. `null` once evicted.
+   *
+   * The touch is in memory: a slider drag reads the image on every frame, and
+   * serialising a store measured in megabytes each time would stall main. The
+   * `usedAt` stamps reach disk once the burst is over (and on dispose).
+   */
   image(id: string): OverlayImage | null {
     if (!IMAGE_ID_RE.test(id)) return null
     const images = this.read()
     const stored = images[id]
     if (stored === undefined) return null
     stored.usedAt = this.now()
-    this.write(images)
+    this.scheduleLruWrite()
     return {
       id,
       width: stored.width,
@@ -214,7 +246,8 @@ export class DesignOverlayManager implements OverlayRegistry {
       css: registration.css,
       apply: this.pending.get(registration.deviceId) ?? null,
       key: null,
-      chain: Promise.resolve()
+      chain: Promise.resolve(),
+      gen: 0
     }
     this.pending.delete(registration.deviceId)
     this.devices.set(entry.deviceId, entry)
@@ -226,6 +259,7 @@ export class DesignOverlayManager implements OverlayRegistry {
     if (this.disposed) return Promise.resolve()
     const entry = this.devices.get(deviceId)
     if (entry === undefined) {
+      if (!this.pending.has(deviceId) && this.pending.size >= MAX_PENDING) return Promise.resolve()
       this.pending.set(deviceId, apply === null ? null : { ...apply })
       return Promise.resolve()
     }
@@ -257,15 +291,20 @@ export class DesignOverlayManager implements OverlayRegistry {
     this.disposed = true
     this.devices.clear()
     this.pending.clear()
+    this.flushLruWrite()
   }
 
   private queue(entry: Entry): Promise<void> {
-    entry.chain = entry.chain.then(() => this.replace(entry)).catch(() => undefined)
+    const gen = ++entry.gen
+    entry.chain = entry.chain.then(() => this.replace(entry, gen)).catch(() => undefined)
     return entry.chain
   }
 
-  private async replace(entry: Entry): Promise<void> {
+  private async replace(entry: Entry, gen: number): Promise<void> {
     if (this.disposed || this.devices.get(entry.deviceId) !== entry) return
+    // A slider burst queues one replace per frame; only the newest is worth
+    // three protocol round-trips, the rest are superseded before they run.
+    if (gen !== entry.gen) return
     if (entry.key !== null) {
       const key = entry.key
       entry.key = null
@@ -307,10 +346,37 @@ export class DesignOverlayManager implements OverlayRegistry {
 
   private write(images: ImagesDocument): void {
     this.images = images
+    if (this.lruWrite !== null) {
+      clearTimeout(this.lruWrite)
+      this.lruWrite = null
+    }
     try {
       this.backend.set(OVERLAY_IMAGES_KEY, images)
     } catch (error) {
       console.error('overlay: failed to write the image store', error)
+    }
+  }
+
+  private scheduleLruWrite(): void {
+    if (this.lruWrite !== null || this.disposed) return
+    const handle = setTimeout(() => {
+      this.lruWrite = null
+      if (this.images !== null) this.write(this.images)
+    }, LRU_WRITE_DELAY_MS)
+    handle.unref?.()
+    this.lruWrite = handle
+  }
+
+  private flushLruWrite(): void {
+    if (this.lruWrite === null) return
+    clearTimeout(this.lruWrite)
+    this.lruWrite = null
+    if (this.images !== null) {
+      try {
+        this.backend.set(OVERLAY_IMAGES_KEY, this.images)
+      } catch (error) {
+        console.error('overlay: failed to write the image store', error)
+      }
     }
   }
 

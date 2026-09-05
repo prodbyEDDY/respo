@@ -423,6 +423,13 @@ export function createElectronViewBackend(
           popups.delete(child)
         })
         child.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+        // The popup was allowed as http(s); it stays http(s). A redirect or a
+        // navigation to `file:` (or anything else) is cancelled (spec §7a).
+        const guard = (event: Electron.Event, url: string): void => {
+          if (!/^https?:/i.test(url)) event.preventDefault()
+        }
+        child.webContents.on('will-navigate', guard)
+        child.webContents.on('will-redirect', guard)
       })
 
       // One debugger attach for this view's whole life (CLAUDE.md §3).

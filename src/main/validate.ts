@@ -758,8 +758,11 @@ export function validateOptionalDevtoolsPanel(value: unknown): DevtoolsPanelName
   return value
 }
 
-/** The only image types a design overlay may be: what Chromium decodes and CSS paints. */
-const OVERLAY_DATA_URL_RE = /^data:image\/(?:png|jpeg|gif|webp);base64,[A-Za-z0-9+/]+=*$/
+/**
+ * The only image types a design overlay may be: what `nativeImage` decodes
+ * (PNG and JPEG — not GIF or WebP) and CSS paints.
+ */
+const OVERLAY_DATA_URL_RE = /^data:image\/(?:png|jpeg);base64,[A-Za-z0-9+/]+=*$/
 
 /**
  * Validate an `overlay:store-image` payload: a base64 data url of a raster
@@ -773,7 +776,7 @@ export function validateOverlayDataUrl(value: unknown): string {
     fail('overlay:store-image image is too large')
   }
   if (!OVERLAY_DATA_URL_RE.test(value)) {
-    fail('overlay:store-image expects a png, jpeg, gif or webp data url')
+    fail('overlay:store-image expects a png or jpeg data url')
   }
   return value
 }

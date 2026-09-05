@@ -110,8 +110,8 @@ export const useDesignOverlay = create<DesignOverlayState>((set, get) => ({
       set({ error: 'That file could not be read.' })
       return
     }
-    if (!/^data:image\/(?:png|jpeg|gif|webp);base64,/.test(dataUrl)) {
-      set({ error: 'PNG, JPEG, GIF or WebP, please.' })
+    if (!/^data:image\/(?:png|jpeg);base64,/.test(dataUrl)) {
+      set({ error: 'PNG or JPEG, please.' })
       return
     }
 

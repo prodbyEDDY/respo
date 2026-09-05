@@ -194,11 +194,22 @@ export class FileWatcher implements WatcherRegistry {
       this.publish()
       return
     }
-    this.file = file
     this.paused = false
     this.changed.clear()
     const root = dirname(file)
-    const watcher = this.watch(root, { depth: WATCH_DEPTH, ignored: isIgnored })
+    let watcher: Watcher
+    try {
+      watcher = this.watch(root, { depth: WATCH_DEPTH, ignored: isIgnored })
+    } catch (error) {
+      // Not watchable right now (the module is still loading, or the folder
+      // refuses). Stay `off` rather than claim a watch that does not exist —
+      // the next load batch calls `follow` again with the same url.
+      console.error('watcher: cannot watch', root, error)
+      this.file = null
+      this.publish()
+      return
+    }
+    this.file = file
     watcher.on('all', (event, path) => this.onEvent(event, path))
     this.watcher = watcher
     this.publish()

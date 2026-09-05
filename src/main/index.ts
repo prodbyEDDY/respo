@@ -40,6 +40,7 @@ import { createLeadTracker, type LeadTracker } from './lead-tracker'
 import {
   createBackupFileIO,
   createElectronStoreBackend,
+  createOverlayStoreBackend,
   createPersistence,
   exportBackup,
   importBackup,
@@ -263,7 +264,12 @@ function createWindow(): void {
     // when the picture it would send actually changed.
     permissions?.refresh()
     // A local page gets its folder watched; anything else stops the watch.
-    watcher?.follow(lead?.url() ?? null)
+    // This runs inside the batcher's flush: nothing here may throw.
+    try {
+      watcher?.follow(lead?.url() ?? null)
+    } catch (error) {
+      console.error('watcher: follow failed', error)
+    }
   })
 
   // One CDP controller for the window's views, shared with the sync engine:
@@ -396,11 +402,11 @@ function createWindow(): void {
     }
   )
 
-  // Design images live under their own store key — megabytes, not settings —
+  // Design images live in their own store file — megabytes, not settings —
   // and are decoded by Chromium itself before anything is kept.
   if (storeBackend !== null) {
     overlays = new DesignOverlayManager({
-      backend: storeBackend,
+      backend: createOverlayStoreBackend(),
       decode: (bytes) => {
         const image = nativeImage.createFromBuffer(bytes)
         if (image.isEmpty()) return null
@@ -629,7 +635,12 @@ function registerIpcHandlers(): void {
     guides?.retain(live)
     overlays?.retain(live)
     debugCss?.retain(live)
-    for (const deviceId of [...rulers]) if (!live.has(deviceId)) rulers.delete(deviceId)
+    for (const deviceId of [...rulers]) {
+      if (live.has(deviceId)) continue
+      rulers.delete(deviceId)
+      // …and its preload stops reporting every frame to nobody.
+      syncEngine?.setReporting(deviceId, false)
+    }
     // A lead that left the canvas must not keep deciding what gets recorded —
     // or whose cookies a clear would take (`lead-tracker.ts`).
     lead?.retain(specs.map((spec) => spec.id))
@@ -1056,6 +1067,8 @@ app.on('before-quit', () => {
   debugCss = null
   watcher?.dispose()
   watcher = null
+  diagnostics?.dispose()
+  diagnostics = null
   overlays?.dispose()
   overlays = null
   guides?.dispose()

@@ -17,7 +17,7 @@ electron-store, по content-id, с общим лимитом и вытесне�
   не создаёт горизонтальный скролл), `background: url(data:...)`, `opacity`,
   `clip-path: inset(0 0 0 Y%)` — шторка слева. Opacity/curtain — два числа в
   том же правиле, слайдер не стоит нового `insertCSS` в кадр.
-- Хранилище картинок — отдельный ключ `overlayImages` (`OVERLAY_IMAGES_KEY`),
+- Хранилище картинок — отдельный **файл** `respo-overlays.json` (ключ `overlayImages`, `createOverlayStoreBackend`; чтение через `image()` трогает LRU-штамп только в памяти, на диск — дебаунс 1 с и при dispose),
   не слайс `PersistedState`. `storeImage`: декод через `nativeImage` **до**
   сохранения (битый файл — `unreadable`), content-id — первые 16 hex цифр
   SHA-256 байтов (`imageIdOf`); капы `MAX_OVERLAY_IMAGE_BYTES = 10 MB` на
@@ -71,7 +71,7 @@ side едет по `scroll-state` (см. [guides.md](guides.md)).
 `imageId` не проходит `IMAGE_ID_RE` (без картинки показывать нечего);
 `opacity`/`curtain` — `clampUnit` в `[0, 1]`. Запись — debounce 250 мс
 (`OVERLAY_SAVE_DEBOUNCE_MS`, `stores/design-overlay.ts`) поверх общего
-debounce диска 300 мс. Сами картинки (`overlayImages`) — отдельный ключ,
+debounce диска 300 мс. Сами картинки (`overlayImages`) — отдельный файл `respo-overlays.json`,
 без debounce и без `SCHEMA_VERSION`-версионирования: это склад байтов с
 собственным LRU, а не документ настроек. Слайс `designOverlays` тоже не
 бампнул `SCHEMA_VERSION` — отсутствие поля читается как «нет оверлеев».

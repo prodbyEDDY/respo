@@ -152,6 +152,19 @@ export function createElectronStoreBackend(): PersistenceBackend {
   }
 }
 
+/**
+ * The backend for design-overlay images: its own file. electron-store writes
+ * a whole file per `set`, and the images are measured in megabytes — kept in
+ * the settings file, every debounced settings save would rewrite them too.
+ */
+export function createOverlayStoreBackend(): PersistenceBackend {
+  const store = new Store<Record<string, unknown>>({ name: 'respo-overlays' })
+  return {
+    get: (key) => store.get(key),
+    set: (key, value) => store.set(key, value)
+  }
+}
+
 /* ---------------------------------------------------------------------------
    Backup files.
 

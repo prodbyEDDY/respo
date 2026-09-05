@@ -76,7 +76,7 @@ describe('overlayCss', () => {
     expect(css).toContain('left: 50% !important; transform: translateX(-50%)')
     expect(css).toContain('width: 393px !important; max-width: 100%')
     expect(css).toContain('aspect-ratio: 393 / 800')
-    expect(css).toContain('url(data:image/png;base64,AAAA)')
+    expect(css).toContain('url("data:image/png;base64,AAAA")')
     expect(css).toContain('opacity: 0.4 !important')
     expect(css).toContain('clip-path: inset(0 0 0 25%)')
     expect(css).toContain('pointer-events: none')
@@ -108,6 +108,8 @@ describe('DesignOverlayManager — the image store', () => {
     })
     if (!result.ok) return
     expect(manager.image(result.image.id)).toMatchObject({ dataUrl: url, width: 100 })
+    // Reading touches the LRU stamp in memory only: no store write per read.
+    expect(backend.writes).toBe(1)
     expect(backend.data.has(OVERLAY_IMAGES_KEY)).toBe(true)
   })
 

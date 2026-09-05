@@ -1,5 +1,5 @@
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -204,5 +204,6 @@ test('main event loop p99 stays under 16 ms with 10 devices, mirrored scroll and
   } finally {
     app.process().stdout?.off('data', onData)
     await app.close()
+    rmSync(profile, { recursive: true, force: true, maxRetries: 5 })
   }
 })

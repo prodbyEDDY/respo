@@ -224,6 +224,8 @@ type Entry = {
   selectors: string[]
   /** The stylesheet currently outlining offenders, if one is inserted. */
   highlightKey: string | null
+  /** Serialises highlight changes: two hovers in flight must not leave two layers. */
+  highlightChain: Promise<void>
   /** The delayed rescan, if one is armed. */
   cancelRescan: (() => void) | null
   /** Scans are serialized per device; a stale one is dropped. */
@@ -278,6 +280,7 @@ export class DiagnosticsManager implements DiagnosticsRegistry {
       overflow: null,
       selectors: [],
       highlightKey: null,
+      highlightChain: Promise.resolve(),
       cancelRescan: null,
       scanToken: 0
     }
@@ -326,9 +329,17 @@ export class DiagnosticsManager implements DiagnosticsRegistry {
    * layer, and `none` removes it. An index the last report does not have is
    * treated as `none` — the report may have changed under the click.
    */
-  async highlight(deviceId: string, target: HighlightTarget): Promise<void> {
+  highlight(deviceId: string, target: HighlightTarget): Promise<void> {
     const entry = this.devices.get(deviceId)
-    if (entry === undefined || this.disposed) return
+    if (entry === undefined || this.disposed) return Promise.resolve()
+    entry.highlightChain = entry.highlightChain
+      .then(() => this.replaceHighlight(entry, target))
+      .catch(() => undefined)
+    return entry.highlightChain
+  }
+
+  private async replaceHighlight(entry: Entry, target: HighlightTarget): Promise<void> {
+    if (this.disposed || this.devices.get(entry.deviceId) !== entry) return
 
     const selectors =
       target === 'none'
@@ -352,8 +363,8 @@ export class DiagnosticsManager implements DiagnosticsRegistry {
 
     try {
       const key = await entry.css.insert(`${selectors.join(', ')} { ${HIGHLIGHT_CSS} }`)
-      // A `none` may have raced the insert; honour it.
-      if (this.devices.get(deviceId) !== entry) {
+      // The device may have left while the insert was in flight.
+      if (this.devices.get(entry.deviceId) !== entry) {
         await entry.css.remove(key)
         return
       }

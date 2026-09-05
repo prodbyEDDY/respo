@@ -296,6 +296,7 @@ export class SyncEngine implements SyncRegistry {
     this.byDeviceId.delete(deviceId)
     this.byWcId.delete(entry.target.id)
     this.pendingScroll.delete(deviceId)
+    this.reporting.delete(deviceId)
     // Losing the lead must not leave the canvas with no source at all: hand it
     // to whoever is still here and still mirroring.
     if (this.leadDeviceId === deviceId) {

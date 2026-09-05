@@ -23,7 +23,7 @@ const MODES: readonly { value: OverlayMode; label: string }[] = [
   { value: 'side-by-side', label: 'Side by side' }
 ]
 
-const ACCEPT = 'image/png,image/jpeg,image/gif,image/webp'
+const ACCEPT = 'image/png,image/jpeg'
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
@@ -121,8 +121,8 @@ export function DesignOverlayDialog({
                 onPick={(file) => void chooseImage(key, file)}
               />
               <p className="text-micro text-muted-foreground">
-                PNG, JPEG, GIF or WebP up to {MAX_OVERLAY_IMAGE_BYTES / 1024 / 1024} MB. Export it
-                at {device.width}px wide to line up with the page.
+                PNG or JPEG up to {MAX_OVERLAY_IMAGE_BYTES / 1024 / 1024} MB. Export it at{' '}
+                {device.width}px wide to line up with the page.
               </p>
             </div>
           ) : (

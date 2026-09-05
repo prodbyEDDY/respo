@@ -90,7 +90,16 @@ type Entry = {
   key: string | null
   /** Serialises inserts: a fast drag must not leave two layers behind. */
   chain: Promise<void>
+  /** Bumped on every request; a queued replace that is no longer newest is skipped. */
+  gen: number
 }
+
+/**
+ * Ceiling on guide sets kept for devices that have not registered. A frame
+ * sends one per device it mounts; a compromised renderer could otherwise
+ * grow the map with ids no layout will ever mention.
+ */
+const MAX_PENDING = 64
 
 export class GuidesManager implements GuidesRegistry {
   private readonly cdp: GuidesCdp
@@ -116,7 +125,8 @@ export class GuidesManager implements GuidesRegistry {
       css: registration.css,
       guides: this.pending.get(registration.deviceId) ?? { h: [], v: [] },
       key: null,
-      chain: Promise.resolve()
+      chain: Promise.resolve(),
+      gen: 0
     }
     this.pending.delete(registration.deviceId)
     this.devices.set(entry.deviceId, entry)
@@ -129,6 +139,7 @@ export class GuidesManager implements GuidesRegistry {
     const copy = { h: [...guides.h], v: [...guides.v] }
     const entry = this.devices.get(deviceId)
     if (entry === undefined) {
+      if (!this.pending.has(deviceId) && this.pending.size >= MAX_PENDING) return Promise.resolve()
       this.pending.set(deviceId, copy)
       return Promise.resolve()
     }
@@ -173,12 +184,17 @@ export class GuidesManager implements GuidesRegistry {
   }
 
   private apply(entry: Entry): Promise<void> {
-    entry.chain = entry.chain.then(() => this.replace(entry)).catch(() => undefined)
+    const gen = ++entry.gen
+    entry.chain = entry.chain.then(() => this.replace(entry, gen)).catch(() => undefined)
     return entry.chain
   }
 
-  private async replace(entry: Entry): Promise<void> {
+  private async replace(entry: Entry, gen: number): Promise<void> {
     if (this.disposed || this.devices.get(entry.deviceId) !== entry) return
+    // A drag queues one replace per pointer move; each is three protocol
+    // round-trips. Only the newest set is worth them — the rest are already
+    // superseded by the time the chain reaches them.
+    if (gen !== entry.gen) return
 
     if (entry.key !== null) {
       const key = entry.key
