@@ -2,6 +2,7 @@ import { test, expect, _electron as electron, type ElectronApplication } from '@
 import { resolve } from 'node:path'
 import { ownProfile } from './profile'
 import { PROBE_URL } from './probe'
+import type { RespoApi } from '../src/shared/ipc'
 
 const profile = ownProfile('ui-polish')
 const nativeVisible = (app: ElectronApplication): Promise<boolean> =>
@@ -26,7 +27,10 @@ test('floating UI covers native pages, nested menus and a dock; closing restores
     // Windows runner. Exercise menus only after a visible preview can be captured.
     await expect
       .poll(() =>
-        page.evaluate(async () => (await window.respo.invoke('ui:surface-snapshots')).length)
+        page.evaluate(async () => {
+          const bridge = (window as unknown as { respo: RespoApi }).respo
+          return (await bridge.invoke('ui:surface-snapshots')).length
+        })
       )
       .toBeGreaterThan(0)
     await page
