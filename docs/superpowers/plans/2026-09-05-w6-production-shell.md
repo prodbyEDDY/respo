@@ -1,68 +1,173 @@
-# W6 «Production Shell» — план реализации
+# W6 «Production Shell + Release 0.1.0» — план реализации
 
-> **Исполнитель:** один агент Fable 5.1 (вторая длинная сессия), ветка `w6-shell` от `main` после
-> приёмки W5. Режим — как в W5: последовательные задачи, коммит после каждой, лог `docs/progress/W6-log.md`,
-> механические подзадачи — субагентам на дешёвых моделях. **Черновик:** уточняется координатором
-> после приёмки W5 (список хоткеев, e2e-покрытие, follow-ups W5).
+> **Исполнитель:** один агент Fable 5.1 (вторая длинная сессия), ветка `w6-shell`, worktree
+> `C:\CODING\My Coding Projects\Respo-W6`. База — `main` **после** приёмки W5 (перед стартом:
+> `git merge main`). Режим — как в W5: последовательные задачи, коммит после каждой, лог
+> `docs/progress/W6-log.md`, механические подзадачи — субагентам на дешёвых моделях, ревью — Opus.
+> **Все Agent-вызовы и Bash-команды — только в foreground** (`run_in_background: false`): сессия,
+> ушедшая «ждать» фоновые задачи, обрывается.
 
-**Goal:** превратить функционально полный Respo в устанавливаемый, обновляемый, самодокументируемый
-продукт: брендинг, оболочка (меню, About, окно), обновления, справка/хоткеи/палитра, устойчивость,
-первый запуск и полировка UX, сборка инсталлятора и CI. Плюс дешёвые «wow»-фичи из gap-листа, если
-останется бюджет.
+**Goal.** Две фазы в одной сессии. **Фаза A «Release 0.1.0»** — Respo становится публичным
+open-source продуктом: иконка, автообновление с кнопкой **Update** в шапке, лицензия MIT, README
+уровня «страница продукта», CI и release-workflow, сборка инсталлятора и **публикация v0.1.0 в
+GitHub Releases**. **Фаза B «Shell»** — меню/About/окно/deep-link/CLI, реестр хоткеев + справка +
+палитра, устойчивость, welcome и полировка, перф-гейт. Фаза B релизится как 0.1.x; MCP (W7) — 0.2.0.
 
-**Источники:** спека §5.9, §7, §7a, §8, §9, §10 · [research/2026-09-05-spec-vs-code.md](../../research/2026-09-05-spec-vs-code.md) §B ·
-[research/2026-09-05-competitors.md](../../research/2026-09-05-competitors.md) §D · [design/DESIGN-SYSTEM.md](../../design/DESIGN-SYSTEM.md).
+**Решения владельца (2026-09-05):** проект open source и бесплатный; лицензия **MIT**; репозиторий
+`github.com/prodbyEDDY/respo` **сделать публичным** перед публикацией релиза; обновления — GitHub
+Releases; проверка обновлений **раз в день при первом запуске** (+ вручную); при наличии — **видимая
+кнопка «Update» в шапке**; клик — всё скачивается и устанавливается само, пользователю остаётся
+перезапустить; никаких попапов.
+
+**Источники:** [research/2026-09-05-spec-vs-code.md](../../research/2026-09-05-spec-vs-code.md) §B ·
+[research/2026-09-05-competitors.md](../../research/2026-09-05-competitors.md) (сравнение для README) ·
+[design/DESIGN-SYSTEM.md](../../design/DESIGN-SYSTEM.md) · спека §5.9, §7, §7a, §8, §10.
 
 ## Глобальные ограничения
-Те же, что в [W5](2026-09-05-w5-production-core.md) (CLAUDE.md: лицензии, WebContentsView/CDP, перф, безопасность, IPC-хаб, Zustand, UI-язык, UX-приоритет). Новые зависимости этой волны (все MIT): `electron-updater`, `electron-log`, `sharp`/`png-to-ico` (devDependencies, только для генерации иконок).
+Те же, что в W5 (CLAUDE.md: лицензии MIT/Apache/BSD/ISC, WebContentsView/CDP, батчи, §7a, IPC-хаб
+с валидацией, Zustand, UI по-английски, UX без перегруза). Новые зависимости волны (все MIT):
+`electron-updater`, `electron-log`; devDependencies для иконок: `sharp` (Apache-2.0), `png-to-ico` (MIT).
+**Никаких токенов в приложении.** Перед переключением репозитория в public — скан истории на секреты.
 
-## Задачи
+---
 
-### Task 1: Брендинг — иконка приложения
-Сейчас `build/icon.{png,ico,icns}` и `resources/icon.png` — дефолтный логотип Electron, он попадёт в инсталлятор.
-**Что:** нарисовать знак Respo в палитре дизайн-системы (link-blue #0086fc на cream/ink; идея — три вложенных/ступенчатых прямоугольника-вьюпорта или буква R из рамок; читаемо в 16 px), SVG в `build/icon.svg`; скрипт `scripts/icons.mjs` (sharp) генерирует `build/icon.png` 1024², `build/icon.ico` (16–256), `build/icon.icns` (или доверить electron-builder генерацию из PNG — проверить), `resources/icon.png`, а также `build/installerIcon.ico`/`uninstallerIcon.ico`; иконка окна (`BrowserWindow.icon`), иконка в About и в welcome-экране.
-**DoD:** в taskbar/alt-tab/инсталляторе — знак Respo; нет следов electron-логотипа (grep по бинарным хэшам старых файлов).
+## Фаза A — Release 0.1.0
 
-### Task 2: Оболочка — нативное меню, About, окно, single instance, deep link, CLI
-**Files:** `src/main/menu.ts` (File: Open URL…, Open File…, Screenshot all, Settings, Quit · Edit: роли · View: Layout ▸, Zoom in/out/reset, Rotate all, Rulers, Theme, DevTools dock ▸, Reload, Reload ignoring cache · Help: Keyboard shortcuts, Documentation, Report an issue, Check for updates, About; macOS-ready template с app-меню на darwin; `autoHideMenuBar` оставить `true` — меню доступно по Alt и через акселераторы, без визуального шума), `src/main/window-state.ts` (bounds/maximized в electron-store, восстановление с проверкой, что окно на существующем дисплее), `src/main/index.ts` (`requestSingleInstanceLock`; `second-instance` → фокус + открыть URL из argv; `setAsDefaultProtocolClient('respo')`; `respo://open?url=…`, `respo <url|file>`, `?urlToOpen=` — всё через одну функцию валидации: только http/https/file, иначе игнор + лог), `components/AboutDialog.tsx` (версии app/Electron/Chromium/Node, статус апдейтера, ссылки, «Open logs folder», лицензии третьих сторон — ссылка на NOTICE).
-**DoD:** e2e: второй запуск с URL передаёт его первому окну; `respo://open?url=javascript:...` отбрасывается; окно восстанавливает размер/позицию; About показывает версии.
+### Task A1: Иконка приложения
+`build/icon.{png,ico,icns}` и `resources/icon.png` — дефолтный логотип Electron. Нарисовать знак Respo
+(SVG, палитра дизайн-системы: link-blue `#0086fc` + ink/cream; идея — три ступенчатых вьюпорта или «R»
+из рамок; читаемо в 16 px, без текста), `build/icon.svg` → скрипт `scripts/icons.mjs` (sharp) →
+`build/icon.png` 1024², `build/icon.ico` (16…256), `resources/icon.png`, `build/installerIcon.ico`,
+`build/uninstallerIcon.ico`; `.icns` — доверить electron-builder или сгенерировать. `BrowserWindow.icon`,
+знак в About и в welcome. Проверить в taskbar/alt-tab/инсталляторе.
+**DoD:** нигде не осталось логотипа Electron.
 
-### Task 3: Автообновление и логирование
-**Files:** `src/main/updater.ts` (`electron-updater`, provider GitHub `prodbyEDDY/respo`; авто-проверка через 10 с после старта, не чаще раза в 4 ч; выключен в dev/e2e (`RESPO_NO_UPDATER=1`); события в renderer батчем), `electron-builder.yml` (`publish: github`, убрать placeholder `example.com`), Settings → Updates (текущая версия, Check now, статус/прогресс, Restart to update; никаких попапов — ненавязчивый чип «Update ready» в топ-баре), `src/main/log.ts` (`electron-log`: файл в userData/logs с ротацией; main `uncaughtException`/`unhandledRejection` → лог; renderer `console.error` в проде → лог через IPC батчем).
-**DoD:** dev-app-update.yml для проверки в dev; юниты на состояние апдейтера; в проде лог-файл создаётся, ошибки попадают в него.
+### Task A2: Автообновление + кнопка Update + About + логирование
+**Files:** `src/main/updater.ts`, `src/main/log.ts`, `src/shared/ipc.ts` (`updates:check`, `updates:download`,
+`updates:install`, `updates:get`, событие `updates` в `MainEvent`), persistence-слайс `updates`
+(`lastCheckAt`, `autoCheck: true`), renderer `stores/updates.ts`, `components/toolbar/UpdateChip.tsx`,
+`components/AboutDialog.tsx`, Settings → General/Updates.
+**Поведение:** `electron-updater` (provider GitHub `prodbyEDDY/respo`, канал latest, `autoDownload: false`,
+`autoInstallOnAppQuit: true`); при старте, если `now − lastCheckAt ≥ 24 ч` (или никогда) — проверка через
+10 с после ready; «Check for updates» в About/Settings и в меню. Выключено в dev/e2e (`RESPO_NO_UPDATER=1`,
+`is.dev`). **Чип в топ-баре** (справа от адресной строки, mint-акцент, только когда есть что сказать):
+`Update to 0.1.1` → клик → скачивание с процентом в том же чипе → `Restart to update` → клик →
+`quitAndInstall()` (NSIS oneClick ставит молча, приложение перезапускается само; если перезапуск не
+удался — пользователь запускает вручную, установка уже прошла). Ошибки — тихо в лог + tooltip чипа
+«Update failed — retry». Никаких модалок.
+`electron-log`: файл в `userData/logs` с ротацией, main `uncaughtException`/`unhandledRejection` → лог,
+renderer `console.error` в проде → лог батчем; «Open logs folder» в About. **About:** версия, Electron/
+Chromium/Node, статус апдейтера + Check now, ссылки (GitHub, Issues, Changelog), Third-party notices.
+**Проверка:** юниты на state-машину апдейтера (fake autoUpdater); e2e на весь путь чипа с локальным
+mock-сервером обновлений (`generic`-провайдер electron-updater на `127.0.0.1`, `dev-app-update.yml`);
+после публикации (A5) — проверка на реальном GitHub-релизе (см. A5 п.5).
+**DoD:** сценарий «есть релиз новее → чип → клик → скачалось → Restart → новая версия» пройден фактически.
 
-### Task 4: Хоткеи как единый реестр + справка + командная палитра
-**Files:** `src/shared/hotkeys.ts` (единственный источник правды: id действия, label, combo (Win/mac), scope; из него — хуки renderer, акселераторы меню, подписи в tooltips и DropdownMenuShortcut, диалог справки, палитра), миграция существующих `use*Hotkeys` на реестр (можно на `tinykeys` (MIT) — тогда обновить спеку §3, иначе привести спеку к факту), добавить недостающие: Back/Forward (`Alt+←/→`), Reload (`Mod+R`, `F5`), Reload ignoring cache (`Mod+Shift+R`), Theme (`Mod+Shift+T`), Zoom (`Mod+=`/`Mod+-`/`Mod+0`), Rotate all (`Mod+Shift+.`), Rulers (`Alt+R`), Emulate (`Mod+E`), Keyboard shortcuts (`Mod+/`), Command palette (`Mod+K`), Settings (`Mod+,`); кириллические дубли раскладки — как сейчас. `components/ShortcutsDialog.tsx` (группы, поиск), `components/CommandPalette.tsx` (cmdk-подобный список всех действий + устройств/сьютов/закладок, fuzzy, подписи хоткеев — главный инструмент discoverability).
-**DoD:** все хоткеи работают из реестра; в tooltip каждой кнопки тулбара — её хоткей; палитра открывается и выполняет действия; e2e `hotkeys.spec.ts` для 5 ключевых; юниты на реестр (нет дублей комбо в одном scope).
+### Task A3: Лицензия, README, CHANGELOG, NOTICE, шаблоны репозитория
+- `LICENSE` — MIT, `Copyright (c) 2026 prodbyEDDY`; `package.json`: `"license": "MIT"` (`private: true`
+  оставить — в npm не публикуем), `description`, `keywords`, `bugs`, `homepage`.
+- `README.md` (English, продуктовая страница; docs/ остаются на русском). Структура: hero (знак + tagline,
+  например **«Respo — the open-source responsive design browser. A faster, cleaner Responsively
+  alternative: one page on every device at once, real device emulation, per-device DevTools, and an
+  MCP server for AI coding agents (coming in 0.2).»** — MCP упоминать честно как next), бейджи (release,
+  downloads, license MIT, CI), 2–3 скриншота/GIF (light + dark; снимать через `BrowserWindow.capturePage`
+  или OS-скриншот из Playwright-сессии — `page.screenshot` не видит WebContentsView), **Why Respo**
+  (перф: WebContentsView + CDP, батчи; честная эмуляция; UX), **Features** (сгруппировано: Preview &
+  layouts · Emulation (devices 110+, Client Hints, color scheme/motion/forced colors/print, vision
+  simulation, network, geo/locale/timezone) · Sync · DevTools & diagnostics (errors, overflow finder) ·
+  Designer tools (rulers/guides, design overlay, outline) · Screenshots · Live reload · Privacy
+  (no telemetry, no external favicon services)), **Compare** — таблица Respo / Responsively (free, AGPL) /
+  Polypane ($11/mo) / Sizzy ($15/mo) / Blisk по 10–12 строкам из research (только подтверждённые факты,
+  без выдуманного), **Install** (Windows installer из Releases; SmartScreen: сборка не подписана —
+  «More info → Run anyway»; macOS — soon), **Keyboard shortcuts** (таблица), **Roadmap** (MCP for AI
+  agents — 0.2, macOS, command palette…), **Development** (команды из CLAUDE.md), **License** MIT +
+  третьи стороны (NOTICE), благодарности источникам данных (Chromium DevTools device list).
+- `CHANGELOG.md` (Keep a Changelog): `0.1.0 — 2026-09-XX` — сводка W1–W6 по группам.
+- `NOTICE.md` — дополнить (шрифт Inter — OFL через `@fontsource/inter`, проверить).
+- `.github/ISSUE_TEMPLATE/bug_report.md`, `feature_request.md`, `PULL_REQUEST_TEMPLATE.md`,
+  `CONTRIBUTING.md` (коротко: setup, тесты, правила из CLAUDE.md), `SECURITY.md` (как сообщать).
+**DoD:** README читается как страница продукта; все факты о конкурентах — из research с датой.
 
-### Task 5: Устойчивость
-**Files:** `components/ErrorBoundary.tsx` (экран «Something went wrong» + Reload UI + Copy details; логируется), `src/main/index.ts` (UI-окно `render-process-gone`/`unresponsive` → пересоздание с восстановлением состояния), защита от «пустого» состояния стора после битого файла persistence (валидация + backup `.bak` при миграции, уже частично есть — проверить).
-**DoD:** юнит на ErrorBoundary; ручная проверка через тест-хук, бросающий исключение в компоненте.
+### Task A4: Сборка, CI, release-workflow
+- `electron-builder.yml`: `publish: {provider: github, owner: prodbyEDDY, repo: respo}` (убрать
+  `example.com`), `nsis`: `oneClick: true`, `perMachine: false`, `installerIcon`/`uninstallerIcon`,
+  `artifactName: Respo-Setup-${version}.${ext}`, `deleteAppDataOnUninstall: false`; `win.target: nsis`
+  (+ `portable`, если дёшево); linux-таргеты убрать; mac оставить на будущее. `npm run build:win` локально →
+  `dist/Respo-Setup-0.1.0.exe` + `latest.yml`; инсталлятор ставится, запускается, иконка на месте.
+- `.github/workflows/ci.yml`: на push/PR в `main` — windows-latest: `npm ci`, typecheck, lint, unit, e2e
+  (артефакт playwright-report при падении), `build:unpack`.
+- `.github/workflows/release.yml`: на тег `v*` — windows-latest: `npm ci`, typecheck, unit, `electron-builder
+  --win --publish always` с `GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}` → релиз с `Respo-Setup-x.y.z.exe`,
+  `.blockmap`, `latest.yml`; тело релиза — из CHANGELOG (скрипт `scripts/release-notes.mjs`).
+**DoD:** CI зелёный на ветке; workflow релиза проверен реальным тегом (A5).
 
-### Task 6: Первый запуск и полировка UX
-- Welcome/empty state: адрес пуст → центрированный экран (знак, «Enter a URL or open a file», кнопка Open file…, 3 последних URL из истории), исчезает при первой навигации.
-- Settings реструктурировать: General (home page, theme, Accept-Language — если не сделано в W5), Screenshots, Security (insecure certs — с видимым янтарным чипом «Insecure certs ON» в топ-баре, пока включено), Updates, Agents (заглушка-плейсхолдер для W7 — не показывать до W7), About.
-- Аудит: tooltips у всех иконок (с хоткеями), `focus-visible`-кольца, tab-порядок, aria-label на icon-кнопках, dark-тема во всех новых диалогах W5/W6, минимальный размер окна 1024×700 и адекватная раскладка при нём, HiDPI-чёткость, `prefers-reduced-motion`.
-- Уведомления (Notice/ShotNotice) — единый тихий toast-слой, автоскрытие, без стека дублей.
-**DoD:** чек-лист в отчёте с скриншотами обеих тем (light/dark) главных экранов.
+### Task A5: Публикация v0.1.0
+1. Скан истории на секреты (`git log -p | grep -iE "token|secret|api[_-]?key|password"` + проверка
+   `.gitignore` на `.env`, `dev-app-update.yml`); убедиться, что в истории нет чужого кода/данных
+   (responsively-app) — только ссылки-запреты.
+2. `git merge main` в `w6-shell` (W5 уже в main), все гейты зелёные, ветка сдана координатору на ревью
+   **до** публикации (короткий цикл: ревью Opus-субагентом + фиксы). Мерж в `main` — координатор;
+   после мержа исполнитель продолжает:
+3. `gh repo edit prodbyEDDY/respo --visibility public --description "<tagline>"` + topics
+   (`responsive-design, electron, devtools, web-development, browser, chromium, screenshots,
+   device-emulation, mcp, ai-agents`), включить Issues/Discussions.
+4. Тег `v0.1.0` на `main`, push → release-workflow → релиз с ассетами; проверить, что `latest.yml` и
+   `.exe` в релизе, скачать инсталлятор из релиза, поставить, запустить.
+5. Проверка автообновления с реального релиза: в ветке поднять версию до `0.1.1-test.1`, опубликовать
+   как **pre-release** с `latest.yml` только если канал этого не подхватит; безопаснее — временный
+   черновик-релиз в тестовом репозитории или `generic`-сервер с уже собранными ассетами. Выбрать
+   способ, который не покажет пользователям мусорную версию; записать в лог.
+**DoD:** https://github.com/prodbyEDDY/respo/releases/tag/v0.1.0 существует с инсталлятором; репозиторий
+публичный с описанием/топиками/README; свежая установка видит «up to date».
 
-### Task 7: Сборка, CI, репозиторная гигиена
-**Files:** `electron-builder.yml` (nsis: `oneClick: true` по умолчанию + `allowToChangeInstallationDirectory: true`, installer/uninstaller icons, `artifactName`, `perMachine: false`; `publish: github`; linux-таргеты убрать до востребования), `package.json` (`version` → `1.0.0-rc.1`, `description`, `build:win` проверить локально — артефакт `dist/respo-1.0.0-rc.1-setup.exe` реально ставится и запускается), `README.md` (English, user-facing: что это, скриншот-плейсхолдер, установка, фичи, хоткеи, roadmap, development; docs/ остаются на русском), `CHANGELOG.md` (Keep a Changelog; 1.0.0-rc.1 — сводка W1–W6), `NOTICE.md` (атрибуции: Chromium device list BSD-3, логотипы — в W7), `.github/workflows/ci.yml` (windows-latest: `npm ci`, typecheck, lint, unit, e2e с загрузкой playwright-report при падении), `.github/workflows/release.yml` (tag `v*` → `build:win` + publish в GitHub Releases через `GH_TOKEN`).
-**LICENSE:** решение владельца (сейчас `UNLICENSED`, private) — **не добавлять файл лицензии**, вынести вопрос в отчёт.
-**DoD:** CI зелёный на PR; локальная сборка инсталлятора проходит; README читается как продуктовая страница.
+---
 
-### Task 8: Перф-гейт (спека §8)
-**Files:** `e2e/perf.spec.ts` (10 девайсов, 5 с непрерывного скролла лидера + включённая диагностика W5; p99 event-loop-delay main через тест-хук `perf:stats`; assert ≤ 16 мс локально; в CI — soft (аннотация), т.к. раннеры шумные), `src/main/perf.ts` (экспорт статистики по запросу).
-**DoD:** тест стабилен 5/5 локально, цифры — в отчёт.
+## Фаза B — Shell (после A5, версия 0.1.x)
 
-### Task 9 (опционально, по остатку бюджета, в порядке приоритета)
-1. **Page info** (кнопка ⓘ у адресной строки): title, description, canonical, viewport-meta, favicon, OG/Twitter-карточка с превью — одноразовый `Runtime.evaluate` чтения `<head>` у лидера.
-2. **Element screenshot** из inspect-режима (клик с `Alt` → `Page.captureScreenshot` с клипом `DOM.getBoxModel`).
-3. **Contact sheet**: «All devices → one image» (склейка скриншотов в один PNG с подписями — `nativeImage`/`sharp`).
-4. **Breakpoints → devices**: прочитать `@media (min/max-width)` из `document.styleSheets` лидера (cross-origin — пропускать) → диалог «Add devices for breakpoints» (создаёт кастомные девайсы шириной по брейкпоинтам).
+### Task B1: Нативное меню, окно, single instance, deep link, CLI
+`src/main/menu.ts` (File: Open URL…, Open File…, Screenshot all, Settings, Quit · Edit: роли · View:
+Layout ▸, Zoom in/out/reset, Rotate all, Rulers, Theme, DevTools dock ▸, Reload, Reload ignoring cache ·
+Help: Keyboard shortcuts, Documentation, Report an issue, Check for updates, About; macOS-ready шаблон;
+`autoHideMenuBar: true` оставить), `src/main/window-state.ts` (bounds/maximized persist, проверка дисплея),
+`requestSingleInstanceLock` + `second-instance` → фокус + URL из argv, `setAsDefaultProtocolClient('respo')`,
+`respo://open?url=…`, `respo <url|file>`, `?urlToOpen=` — одна функция валидации (http/https/file).
+**DoD:** e2e: второй запуск с URL уходит в первое окно; `respo://open?url=javascript:` отбрасывается;
+окно восстанавливает геометрию.
 
-### Task 10: Документация, ревью, отчёт
-Спека (§5.9, §10 факт), `docs/modules/*` для новых модулей, `CLAUDE.md` (команды, грабли), ревью ветки субагентом (`model: "opus"`) + фикс-волна, отчёт `docs/progress/W6-production-shell-2026-09-XX.md`, черновик записи ROADMAP для координатора.
+### Task B2: Реестр хоткеев + справка + командная палитра
+`src/shared/hotkeys.ts` — единственный источник правды (id, label, combo Win/mac, scope) → хуки renderer,
+акселераторы меню, подписи в tooltips/`DropdownMenuShortcut`, диалог справки, палитра. Добавить: Back/
+Forward (`Alt+←/→`), Reload (`Mod+R`, `F5` — `Mod+R`/`Mod+Shift+R` уже есть из W5, свести в реестр), Theme
+(`Mod+Shift+T`), Zoom (`Mod+=`/`Mod+-`/`Mod+0`), Rotate all (`Mod+Shift+.`), Emulate (`Mod+E`), Shortcuts
+(`Mod+/`), Command palette (`Mod+K`), Settings (`Mod+,`); кириллические дубли — как сейчас. `tinykeys`
+(MIT) — использовать, если упрощает; спеку §3 привести к факту. `ShortcutsDialog.tsx` (группы, поиск),
+`CommandPalette.tsx` (все действия + устройства/сьюты/закладки, fuzzy, подписи хоткеев).
+**DoD:** все хоткеи из реестра работают; tooltip каждой кнопки тулбара показывает хоткей; e2e
+`hotkeys.spec.ts` на 5 ключевых; юнит: нет дублей комбо в scope.
+
+### Task B3: Устойчивость
+`ErrorBoundary.tsx` («Something went wrong» + Reload UI + Copy details, в лог), UI-окно
+`render-process-gone`/`unresponsive` → пересоздание, валидация persistence с `.bak` при миграции (проверить).
+
+### Task B4: Welcome и полировка UX
+Welcome/empty state (адрес пуст → знак, «Enter a URL or open a file», Open file…, 3 последних URL);
+Settings по секциям: General (home page, theme, Accept-Language — если ещё не в Emulate), Screenshots,
+Security (insecure certs + янтарный чип «Insecure certs ON» в топ-баре, пока включено), Updates, About;
+аудит tooltips/`focus-visible`/tab-порядка/aria-label/dark-темы/минимального размера 1024×700/
+`prefers-reduced-motion`; единый тихий toast-слой для Notice/ShotNotice.
+**DoD:** чек-лист в отчёте со скриншотами обеих тем.
+
+### Task B5: Перф-гейт §8 в CI
+`e2e/perf-budget.spec.ts` из W5 — стабилизировать 5/5 локально; в CI — soft (аннотация) из-за шумных раннеров.
+
+### Task B6 (опционально, по остатку): Page info (title/description/OG/Twitter-карточка), element screenshot
+из inspect-режима, contact sheet «all devices → one image», breakpoints → devices.
+
+### Task B7: Документация, ревью, отчёт, 0.1.1
+Спека (§5.9, §10 факт), `docs/modules/*` для новых модулей (updater, menu, window-state, hotkeys),
+`CLAUDE.md` (команды, грабли), ревью Opus + фиксы, отчёт `docs/progress/W6-production-shell-2026-09-XX.md`
+с черновиком записей ROADMAP; после приёмки координатором — тег `v0.1.1` (release-workflow).
 
 ## DoD волны
-Инсталлятор собирается и ставится; автообновление работает против GitHub Releases (проверка в dev через dev-app-update.yml); все хоткеи документированы в диалоге и палитре; CI зелёный; typecheck/lint/unit/e2e зелёные; отчёт с скриншотами.
+Фаза A: релиз v0.1.0 опубликован, репозиторий публичный и оформлен, автообновление проверено на реальном
+релизе. Фаза B: меню/хоткеи/палитра/welcome/устойчивость, CI зелёный, отчёт со скриншотами, v0.1.1.
