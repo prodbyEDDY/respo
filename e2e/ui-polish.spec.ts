@@ -22,6 +22,13 @@ test('floating UI covers native pages, nested menus and a dock; closing restores
   try {
     const page = await app.firstWindow()
     await expect(page.locator('[data-load-state="ready"]')).toHaveCount(5)
+    // did-finish-load precedes the first native compositor frame on a cold
+    // Windows runner. Exercise menus only after a visible preview can be captured.
+    await expect
+      .poll(() =>
+        page.evaluate(async () => (await window.respo.invoke('ui:surface-snapshots')).length)
+      )
+      .toBeGreaterThan(0)
     await page
       .getByRole('button', { name: 'Emulate media, vision, network and location', exact: true })
       .click()
