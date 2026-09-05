@@ -1,5 +1,10 @@
 import { create } from 'zustand'
-import { normalizeUrl, type LoadStatePayload, type MainEvent } from '@shared/ipc'
+import {
+  normalizeUrl,
+  type LoadStatePayload,
+  type MainEvent,
+  type ReloadRequest
+} from '@shared/ipc'
 import { ipcBridge } from '@renderer/lib/ipc'
 
 export interface NavigationState {
@@ -18,7 +23,12 @@ export interface NavigationState {
   navigate: (input: string) => void
   back: () => void
   forward: () => void
-  reload: () => void
+  /** Reload every view, or one — see `ReloadRequest`. Bare is "all, from cache". */
+  reload: (request?: ReloadRequest) => void
+  /** Bring back one device whose renderer died. */
+  restart: (deviceId: string) => void
+  /** Put one device's document back at its top. */
+  scrollToTop: (deviceId: string) => void
 
   /** Apply one batched `load-state` event. Never called per event. */
   applyLoadStates: (batch: readonly LoadStatePayload[]) => void
@@ -35,11 +45,19 @@ export interface NavigationState {
   setUrl: (url: string) => void
 }
 
-function send(channel: 'nav:back' | 'nav:forward' | 'nav:reload'): void {
+function send(channel: 'nav:back' | 'nav:forward'): void {
   const bridge = ipcBridge()
   // Absent outside Electron (unit tests, the dev server in a plain browser).
   if (bridge === null) return
   void bridge.invoke(channel).catch((error: unknown) => {
+    console.error(`${channel} failed`, error)
+  })
+}
+
+function sendDevice(channel: 'view:restart' | 'view:scroll-to-top', deviceId: string): void {
+  const bridge = ipcBridge()
+  if (bridge === null) return
+  void bridge.invoke(channel, deviceId).catch((error: unknown) => {
     console.error(`${channel} failed`, error)
   })
 }
@@ -66,7 +84,19 @@ export const useNavigation = create<NavigationState>((set, get) => ({
 
   back: () => send('nav:back'),
   forward: () => send('nav:forward'),
-  reload: () => send('nav:reload'),
+  reload: (request) => {
+    const bridge = ipcBridge()
+    if (bridge === null) return
+    // The bare call stays bare on the wire: the toolbar's reload is the
+    // common case and it should not have to spell out "everything, from cache".
+    const call =
+      request === undefined ? bridge.invoke('nav:reload') : bridge.invoke('nav:reload', request)
+    void call.catch((error: unknown) => {
+      console.error('nav:reload failed', error)
+    })
+  },
+  restart: (deviceId) => sendDevice('view:restart', deviceId),
+  scrollToTop: (deviceId) => sendDevice('view:scroll-to-top', deviceId),
 
   applyLoadStates: (batch) => {
     if (batch.length === 0) return

@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>emulation</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 12px;
+        font:
+          14px/1.4 system-ui,
+          sans-serif;
+        background: #ffffff;
+        color: #111111;
+      }
+      @media (prefers-color-scheme: dark) {
+        body {
+          background: #111111;
+          color: #eeeeee;
+        }
+      }
+      pre {
+        margin: 0;
+        white-space: pre-wrap;
+        word-break: break-all;
+      }
+    </style>
+  </head>
+  <body>
+    <pre id="out"></pre>
+    <script>
+      // What the page believes about its environment. The title is the channel
+      // the e2e suite reads (see `probe.html`); it is re-sampled on a timer so
+      // an override applied to a page that is already open shows up without a
+      // navigation — which is exactly the claim the suite makes.
+      function report() {
+        var options = Intl.DateTimeFormat().resolvedOptions()
+        var probe = {
+          dark: matchMedia('(prefers-color-scheme: dark)').matches,
+          reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches,
+          forcedColors: matchMedia('(forced-colors: active)').matches,
+          print: matchMedia('print').matches,
+          language: navigator.language,
+          locale: options.locale,
+          timeZone: options.timeZone,
+          online: navigator.onLine,
+          innerWidth: window.innerWidth
+        }
+        document.title = JSON.stringify(probe)
+        document.getElementById('out').textContent = JSON.stringify(probe, null, 2)
+      }
+
+      report()
+      window.addEventListener('load', report)
+      setInterval(report, 200)
+    </script>
+  </body>
+</html>

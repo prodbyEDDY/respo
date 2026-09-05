@@ -18,6 +18,7 @@ import {
   installDevicePermissionHandlers,
   isDeviceWebContents,
   openExternalSafe,
+  popupDecision,
   shouldTrustCertificate
 } from '../security'
 
@@ -201,5 +202,40 @@ describe('shouldTrustCertificate', () => {
     ['neither holds', { allowInsecure: false, isDeviceView: false }]
   ])('refuses when %s', (_label, options) => {
     expect(shouldTrustCertificate(options)).toBe(false)
+  })
+})
+
+describe('popupDecision', () => {
+  it('gives the lead a window for a web url, hardened like a device view', () => {
+    const decision = popupDecision('https://accounts.example/login', true)
+    expect(decision.action).toBe('allow')
+    if (decision.action !== 'allow') return
+    expect(decision.overrideBrowserWindowOptions.webPreferences).toEqual({
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+      webSecurity: true,
+      partition: DEVICE_PARTITION
+    })
+  })
+
+  it('opens http as well as https', () => {
+    expect(popupDecision('http://localhost:5173/oauth', true).action).toBe('allow')
+  })
+
+  it('refuses a follower outright — one click is replayed into every view', () => {
+    expect(popupDecision('https://accounts.example/login', false)).toEqual({ action: 'deny' })
+  })
+
+  it.each([
+    'file:///C:/Windows/System32/calc.exe',
+    'javascript:alert(1)',
+    'about:blank',
+    'data:text/html,<script>alert(1)</script>',
+    'ms-msdt:-id PCWDiagnostic',
+    'not a url',
+    ''
+  ])('refuses %s even for the lead', (url) => {
+    expect(popupDecision(url, true)).toEqual({ action: 'deny' })
   })
 })

@@ -4,6 +4,7 @@ import {
   DEFAULT_SUITE_ID,
   SCHEMA_VERSION,
   defaultPersistedState,
+  guidesKeyOf,
   mergePersistedState,
   migratePersistedState,
   type PersistedState
@@ -627,5 +628,216 @@ describe('the updater’s memory', () => {
     expect(merged.updates).toEqual(patch)
     expect(merged.updates).not.toBe(patch)
     expect(mergePersistedState(merged, { homeUrl: '' }).updates).toEqual(patch)
+  })
+})
+
+describe('the emulation slice', () => {
+  function stored(over: Record<string, unknown>): PersistedState {
+    return migratePersistedState({ ...defaultPersistedState(), ...over }).state
+  }
+  it('starts with nothing overridden', () => {
+    const { emulation } = defaultPersistedState()
+    expect(emulation.deviceVision).toEqual({})
+    expect(emulation.profile).toEqual({
+      colorScheme: 'system',
+      reducedMotion: false,
+      forcedColors: false,
+      media: 'auto',
+      vision: 'none',
+      network: 'online',
+      geolocation: null,
+      locale: null,
+      timezone: null
+    })
+  })
+
+  it('reads a whole profile back', () => {
+    const profile = {
+      colorScheme: 'dark',
+      reducedMotion: true,
+      forcedColors: false,
+      media: 'print',
+      vision: 'deuteranopia',
+      network: 'slow-4g',
+      geolocation: { latitude: 35.6762, longitude: 139.6503 },
+      locale: 'ja-JP',
+      timezone: 'Asia/Tokyo'
+    }
+    const state = stored({ emulation: { profile, deviceVision: { 'pixel-8': 'none' } } })
+    expect(state.emulation.profile).toEqual(profile)
+    expect(state.emulation.deviceVision).toEqual({ 'pixel-8': 'none' })
+  })
+
+  it('repairs each field on its own, keeping the rest', () => {
+    const state = stored({
+      emulation: {
+        profile: {
+          colorScheme: 'sepia',
+          reducedMotion: 'yes',
+          media: 'braille',
+          vision: 'x-ray',
+          network: '5g',
+          geolocation: { latitude: 200, longitude: 0 },
+          locale: 'en_US',
+          timezone: 'Mars/Olympus Mons'
+        },
+        deviceVision: { 'pixel-8': 'deuteranopia', '': 'protanopia', ghost: 'nope' }
+      }
+    })
+    expect(state.emulation.profile).toEqual(defaultPersistedState().emulation.profile)
+    expect(state.emulation.deviceVision).toEqual({ 'pixel-8': 'deuteranopia' })
+  })
+
+  it('keeps a valid time zone next to a junk locale', () => {
+    const state = stored({
+      emulation: { profile: { locale: 42, timezone: 'Europe/Berlin' }, deviceVision: {} }
+    })
+    expect(state.emulation.profile.locale).toBeNull()
+    expect(state.emulation.profile.timezone).toBe('Europe/Berlin')
+  })
+
+  it.each([
+    ['missing', undefined],
+    ['not an object', 'dark'],
+    ['an array', []],
+    ['null', null]
+  ])('reads a slice that is %s as the defaults', (_label, emulation) => {
+    const doc: Record<string, unknown> = { ...defaultPersistedState() }
+    if (emulation === undefined) delete doc['emulation']
+    else doc['emulation'] = emulation
+    expect(migratePersistedState(doc).state.emulation).toEqual(defaultPersistedState().emulation)
+  })
+
+  it('merges like every other slice, by copy', () => {
+    const emulation = {
+      profile: {
+        ...defaultPersistedState().emulation.profile,
+        geolocation: { latitude: 1, longitude: 2 }
+      },
+      deviceVision: { 'pixel-8': 'tritanopia' as const }
+    }
+    const merged = mergePersistedState(defaultPersistedState(), { emulation })
+    expect(merged.emulation).toEqual(emulation)
+    expect(merged.emulation.profile.geolocation).not.toBe(emulation.profile.geolocation)
+    expect(merged.emulation.deviceVision).not.toBe(emulation.deviceVision)
+  })
+
+  it('leaves it alone when a patch does not mention it', () => {
+    const base = {
+      ...defaultPersistedState(),
+      emulation: {
+        profile: { ...defaultPersistedState().emulation.profile, colorScheme: 'dark' as const },
+        deviceVision: {}
+      }
+    }
+    expect(mergePersistedState(base, { homeUrl: '' }).emulation).toEqual(base.emulation)
+  })
+})
+
+describe('the guides slice', () => {
+  function stored(over: Record<string, unknown>): PersistedState {
+    return migratePersistedState({ ...defaultPersistedState(), ...over }).state
+  }
+
+  it('starts empty', () => {
+    expect(defaultPersistedState().guides).toEqual({})
+  })
+
+  it('keys guides by viewport size', () => {
+    expect(guidesKeyOf(393, 852)).toBe('393x852')
+    expect(guidesKeyOf(393.4, 852.6)).toBe('393x853')
+  })
+
+  it('reads a document back, repaired size by size', () => {
+    const state = stored({
+      guides: {
+        '393x852': { h: [10, 10.2, -1, 'x'], v: [200] },
+        '1440x900': { h: [], v: [] },
+        phone: { h: [1], v: [] },
+        '360x780': 'junk'
+      }
+    })
+    expect(state.guides).toEqual({ '393x852': { h: [10], v: [200] } })
+  })
+
+  it('caps one axis at fifty guides', () => {
+    const state = stored({
+      guides: { '393x852': { h: Array.from({ length: 80 }, (_v, i) => i), v: [] } }
+    })
+    expect(state.guides['393x852']?.h).toHaveLength(50)
+  })
+
+  it.each([
+    ['missing', undefined],
+    ['not an object', 'x'],
+    ['an array', []],
+    ['null', null]
+  ])('reads a slice that is %s as empty', (_label, guides) => {
+    const doc: Record<string, unknown> = { ...defaultPersistedState() }
+    if (guides === undefined) delete doc['guides']
+    else doc['guides'] = guides
+    expect(migratePersistedState(doc).state.guides).toEqual({})
+  })
+
+  it('merges by copy', () => {
+    const guides = { '393x852': { h: [1], v: [2] } }
+    const merged = mergePersistedState(defaultPersistedState(), { guides })
+    expect(merged.guides).toEqual(guides)
+    expect(merged.guides['393x852']).not.toBe(guides['393x852'])
+  })
+})
+
+describe('the design overlays slice', () => {
+  function stored(over: Record<string, unknown>): PersistedState {
+    return migratePersistedState({ ...defaultPersistedState(), ...over }).state
+  }
+
+  it('starts empty', () => {
+    expect(defaultPersistedState().designOverlays).toEqual({})
+  })
+
+  it('reads an overlay back, repairing the fractions and dropping one without an image', () => {
+    const state = stored({
+      designOverlays: {
+        '393x852': { imageId: '0123456789abcdef', mode: 'side-by-side', opacity: 7, curtain: 'x' },
+        '1440x900': { mode: 'overlay', opacity: 1 },
+        phone: { imageId: '0123456789abcdef' }
+      }
+    })
+    expect(state.designOverlays).toEqual({
+      '393x852': {
+        imageId: '0123456789abcdef',
+        mode: 'side-by-side',
+        opacity: 1,
+        curtain: 0,
+        enabled: true
+      }
+    })
+  })
+
+  it('only a literal false switches an overlay off', () => {
+    expect(
+      stored({ designOverlays: { '393x852': { imageId: '0123456789abcdef', enabled: false } } })
+        .designOverlays['393x852']?.enabled
+    ).toBe(false)
+    expect(
+      stored({ designOverlays: { '393x852': { imageId: '0123456789abcdef', enabled: 'no' } } })
+        .designOverlays['393x852']?.enabled
+    ).toBe(true)
+  })
+
+  it('merges by copy', () => {
+    const designOverlays = {
+      '393x852': {
+        imageId: '0123456789abcdef',
+        mode: 'overlay' as const,
+        opacity: 0.5,
+        curtain: 0,
+        enabled: true
+      }
+    }
+    const merged = mergePersistedState(defaultPersistedState(), { designOverlays })
+    expect(merged.designOverlays).toEqual(designOverlays)
+    expect(merged.designOverlays['393x852']).not.toBe(designOverlays['393x852'])
   })
 })

@@ -4,6 +4,7 @@ import {
   clipboard,
   ClipboardItem,
   dialog,
+  nativeImage,
   nativeTheme,
   session,
   shell
@@ -18,13 +19,21 @@ import {
   type DevtoolsStatePayload,
   type MainEvent,
   type PermissionStatePayload,
-  type UpdateStatePayload
+  type UpdateStatePayload,
+  type ScrollStatePayload,
+  type WatcherState
 } from '@shared/ipc'
 import { defaultPersistedState } from '@shared/persistence-types'
 import { authHostLabel, authRealmLabel, createAuthManager, type AuthManager } from './auth'
 import { CDPController } from './cdp-controller'
 import { clearBrowsingData } from './clear-data'
 import { DevtoolsManager } from './devtools-manager'
+import { DebugCssManager } from './debug-css'
+import { DesignOverlayManager } from './design-overlay'
+import { DiagnosticsManager } from './diagnostics'
+import { EmulationManager } from './emulation'
+import { chokidarFactory, FileWatcher } from './file-watcher'
+import { GuidesManager } from './guides'
 import { createFaviconFetcher } from './favicons'
 import { createHistory, type History } from './history'
 import { Inspector } from './inspector'
@@ -34,6 +43,7 @@ import { ensureLogsDirectory, installLogging, watchRendererErrors } from './log'
 import {
   createBackupFileIO,
   createElectronStoreBackend,
+  createOverlayStoreBackend,
   createPersistence,
   exportBackup,
   importBackup,
@@ -60,13 +70,22 @@ import {
   validateDeviceId,
   validateDeviceSpecs,
   validateDockPosition,
+  validateEmulationProfile,
+  validateGuideSet,
+  validateHighlightTarget,
   validateHistoryQuery,
+  validateImageId,
   validateLeadDeviceId,
   validateOptionalDeviceId,
+  validateOptionalDevtoolsPanel,
+  validateOptionalOverlayApply,
+  validateOptionalVisionDeficiency,
+  validateOverlayDataUrl,
   validatePermissionDecision,
   validatePermissionType,
   validatePersistedPatch,
   validatePromptId,
+  validateReloadRequest,
   validateScreenshotDirectory,
   validateShotPath,
   validateShotRequest,
@@ -75,7 +94,12 @@ import {
 } from './validate'
 import { ViewManager } from './view-manager'
 import { createDevtoolsPanelFactory, createElectronViewBackend } from './view-backend'
-import { createLoadStateBatcher, type LoadStateBatcher } from './load-state-batcher'
+import {
+  createKeyedBatcher,
+  createLoadStateBatcher,
+  type KeyedBatcher,
+  type LoadStateBatcher
+} from './load-state-batcher'
 import { startPerfMonitor, type PerfMonitor } from './perf'
 import { runScrollSpike } from './spike'
 import icon from '../../resources/icon.png?asset'
@@ -98,6 +122,27 @@ let syncEngine: SyncEngine | null = null
 let devtools: DevtoolsManager | null = null
 let inspector: Inspector | null = null
 let shots: ScreenshotQueue | null = null
+/**
+ * The environment every page is shown in — colour scheme, network, locale and
+ * the rest of the emulation pack. Restored from disk before the first view.
+ */
+let emulation: EmulationManager | null = null
+/** Console errors and overflow, per device, batched to the renderer. */
+let diagnostics: DiagnosticsManager | null = null
+/** Ruler guides, as CSS layers on the pages. */
+let guides: GuidesManager | null = null
+/** Design overlays: the image store, and the CSS layers on the pages. */
+let overlays: DesignOverlayManager | null = null
+/** Live reload of a local page, following the lead's url. */
+let watcher: FileWatcher | null = null
+/** Debug layers over every page: the outline switch. */
+let debugCss: DebugCssManager | null = null
+/** chokidar's `watch`, once its module has loaded. */
+let chokidarReady: import('./file-watcher').WatchFactory | null = null
+/** Scroll offsets of the devices whose rulers are showing, one message per turn. */
+let scrollStates: KeyedBatcher<ScrollStatePayload> | null = null
+/** Devices whose rulers are showing — the only ones whose scroll travels. */
+const rulers = new Set<string>()
 /**
  * Who may use a camera, and which questions are waiting.
  *
@@ -237,13 +282,30 @@ function createWindow(): void {
     // about *this* site. Costs nothing when it did not: the manager pushes only
     // when the picture it would send actually changed.
     permissions?.refresh()
+    // A local page gets its folder watched; anything else stops the watch.
+    // This runs inside the batcher's flush: nothing here may throw.
+    try {
+      watcher?.follow(lead?.url() ?? null)
+    } catch (error) {
+      console.error('watcher: follow failed', error)
+    }
   })
 
   // One CDP controller for the window's views, shared with the sync engine:
   // mirroring rides the same debugger session emulation and screenshots use
   // (CLAUDE.md §3), so there is never a second attach.
   const cdp = new CDPController()
-  syncEngine = new SyncEngine(cdp)
+  // Scroll offsets ride the same preload stream mirroring does; only the
+  // devices with rulers showing are asked to report, and their samples are
+  // coalesced to one `scroll-state` message per turn (CLAUDE.md §4).
+  scrollStates = createKeyedBatcher<ScrollStatePayload>((batch) => {
+    sendMainEvent(mainWindow.webContents, { type: 'scroll-state', payload: batch })
+  })
+  syncEngine = new SyncEngine(cdp, {
+    onScroll: (deviceId, x, y) => {
+      if (rulers.has(deviceId)) scrollStates?.report({ deviceId, x, y })
+    }
+  })
 
   // Restore the mirroring switches here rather than from the renderer: they
   // have to be in place before the first view registers, and the renderer only
@@ -309,6 +371,69 @@ function createWindow(): void {
     revealFile: (path) => shell.showItemInFolder(path)
   })
 
+  // The environment profile, restored here for the same reason the mirroring
+  // switches are: it has to be on a view before that view fetches anything,
+  // and the renderer only finishes hydrating after the first view exists.
+  emulation = new EmulationManager({
+    cdp,
+    ...(persistence === null ? {} : { initial: persistence.load().emulation })
+  })
+
+  // What each page complains about, coalesced per turn like load events: a
+  // page throwing in a loop is one message per flush, never one per throw.
+  diagnostics = new DiagnosticsManager({
+    cdp,
+    onState: (batch) => {
+      sendMainEvent(mainWindow.webContents, { type: 'diagnostics', payload: batch })
+    }
+  })
+
+  // Guides are stylesheets on the pages; the manager only needs to measure.
+  guides = new GuidesManager({ cdp })
+  // So is the outline switch.
+  debugCss = new DebugCssManager()
+
+  // Live reload. chokidar is loaded lazily — it is only ever needed once a
+  // local page is open — and the watcher itself is created now so the views
+  // can register with it.
+  const liveReload = new FileWatcher({
+    watch: (root, options) => {
+      // Not yet loaded: a page opened before the module resolved gets its
+      // watcher the moment it does. `follow` re-runs on every load batch.
+      const factory = chokidarReady
+      if (factory === null) throw new Error('watcher not ready')
+      return factory(root, options)
+    },
+    cdp,
+    reloadAll: () => viewManager?.reload(),
+    onState: (state) => {
+      sendMainEvent(mainWindow.webContents, { type: 'watcher', payload: state })
+    }
+  })
+  watcher = liveReload
+  void chokidarFactory().then(
+    (factory) => {
+      chokidarReady = factory
+      liveReload.follow(lead?.url() ?? null)
+    },
+    (error: unknown) => {
+      console.error('live reload is unavailable', error)
+    }
+  )
+
+  // Design images live in their own store file — megabytes, not settings —
+  // and are decoded by Chromium itself before anything is kept.
+  if (storeBackend !== null) {
+    overlays = new DesignOverlayManager({
+      backend: createOverlayStoreBackend(),
+      decode: (bytes) => {
+        const image = nativeImage.createFromBuffer(bytes)
+        if (image.isEmpty()) return null
+        return image.getSize()
+      }
+    })
+  }
+
   viewManager = new ViewManager(
     createElectronViewBackend(mainWindow, {
       canvasLayer: process.env['RESPO_CANVAS_LAYER'] !== '0',
@@ -317,6 +442,15 @@ function createWindow(): void {
       devtools,
       inspect: inspector,
       shots,
+      emulation,
+      diagnostics,
+      guides,
+      ...(overlays === null ? {} : { overlays }),
+      watcher: liveReload,
+      debug: debugCss,
+      // Popups belong to the viewport the user is interacting with — the same
+      // election the mirroring follows.
+      isLead: (deviceId) => syncEngine?.lead() === deviceId,
       onFavicon: (pageUrl, icons) => history?.noteFavicon(pageUrl, icons)
     }),
     { onLoadState: (payload) => loadStates?.report(payload) }
@@ -349,6 +483,21 @@ function createWindow(): void {
     deviceNames.clear()
     viewManager?.destroy()
     viewManager = null
+    emulation?.dispose()
+    emulation = null
+    diagnostics?.dispose()
+    diagnostics = null
+    guides?.dispose()
+    guides = null
+    overlays?.dispose()
+    overlays = null
+    watcher?.dispose()
+    watcher = null
+    debugCss?.dispose()
+    debugCss = null
+    rulers.clear()
+    scrollStates?.cancel()
+    scrollStates = null
     loadStates?.cancel()
     loadStates = null
     stopSpike?.()
@@ -575,6 +724,17 @@ function registerIpcHandlers(): void {
     devtools?.retain(live)
     inspector?.retain(live)
     shots?.retain(live)
+    emulation?.retain(live)
+    diagnostics?.retain(live)
+    guides?.retain(live)
+    overlays?.retain(live)
+    debugCss?.retain(live)
+    for (const deviceId of [...rulers]) {
+      if (live.has(deviceId)) continue
+      rulers.delete(deviceId)
+      // …and its preload stops reporting every frame to nobody.
+      syncEngine?.setReporting(deviceId, false)
+    }
     // A lead that left the canvas must not keep deciding what gets recorded —
     // or whose cookies a clear would take (`lead-tracker.ts`).
     lead?.retain(specs.map((spec) => spec.id))
@@ -601,8 +761,18 @@ function registerIpcHandlers(): void {
     viewManager?.goForward()
   })
 
-  registerHandler('nav:reload', () => {
-    viewManager?.reload()
+  registerHandler('nav:reload', (_event, request) => {
+    viewManager?.reload(validateReloadRequest(request))
+  })
+
+  // Per device, unlike the three above: a crash and a scroll position are
+  // facts about one view, and the others must not pay for them.
+  registerHandler('view:restart', (_event, deviceId) => {
+    viewManager?.restart(validateDeviceId(deviceId))
+  })
+
+  registerHandler('view:scroll-to-top', (_event, deviceId) => {
+    viewManager?.scrollToTop(validateDeviceId(deviceId))
   })
 
   // Mirroring controls. All three are user gestures — a hover, a click on a
@@ -624,10 +794,12 @@ function registerIpcHandlers(): void {
   // resize drag already coalesced to one call per animation frame by the
   // renderer (CLAUDE.md §4). The three that change what is open answer with the
   // whole state, so the renderer never has to guess what its click did.
-  registerHandler(
-    'devtools:open',
-    (_event, deviceId) => devtools?.openFor(validateDeviceId(deviceId)) ?? emptyDevtoolsState()
-  )
+  registerHandler('devtools:open', (_event, deviceId, panel) => {
+    const id = validateDeviceId(deviceId)
+    const which = validateOptionalDevtoolsPanel(panel)
+    if (devtools === null) return emptyDevtoolsState()
+    return which === 'console' ? devtools.openConsole(id) : devtools.openFor(id)
+  })
 
   registerHandler(
     'devtools:close',
@@ -797,6 +969,75 @@ function registerIpcHandlers(): void {
     auth?.respond(validatePromptId(id, 'auth:respond'), validateAuthCredentials(credentials))
   })
 
+  // The emulation pack. The renderer owns the document (it persists the
+  // profile like every other slice) and main mirrors it onto the views; the
+  // whole profile travels each time and the controller diffs it per view.
+  registerHandler('emulation:set', (_event, profile) => {
+    emulation?.setProfile(validateEmulationProfile(profile))
+  })
+
+  registerHandler('emulation:set-device-vision', (_event, deviceId, vision) => {
+    emulation?.setDeviceVision(validateDeviceId(deviceId), validateOptionalVisionDeficiency(vision))
+  })
+
+  registerHandler(
+    'emulation:get',
+    () =>
+      emulation?.state() ?? { profile: defaultPersistedState().emulation.profile, deviceVision: {} }
+  )
+
+  // Diagnostics. The renderer highlights by *index* into the last report it
+  // was pushed — the selectors are page text and never leave main.
+  registerHandler('diagnostics:highlight', (_event, deviceId, target) =>
+    diagnostics?.highlight(validateDeviceId(deviceId), validateHighlightTarget(target))
+  )
+
+  registerHandler('diagnostics:get', () => diagnostics?.state() ?? [])
+
+  // Rulers and guides. A device with rulers showing reports its scroll
+  // offsets (see `scroll-state`); the guides are a stylesheet on its page.
+  registerHandler('scroll:track', async (_event, deviceId, enabled) => {
+    const id = validateDeviceId(deviceId)
+    const on = validateBoolean(enabled, 'scroll:track')
+    if (on) rulers.add(id)
+    else rulers.delete(id)
+    syncEngine?.setReporting(id, on)
+    return on ? ((await guides?.scrollOf(id)) ?? null) : null
+  })
+
+  registerHandler('guides:set', (_event, deviceId, set) =>
+    guides?.set(validateDeviceId(deviceId), validateGuideSet(set))
+  )
+
+  // Design overlays. The bytes travel once (`store-image`), then only an id.
+  registerHandler(
+    'overlay:store-image',
+    (_event, dataUrl) =>
+      overlays?.storeImage(validateOverlayDataUrl(dataUrl)) ?? {
+        ok: false,
+        reason: 'unreadable',
+        message: 'Overlays are not available.'
+      }
+  )
+
+  registerHandler('overlay:image', (_event, id) => overlays?.image(validateImageId(id)) ?? null)
+
+  registerHandler('overlay:set', (_event, deviceId, apply) =>
+    overlays?.set(validateDeviceId(deviceId), validateOptionalOverlayApply(apply))
+  )
+
+  // Live reload. No payloads: the watcher follows the canvas on its own, and
+  // the renderer can only pause it or ask where it stands.
+  const OFF: WatcherState = { state: 'off', file: null, lastReloadAt: null }
+  registerHandler('watcher:toggle', () => watcher?.toggle() ?? OFF)
+  registerHandler('watcher:get', () => watcher?.state() ?? OFF)
+
+  // Debug layers. One boolean, every device.
+  registerHandler('debug:set-outline', (_event, on) => {
+    debugCss?.setOutline(validateBoolean(on, 'debug:set-outline'))
+  })
+  registerHandler('debug:get', () => debugCss?.state() ?? { outline: false })
+
   // The one-way stream from the device views. Its sender is an untrusted page,
   // so the batch is validated (and clamped) before the engine sees any of it;
   // anything malformed is dropped rather than thrown back at the page.
@@ -951,6 +1192,20 @@ app.on('before-quit', () => {
   devtools = null
   viewManager?.destroy()
   viewManager = null
+  emulation?.dispose()
+  emulation = null
+  debugCss?.dispose()
+  debugCss = null
+  watcher?.dispose()
+  watcher = null
+  diagnostics?.dispose()
+  diagnostics = null
+  overlays?.dispose()
+  overlays = null
+  guides?.dispose()
+  guides = null
+  scrollStates?.cancel()
+  scrollStates = null
   loadStates?.cancel()
   loadStates = null
   perf?.stop()

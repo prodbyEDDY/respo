@@ -14,23 +14,48 @@ import {
   type AppResource,
   type AuthCredentials,
   type ClearTarget,
+  type DevtoolsPanelName,
   type DockPosition,
+  type GuideSet,
+  type HighlightTarget,
   type InputEventPayload,
+  MAX_OVERLAY_IMAGE_BYTES,
+  type OverlayApply,
   type PermissionDecision,
   type PermissionType,
+  type ReloadRequest,
   type ShotRequest,
   type ThemeSource
 } from '@shared/ipc'
 import {
+  isGeolocation,
+  isLocaleTag,
+  isNetworkPreset,
+  isTimezoneId,
+  isVisionDeficiency,
+  type EmulationProfile,
+  type VisionDeficiency
+} from '@shared/emulation'
+import {
   clampDockSize,
   isCanvasLayoutMode,
   MAX_BOOKMARKS,
+  MAX_GUIDE_POSITION,
+  MAX_GUIDE_SIZES,
+  MAX_GUIDES_PER_AXIS,
   MAX_PATH_LENGTH,
   MAX_TITLE_LENGTH,
   MAX_URL_LENGTH,
+  IMAGE_ID_RE,
+  MAX_OVERLAY_SIZES,
+  sanitizeGuideAxis,
+  sanitizeOverlay,
   type Bookmark,
   type DevtoolsSettings,
+  type EmulationSettings,
+  type GuidesDocument,
   type LayoutSettings,
+  type OverlaysDocument,
   type PersistedState,
   type ScreenshotSettings,
   type SecuritySettings,
@@ -215,6 +240,12 @@ export function validatePersistedPatch(
   if (patch['bookmarks'] !== undefined) out.bookmarks = validateBookmarks(patch['bookmarks'])
   if (patch['homeUrl'] !== undefined) out.homeUrl = validateHomeUrl(patch['homeUrl'])
   if (patch['security'] !== undefined) out.security = validateSecuritySettings(patch['security'])
+  if (patch['emulation'] !== undefined)
+    out.emulation = validateEmulationSettings(patch['emulation'])
+  if (patch['guides'] !== undefined) out.guides = validateGuidesDocument(patch['guides'])
+  if (patch['designOverlays'] !== undefined) {
+    out.designOverlays = validateOverlaysDocument(patch['designOverlays'])
+  }
   // `permissions` is deliberately absent, and it is not an oversight: it is
   // main's field, like the screenshots folder above. A patch that could set it
   // would be a renderer writing `{"https://evil.example": {"camera": "allow"}}`
@@ -370,6 +401,106 @@ function validateSecuritySettings(value: unknown): SecuritySettings {
     fail('store:save security.allowInsecureCertificates must be a boolean')
   }
   return { allowInsecureCertificates: allow }
+}
+
+/**
+ * Validate an `emulation:set` profile.
+ *
+ * Strict where the values reach the protocol: a locale and a time zone are
+ * strings handed to `Emulation.setLocaleOverride` / `setTimezoneOverride`,
+ * and a page-shaped string in either would only ever be a renderer probing
+ * for a Chromium bug. Everything else is an enum or a bounded number, and a
+ * junk value throws rather than degrading — this is code talking, not a file
+ * someone edited (`sanitizeEmulationProfile` is the forgiving reader).
+ */
+export function validateEmulationProfile(value: unknown): EmulationProfile {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    fail('emulation profile must be an object')
+  }
+  const profile = value as Record<string, unknown>
+
+  const colorScheme = profile['colorScheme']
+  if (colorScheme !== 'system' && colorScheme !== 'light' && colorScheme !== 'dark') {
+    fail("emulation.colorScheme must be 'system', 'light' or 'dark'")
+  }
+  const media = profile['media']
+  if (media !== 'auto' && media !== 'screen' && media !== 'print') {
+    fail("emulation.media must be 'auto', 'screen' or 'print'")
+  }
+  const vision = profile['vision']
+  if (!isVisionDeficiency(vision)) fail('emulation.vision is not a known simulation')
+  const network = profile['network']
+  if (!isNetworkPreset(network)) fail('emulation.network is not a known preset')
+  if (typeof profile['reducedMotion'] !== 'boolean') {
+    fail('emulation.reducedMotion must be a boolean')
+  }
+  if (typeof profile['forcedColors'] !== 'boolean') {
+    fail('emulation.forcedColors must be a boolean')
+  }
+
+  const geolocation = profile['geolocation']
+  if (geolocation !== null && !isGeolocation(geolocation)) {
+    fail('emulation.geolocation must be null or a position on Earth')
+  }
+  const locale = profile['locale']
+  if (locale !== null && !isLocaleTag(locale)) {
+    fail('emulation.locale must be null or a BCP 47 language tag')
+  }
+  const timezone = profile['timezone']
+  if (timezone !== null && !isTimezoneId(timezone)) {
+    fail('emulation.timezone must be null or an IANA zone id')
+  }
+
+  return {
+    colorScheme,
+    reducedMotion: profile['reducedMotion'],
+    forcedColors: profile['forcedColors'],
+    media,
+    vision,
+    network,
+    geolocation:
+      geolocation === null
+        ? null
+        : { latitude: geolocation.latitude, longitude: geolocation.longitude },
+    locale,
+    timezone
+  }
+}
+
+/** Validate an `emulation:set-device-vision` simulation, or `null` for "inherit". */
+export function validateOptionalVisionDeficiency(value: unknown): VisionDeficiency | null {
+  if (value === null) return null
+  if (!isVisionDeficiency(value)) {
+    fail('emulation:set-device-vision expects a known simulation or null')
+  }
+  return value
+}
+
+/** Validate the persisted emulation slice. */
+function validateEmulationSettings(value: unknown): EmulationSettings {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    fail('store:save emulation must be an object')
+  }
+  const emulation = value as Record<string, unknown>
+  const raw = emulation['deviceVision']
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    fail('store:save emulation.deviceVision must be an object')
+  }
+  const entries = Object.entries(raw as Record<string, unknown>)
+  if (entries.length > MAX_ROTATED) {
+    fail(`store:save emulation.deviceVision accepts at most ${MAX_ROTATED} devices`)
+  }
+  const deviceVision: Record<string, VisionDeficiency> = {}
+  for (const [id, vision] of entries) {
+    if (id.length === 0 || id.length > MAX_NAME_LENGTH) {
+      fail('store:save emulation.deviceVision keys must be device ids')
+    }
+    if (!isVisionDeficiency(vision)) {
+      fail('store:save emulation.deviceVision values must be known simulations')
+    }
+    deviceVision[id] = vision
+  }
+  return { profile: validateEmulationProfile(emulation['profile']), deviceVision }
 }
 
 /** Validate a `permissions:set` capability. */
@@ -590,6 +721,116 @@ export function validateDeviceId(value: unknown): string {
   return value
 }
 
+/**
+ * Validate a `nav:reload` request. No argument at all is the toolbar's "every
+ * device, from cache"; a present one is rebuilt with only the two fields.
+ */
+export function validateReloadRequest(value: unknown): ReloadRequest {
+  if (value === undefined) return {}
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    fail('nav:reload expects a request object or nothing')
+  }
+  const request = value as Record<string, unknown>
+  const deviceId = request['deviceId']
+  if (deviceId !== undefined && (!isFilledString(deviceId) || deviceId.length > MAX_NAME_LENGTH)) {
+    fail('nav:reload deviceId must be a device id')
+  }
+  const ignoreCache = request['ignoreCache']
+  if (ignoreCache !== undefined && typeof ignoreCache !== 'boolean') {
+    fail('nav:reload ignoreCache must be a boolean')
+  }
+  return {
+    ...(deviceId === undefined ? {} : { deviceId }),
+    ...(ignoreCache === undefined ? {} : { ignoreCache })
+  }
+}
+
+/** Validate a `diagnostics:highlight` target: an offender's index, `all`, or `none`. */
+export function validateHighlightTarget(value: unknown): HighlightTarget {
+  if (value === 'all' || value === 'none') return value
+  if (typeof value === 'number' && Number.isInteger(value) && value >= 0 && value < 100) {
+    return value
+  }
+  fail("diagnostics:highlight expects an index, 'all' or 'none'")
+}
+
+/** Validate the optional panel argument of `devtools:open`. */
+export function validateOptionalDevtoolsPanel(value: unknown): DevtoolsPanelName | undefined {
+  if (value === undefined) return undefined
+  if (value !== 'elements' && value !== 'console') {
+    fail("devtools:open expects 'elements', 'console' or nothing")
+  }
+  return value
+}
+
+/**
+ * The only image types a design overlay may be: what `nativeImage` decodes
+ * (PNG and JPEG — not GIF or WebP) and CSS paints.
+ */
+const OVERLAY_DATA_URL_RE = /^data:image\/(?:png|jpeg);base64,[A-Za-z0-9+/]+=*$/
+
+/**
+ * Validate an `overlay:store-image` payload: a base64 data url of a raster
+ * type, no larger than the cap. The bytes themselves are decoded in main
+ * afterwards — a data url that parses is not yet an image.
+ */
+export function validateOverlayDataUrl(value: unknown): string {
+  if (typeof value !== 'string' || value === '') fail('overlay:store-image expects a data url')
+  // Base64 grows bytes by 4/3; the prefix is a few dozen characters.
+  if (value.length > Math.ceil((MAX_OVERLAY_IMAGE_BYTES * 4) / 3) + 64) {
+    fail('overlay:store-image image is too large')
+  }
+  if (!OVERLAY_DATA_URL_RE.test(value)) {
+    fail('overlay:store-image expects a png or jpeg data url')
+  }
+  return value
+}
+
+/** Validate an image content id. */
+export function validateImageId(value: unknown): string {
+  if (typeof value !== 'string' || !IMAGE_ID_RE.test(value)) {
+    fail('overlay expects an image id')
+  }
+  return value
+}
+
+/** Validate an `overlay:set` payload, or `null` for "take it off". */
+export function validateOptionalOverlayApply(value: unknown): OverlayApply | null {
+  if (value === null) return null
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    fail('overlay:set expects an overlay or null')
+  }
+  const apply = value as Record<string, unknown>
+  const opacity = apply['opacity']
+  const curtain = apply['curtain']
+  if (typeof opacity !== 'number' || !Number.isFinite(opacity) || opacity < 0 || opacity > 1) {
+    fail('overlay:set opacity must be in [0, 1]')
+  }
+  if (typeof curtain !== 'number' || !Number.isFinite(curtain) || curtain < 0 || curtain > 1) {
+    fail('overlay:set curtain must be in [0, 1]')
+  }
+  return { imageId: validateImageId(apply['imageId']), opacity, curtain }
+}
+
+/** Validate the persisted overlays document. */
+function validateOverlaysDocument(value: unknown): OverlaysDocument {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    fail('store:save designOverlays must be an object')
+  }
+  const entries = Object.entries(value as Record<string, unknown>)
+  if (entries.length > MAX_OVERLAY_SIZES) {
+    fail(`store:save designOverlays accepts at most ${MAX_OVERLAY_SIZES} sizes`)
+  }
+  const out: OverlaysDocument = {}
+  for (const [key, entry] of entries) {
+    if (!/^\d{1,5}x\d{1,5}$/.test(key)) fail('store:save designOverlays keys must be WxH')
+    const overlay = sanitizeOverlay(entry)
+    if (overlay === null) fail('store:save designOverlays entry is not an overlay')
+    out[key] = overlay
+  }
+  return out
+}
+
 /** Validate a boolean argument. `what` names the channel for the error. */
 export function validateBoolean(value: unknown, what: string): boolean {
   if (typeof value !== 'boolean') fail(`${what} expects a boolean`)
@@ -608,6 +849,59 @@ function clamp01(value: unknown): number | null {
   return value < 0 ? 0 : value > 1 ? 1 : value
 }
 
+/** Longest document a scroll offset may point into. Ten million CSS pixels. */
+const MAX_SCROLL_OFFSET = 10_000_000
+
+/** A scroll offset in CSS pixels: non-negative and bounded; anything else is the origin. */
+function clampOffset(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return 0
+  return value > MAX_SCROLL_OFFSET ? MAX_SCROLL_OFFSET : value
+}
+
+/**
+ * Validate a `guides:set` payload. Whole, bounded, deduplicated positions on
+ * each axis — the same repair the store applies, because this is the value
+ * about to become a stylesheet in a page.
+ */
+export function validateGuideSet(value: unknown): GuideSet {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    fail('guides:set expects a guide set')
+  }
+  const set = value as Record<string, unknown>
+  if (!Array.isArray(set['h']) || !Array.isArray(set['v'])) {
+    fail('guides:set expects h and v arrays')
+  }
+  if (set['h'].length > MAX_GUIDES_PER_AXIS || set['v'].length > MAX_GUIDES_PER_AXIS) {
+    fail(`guides:set accepts at most ${MAX_GUIDES_PER_AXIS} guides per axis`)
+  }
+  for (const entry of [...set['h'], ...set['v']]) {
+    if (typeof entry !== 'number' || !Number.isFinite(entry) || entry < 0) {
+      fail('guides:set positions must be non-negative numbers')
+    }
+    if (entry > MAX_GUIDE_POSITION) fail('guides:set position is too far')
+  }
+  return { h: sanitizeGuideAxis(set['h']), v: sanitizeGuideAxis(set['v']) }
+}
+
+/** Validate the persisted guides document. */
+function validateGuidesDocument(value: unknown): GuidesDocument {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    fail('store:save guides must be an object')
+  }
+  const entries = Object.entries(value as Record<string, unknown>)
+  if (entries.length > MAX_GUIDE_SIZES) {
+    fail(`store:save guides accepts at most ${MAX_GUIDE_SIZES} sizes`)
+  }
+  const out: GuidesDocument = {}
+  for (const [key, set] of entries) {
+    if (!/^\d{1,5}x\d{1,5}$/.test(key)) fail('store:save guides keys must be WxH')
+    const guides = validateGuideSet(set)
+    if (guides.h.length === 0 && guides.v.length === 0) continue
+    out[key] = guides
+  }
+  return out
+}
+
 function validateInputEvent(entry: unknown): InputEventPayload | null {
   if (typeof entry !== 'object' || entry === null) return null
   const event = entry as Record<string, unknown>
@@ -616,7 +910,14 @@ function validateInputEvent(entry: unknown): InputEventPayload | null {
     const ratioX = clamp01(event['ratioX'])
     const ratioY = clamp01(event['ratioY'])
     if (ratioX === null || ratioY === null) return null
-    return { kind: 'scroll', ratioX, ratioY }
+    // Absent on a preload from before the rulers; junk reads as the origin.
+    return {
+      kind: 'scroll',
+      ratioX,
+      ratioY,
+      x: clampOffset(event['x']),
+      y: clampOffset(event['y'])
+    }
   }
 
   if (event['kind'] === 'mouse') {

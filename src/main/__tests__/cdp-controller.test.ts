@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { DeviceSpec } from '@shared/types'
-import { CDPController, isMobileDevice, type CdpTarget } from '../cdp-controller'
+import {
+  CDPController,
+  isMobileDevice,
+  type CdpTarget,
+  type ViewEmulation
+} from '../cdp-controller'
 
 const IPHONE: DeviceSpec = {
   id: 'iphone-15-pro',
@@ -840,5 +845,317 @@ describe('CDPController — canvas zoom and the emulated viewport', () => {
     expect(paramsOf(target, 'Page.captureScreenshot')).toMatchObject({
       clip: { width: 1440, height: 900 }
     })
+  })
+})
+
+/** An environment with nothing overridden, as the manager would resolve it. */
+function plainEmulation(): ViewEmulation {
+  return {
+    media: 'auto',
+    colorScheme: 'system',
+    reducedMotion: false,
+    forcedColors: false,
+    vision: 'none',
+    network: { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 },
+    geolocation: null,
+    locale: null,
+    timezone: null
+  }
+}
+
+describe('CDPController.applyEmulation', () => {
+  let controller: CDPController
+
+  beforeEach(() => {
+    controller = new CDPController()
+  })
+
+  it('states every group the first time, clearing what is off', async () => {
+    const target = fakeTarget()
+    await controller.attach(target)
+    await controller.applyEmulation(target, plainEmulation())
+
+    expect(methods(target)).toEqual([
+      'Emulation.setEmulatedMedia',
+      'Emulation.setEmulatedVisionDeficiency',
+      'Network.emulateNetworkConditions',
+      'Emulation.clearGeolocationOverride',
+      'Emulation.setTimezoneOverride',
+      'Emulation.setLocaleOverride'
+    ])
+    expect(paramsOf(target, 'Emulation.setEmulatedMedia')).toEqual({
+      media: '',
+      features: [
+        { name: 'prefers-color-scheme', value: '' },
+        { name: 'prefers-reduced-motion', value: '' },
+        { name: 'forced-colors', value: '' }
+      ]
+    })
+    expect(paramsOf(target, 'Emulation.setEmulatedVisionDeficiency')).toEqual({ type: 'none' })
+    expect(paramsOf(target, 'Emulation.setTimezoneOverride')).toEqual({ timezoneId: '' })
+    expect(paramsOf(target, 'Emulation.setLocaleOverride')).toEqual({})
+    // No device yet, so no user-agent call: `applyDevice` will carry the language.
+    expect(methods(target)).not.toContain('Network.setUserAgentOverride')
+  })
+
+  it('sends only the group that changed', async () => {
+    const target = fakeTarget()
+    await controller.attach(target)
+    await controller.applyEmulation(target, plainEmulation())
+    target.calls.length = 0
+
+    await controller.applyEmulation(target, {
+      ...plainEmulation(),
+      colorScheme: 'dark',
+      reducedMotion: true
+    })
+
+    expect(methods(target)).toEqual(['Emulation.setEmulatedMedia'])
+    expect(paramsOf(target, 'Emulation.setEmulatedMedia')).toEqual({
+      media: '',
+      features: [
+        { name: 'prefers-color-scheme', value: 'dark' },
+        { name: 'prefers-reduced-motion', value: 'reduce' },
+        { name: 'forced-colors', value: '' }
+      ]
+    })
+  })
+
+  it('says nothing when nothing changed', async () => {
+    const target = fakeTarget()
+    await controller.attach(target)
+    await controller.applyEmulation(target, plainEmulation())
+    target.calls.length = 0
+
+    await controller.applyEmulation(target, plainEmulation())
+    expect(target.calls).toEqual([])
+  })
+
+  it('translates the rest of the profile into protocol calls', async () => {
+    const target = fakeTarget()
+    await controller.attach(target)
+    await controller.applyEmulation(target, plainEmulation())
+    target.calls.length = 0
+
+    await controller.applyEmulation(target, {
+      ...plainEmulation(),
+      media: 'print',
+      forcedColors: true,
+      vision: 'deuteranopia',
+      network: { offline: true, latency: 0, downloadThroughput: -1, uploadThroughput: -1 },
+      geolocation: { latitude: 35.6762, longitude: 139.6503 },
+      timezone: 'Asia/Tokyo'
+    })
+
+    expect(paramsOf(target, 'Emulation.setEmulatedMedia')).toMatchObject({ media: 'print' })
+    expect(paramsOf(target, 'Emulation.setEmulatedVisionDeficiency')).toEqual({
+      type: 'deuteranopia'
+    })
+    expect(paramsOf(target, 'Network.emulateNetworkConditions')).toEqual({
+      offline: true,
+      latency: 0,
+      downloadThroughput: -1,
+      uploadThroughput: -1
+    })
+    expect(paramsOf(target, 'Emulation.setGeolocationOverride')).toEqual({
+      latitude: 35.6762,
+      longitude: 139.6503,
+      accuracy: 150
+    })
+    expect(paramsOf(target, 'Emulation.setTimezoneOverride')).toEqual({ timezoneId: 'Asia/Tokyo' })
+    expect(methods(target)).not.toContain('Emulation.setLocaleOverride')
+  })
+
+  it('a locale change re-sends the user agent with Accept-Language', async () => {
+    const target = fakeTarget()
+    await controller.attach(target)
+    await controller.applyEmulation(target, plainEmulation())
+    await controller.applyDevice(target, IPHONE)
+    target.calls.length = 0
+
+    await controller.applyEmulation(target, { ...plainEmulation(), locale: 'de-DE' })
+
+    expect(methods(target)).toEqual(['Emulation.setLocaleOverride', 'Network.setUserAgentOverride'])
+    expect(paramsOf(target, 'Emulation.setLocaleOverride')).toEqual({ locale: 'de-DE' })
+    expect(paramsOf(target, 'Network.setUserAgentOverride')).toEqual({
+      userAgent: IPHONE.userAgent,
+      acceptLanguage: 'de-DE,de;q=0.9,en;q=0.8'
+    })
+
+    // …and clearing it sends the plain user agent again.
+    target.calls.length = 0
+    await controller.applyEmulation(target, plainEmulation())
+    expect(paramsOf(target, 'Network.setUserAgentOverride')).toEqual({
+      userAgent: IPHONE.userAgent
+    })
+  })
+
+  it('applyDevice carries the language the environment set before it', async () => {
+    const target = fakeTarget()
+    await controller.attach(target)
+    await controller.applyEmulation(target, { ...plainEmulation(), locale: 'fr-FR' })
+    target.calls.length = 0
+
+    await controller.applyDevice(target, DESKTOP)
+
+    expect(paramsOf(target, 'Network.setUserAgentOverride')).toMatchObject({
+      userAgent: DESKTOP.userAgent,
+      acceptLanguage: 'fr-FR,fr;q=0.9,en;q=0.8'
+    })
+  })
+
+  it('force replays every group without a second user-agent call', async () => {
+    const target = fakeTarget()
+    await controller.attach(target)
+    await controller.applyEmulation(target, { ...plainEmulation(), locale: 'fr-FR' })
+    await controller.applyDevice(target, DESKTOP)
+    target.calls.length = 0
+
+    await controller.applyEmulation(
+      target,
+      { ...plainEmulation(), locale: 'fr-FR' },
+      { force: true }
+    )
+
+    expect(methods(target)).toContain('Emulation.setEmulatedMedia')
+    expect(methods(target)).toContain('Emulation.setLocaleOverride')
+    expect(methods(target)).not.toContain('Network.setUserAgentOverride')
+  })
+
+  it('is remembered but not sent on a view that is gone', async () => {
+    const target = fakeTarget()
+    await controller.attach(target)
+    target.destroyed = true
+    await controller.applyEmulation(target, { ...plainEmulation(), colorScheme: 'dark' })
+    expect(target.calls).toEqual([])
+  })
+
+  it('survives a rejected command and still states the rest', async () => {
+    const target = fakeTarget()
+    await controller.attach(target)
+    target.failNext.add('Emulation.setEmulatedVisionDeficiency')
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    await expect(controller.applyEmulation(target, plainEmulation())).resolves.toBeUndefined()
+    expect(methods(target)).toContain('Emulation.setTimezoneOverride')
+    logged.mockRestore()
+  })
+
+  it('replays the environment after the device on a re-attach', async () => {
+    const target = fakeTarget()
+    await controller.attach(target)
+    await controller.applyEmulation(target, {
+      ...plainEmulation(),
+      colorScheme: 'dark',
+      locale: 'de-DE'
+    })
+    await controller.applyDevice(target, IPHONE)
+    target.calls.length = 0
+
+    target.fireDetach('canceled by user')
+    await vi.waitFor(() => expect(methods(target)).toContain('Emulation.setLocaleOverride'))
+
+    const order = methods(target)
+    expect(order.indexOf('Network.setUserAgentOverride')).toBeLessThan(
+      order.indexOf('Emulation.setEmulatedMedia')
+    )
+    expect(paramsOf(target, 'Network.setUserAgentOverride')).toEqual({
+      userAgent: IPHONE.userAgent,
+      acceptLanguage: 'de-DE,de;q=0.9,en;q=0.8'
+    })
+    expect(paramsOf(target, 'Emulation.setEmulatedMedia')).toMatchObject({
+      features: expect.arrayContaining([{ name: 'prefers-color-scheme', value: 'dark' }])
+    })
+    // One user-agent call for the whole replay, not one per half.
+    expect(order.filter((m) => m === 'Network.setUserAgentOverride')).toHaveLength(1)
+  })
+})
+
+describe('CDPController — Client Hints', () => {
+  it('sends userAgentMetadata for a Chromium user agent, from the string itself', async () => {
+    const controller = new CDPController({ chromiumVersion: '139.0.7258.66' })
+    const target = fakeTarget()
+    await controller.attach(target)
+    await controller.applyDevice(target, DESKTOP)
+
+    const params = paramsOf(target, 'Network.setUserAgentOverride') as {
+      userAgent: string
+      userAgentMetadata?: {
+        platform: string
+        mobile: boolean
+        brands: { brand: string; version: string }[]
+      }
+    }
+    expect(params.userAgent).toBe(DESKTOP.userAgent)
+    expect(params.userAgentMetadata).toMatchObject({ platform: 'Windows', mobile: false })
+    expect(params.userAgentMetadata?.brands).toEqual(
+      expect.arrayContaining([{ brand: 'Chromium', version: '139' }])
+    )
+  })
+
+  it('sends none for a Safari user agent — an iPhone has no Client Hints', async () => {
+    const controller = new CDPController({ chromiumVersion: '139.0.7258.66' })
+    const target = fakeTarget()
+    await controller.attach(target)
+    await controller.applyDevice(target, IPHONE)
+
+    expect(paramsOf(target, 'Network.setUserAgentOverride')).toEqual({
+      userAgent: IPHONE.userAgent
+    })
+  })
+
+  it('lets the user-agent string win over a newer engine', async () => {
+    const controller = new CDPController({ chromiumVersion: '152.0.7977.54' })
+    const target = fakeTarget()
+    await controller.attach(target)
+    await controller.applyDevice(target, DESKTOP)
+
+    const params = paramsOf(target, 'Network.setUserAgentOverride') as {
+      userAgentMetadata?: { fullVersionList: { brand: string; version: string }[] }
+    }
+    expect(params.userAgentMetadata?.fullVersionList).toEqual(
+      expect.arrayContaining([{ brand: 'Chromium', version: '139.0.0.0' }])
+    )
+  })
+})
+
+describe('CDPController — Runtime', () => {
+  it('enables the domain once asked, and replays it after a re-attach', async () => {
+    const controller = new CDPController()
+    const target = fakeTarget()
+    await controller.attach(target)
+    await controller.applyDevice(target, IPHONE)
+
+    expect(await controller.enableRuntime(target)).toBe(true)
+    expect(methods(target)).toContain('Runtime.enable')
+    target.calls.length = 0
+
+    target.fireDetach('canceled by user')
+    await vi.waitFor(() => expect(methods(target)).toContain('Runtime.enable'))
+  })
+
+  it('evaluates an expression by value and answers null for a throw', async () => {
+    const controller = new CDPController()
+    const target = fakeTarget()
+    await controller.attach(target)
+    target.replies.set('Runtime.evaluate', { result: { value: { ok: 1 } } })
+
+    expect(await controller.evaluate(target, '1')).toEqual({ ok: 1 })
+    expect(paramsOf(target, 'Runtime.evaluate')).toMatchObject({
+      expression: '1',
+      returnByValue: true
+    })
+
+    target.replies.set('Runtime.evaluate', { exceptionDetails: { text: 'boom' } })
+    expect(await controller.evaluate(target, 'throw 1')).toBeNull()
+  })
+
+  it('answers null for a view that is gone', async () => {
+    const controller = new CDPController()
+    const target = fakeTarget()
+    await controller.attach(target)
+    target.destroyed = true
+    expect(await controller.evaluate(target, '1')).toBeNull()
+    expect(await controller.enableRuntime(target)).toBe(false)
   })
 })

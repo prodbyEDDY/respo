@@ -8,13 +8,21 @@ import {
   validateClearTarget,
   validateDeviceId,
   validateDeviceSpecs,
+  validateEmulationProfile,
+  validateGuideSet,
+  validateHighlightTarget,
   validateHistoryQuery,
   validateHomeUrl,
   validateLeadDeviceId,
+  validateOptionalDevtoolsPanel,
+  validateOptionalOverlayApply,
+  validateOptionalVisionDeficiency,
+  validateOverlayDataUrl,
   validatePermissionDecision,
   validatePermissionType,
   validatePersistedPatch,
   validatePromptId,
+  validateReloadRequest,
   validateScreenshotDirectory,
   validateShotPath,
   validateShotRequest,
@@ -182,7 +190,7 @@ describe('validatePersistedPatch', () => {
 describe('validateSyncInputBatch', () => {
   it('accepts a well-formed batch', () => {
     const batch = [
-      { kind: 'scroll', ratioX: 0, ratioY: 0.5 },
+      { kind: 'scroll', ratioX: 0, ratioY: 0.5, x: 0, y: 0 },
       { kind: 'mouse', type: 'down', xNorm: 0.25, yNorm: 0.75, button: 'left' },
       { kind: 'key', type: 'up', key: 'a', code: 'KeyA', modifiers: 8 }
     ]
@@ -191,7 +199,7 @@ describe('validateSyncInputBatch', () => {
 
   it('clamps ratios into 0..1 rather than rejecting them', () => {
     expect(validateSyncInputBatch([{ kind: 'scroll', ratioX: -2, ratioY: 4 }])).toEqual([
-      { kind: 'scroll', ratioX: 0, ratioY: 1 }
+      { kind: 'scroll', ratioX: 0, ratioY: 1, x: 0, y: 0 }
     ])
     expect(
       validateSyncInputBatch([
@@ -742,5 +750,251 @@ describe('validateAppResource', () => {
     ['undefined', undefined]
   ])('rejects %s', (_label, value) => {
     expect(() => validateAppResource(value)).toThrow(/invalid ipc payload/i)
+  })
+})
+
+describe('emulation payloads', () => {
+  const profile = {
+    colorScheme: 'dark',
+    reducedMotion: true,
+    forcedColors: false,
+    media: 'print',
+    vision: 'deuteranopia',
+    network: 'slow-4g',
+    geolocation: { latitude: 35.6762, longitude: 139.6503 },
+    locale: 'ja-JP',
+    timezone: 'Asia/Tokyo'
+  }
+
+  it('accepts a full profile and rebuilds it without extra keys', () => {
+    expect(
+      validateEmulationProfile({ ...profile, geolocation: { ...profile.geolocation, extra: 1 } })
+    ).toEqual(profile)
+  })
+
+  it('accepts a profile with everything off', () => {
+    expect(
+      validateEmulationProfile({
+        colorScheme: 'system',
+        reducedMotion: false,
+        forcedColors: false,
+        media: 'auto',
+        vision: 'none',
+        network: 'online',
+        geolocation: null,
+        locale: null,
+        timezone: null
+      }).locale
+    ).toBeNull()
+  })
+
+  it.each([
+    ['a junk colour scheme', { colorScheme: 'sepia' }],
+    ['a junk media type', { media: 'braille' }],
+    ['an unknown simulation', { vision: 'x-ray' }],
+    ['an unknown network preset', { network: '5g' }],
+    ['a non-boolean reducedMotion', { reducedMotion: 'yes' }],
+    ['a non-boolean forcedColors', { forcedColors: 1 }],
+    ['a position off the planet', { geolocation: { latitude: 91, longitude: 0 } }],
+    ['a locale that is not a tag', { locale: 'en_US' }],
+    ['a locale that is a script', { locale: '<script>' }],
+    ['a time zone with spaces', { timezone: 'Mars/Olympus Mons' }],
+    ['a missing field', { timezone: undefined }]
+  ])('rejects %s', (_label, over) => {
+    expect(() => validateEmulationProfile({ ...profile, ...over })).toThrow(/invalid ipc payload/i)
+  })
+
+  it.each([null, 'dark', [], 42])('rejects a profile that is %j', (value) => {
+    expect(() => validateEmulationProfile(value)).toThrow(/invalid ipc payload/i)
+  })
+
+  it('accepts a per-device simulation or null', () => {
+    expect(validateOptionalVisionDeficiency('protanopia')).toBe('protanopia')
+    expect(validateOptionalVisionDeficiency(null)).toBeNull()
+    expect(() => validateOptionalVisionDeficiency('x-ray')).toThrow(/invalid ipc payload/i)
+    expect(() => validateOptionalVisionDeficiency(undefined)).toThrow(/invalid ipc payload/i)
+  })
+
+  it('carries the persisted slice through store:save', () => {
+    expect(
+      validatePersistedPatch({ emulation: { profile, deviceVision: { 'pixel-8': 'none' } } })
+    ).toEqual({ emulation: { profile, deviceVision: { 'pixel-8': 'none' } } })
+  })
+
+  it.each([
+    ['a junk override', { profile, deviceVision: { 'pixel-8': 'x-ray' } }],
+    ['an empty device id', { profile, deviceVision: { '': 'none' } }],
+    ['a missing override map', { profile }],
+    ['an array of overrides', { profile, deviceVision: [] }],
+    ['a junk profile inside', { profile: { ...profile, vision: 'x-ray' }, deviceVision: {} }],
+    ['a non-object slice', 'dark']
+  ])('rejects store:save emulation with %s', (_label, emulation) => {
+    expect(() => validatePersistedPatch({ emulation })).toThrow(/invalid ipc payload/i)
+  })
+})
+
+describe('validateReloadRequest', () => {
+  it('reads no argument as "every device, from cache"', () => {
+    expect(validateReloadRequest(undefined)).toEqual({})
+    expect(validateReloadRequest({})).toEqual({})
+  })
+
+  it('carries a device and the cache flag through, and nothing else', () => {
+    expect(validateReloadRequest({ deviceId: 'pixel-8', ignoreCache: true, extra: 1 })).toEqual({
+      deviceId: 'pixel-8',
+      ignoreCache: true
+    })
+    expect(validateReloadRequest({ ignoreCache: false })).toEqual({ ignoreCache: false })
+  })
+
+  it.each([
+    ['a non-object', 'all'],
+    ['null', null],
+    ['an array', []],
+    ['an empty device id', { deviceId: '' }],
+    ['a numeric device id', { deviceId: 7 }],
+    ['an overlong device id', { deviceId: 'x'.repeat(201) }],
+    ['a stringly cache flag', { ignoreCache: 'yes' }]
+  ])('rejects %s', (_label, value) => {
+    expect(() => validateReloadRequest(value)).toThrow(/invalid ipc payload/i)
+  })
+})
+
+describe('diagnostics and DevTools panel payloads', () => {
+  it('accepts an offender index, all or none as a highlight target', () => {
+    expect(validateHighlightTarget(0)).toBe(0)
+    expect(validateHighlightTarget(9)).toBe(9)
+    expect(validateHighlightTarget('all')).toBe('all')
+    expect(validateHighlightTarget('none')).toBe('none')
+  })
+
+  it.each([-1, 1.5, 100, '3', 'some', null, undefined, {}])('refuses %j as a target', (value) => {
+    expect(() => validateHighlightTarget(value)).toThrow(/invalid ipc payload/i)
+  })
+
+  it('accepts the two panels or nothing', () => {
+    expect(validateOptionalDevtoolsPanel(undefined)).toBeUndefined()
+    expect(validateOptionalDevtoolsPanel('console')).toBe('console')
+    expect(validateOptionalDevtoolsPanel('elements')).toBe('elements')
+    expect(() => validateOptionalDevtoolsPanel('sources')).toThrow(/invalid ipc payload/i)
+    expect(() => validateOptionalDevtoolsPanel(null)).toThrow(/invalid ipc payload/i)
+  })
+})
+
+describe('guides payloads', () => {
+  it('carries scroll offsets through the input batch, clamped', () => {
+    expect(
+      validateSyncInputBatch([{ kind: 'scroll', ratioX: 0, ratioY: 1, x: 12, y: 340 }])
+    ).toEqual([{ kind: 'scroll', ratioX: 0, ratioY: 1, x: 12, y: 340 }])
+    expect(validateSyncInputBatch([{ kind: 'scroll', ratioX: 0, ratioY: 0 }])).toEqual([
+      { kind: 'scroll', ratioX: 0, ratioY: 0, x: 0, y: 0 }
+    ])
+    expect(
+      validateSyncInputBatch([{ kind: 'scroll', ratioX: 0, ratioY: 0, x: -5, y: 1e12 }])[0]
+    ).toMatchObject({ x: 0, y: 10_000_000 })
+  })
+
+  it('accepts a guide set and repairs it into whole, sorted positions', () => {
+    expect(validateGuideSet({ h: [10.4, 10.4, 5], v: [] })).toEqual({ h: [5, 10], v: [] })
+  })
+
+  it.each([
+    ['not an object', 'guides'],
+    ['a missing axis', { h: [] }],
+    ['a negative position', { h: [-1], v: [] }],
+    ['a stringly position', { h: ['10'], v: [] }],
+    ['a position past the cap', { h: [], v: [1_000_000] }],
+    ['too many guides', { h: Array.from({ length: 51 }, (_v, i) => i), v: [] }]
+  ])('rejects %s', (_label, value) => {
+    expect(() => validateGuideSet(value)).toThrow(/invalid ipc payload/i)
+  })
+
+  it('carries the persisted guides through store:save, dropping empty sizes', () => {
+    expect(
+      validatePersistedPatch({
+        guides: { '393x852': { h: [1], v: [2] }, '1440x900': { h: [], v: [] } }
+      })
+    ).toEqual({ guides: { '393x852': { h: [1], v: [2] } } })
+  })
+
+  it.each([
+    ['a junk key', { guides: { phone: { h: [1], v: [] } } }],
+    ['an array', { guides: [] }],
+    ['a junk set', { guides: { '393x852': 'yes' } }]
+  ])('rejects store:save guides with %s', (_label, patch) => {
+    expect(() => validatePersistedPatch(patch)).toThrow(/invalid ipc payload/i)
+  })
+})
+
+describe('overlay payloads', () => {
+  const png = `data:image/png;base64,${Buffer.alloc(30, 1).toString('base64')}`
+
+  it('accepts a raster data url and refuses anything else', () => {
+    expect(validateOverlayDataUrl(png)).toBe(png)
+    for (const bad of [
+      '',
+      'data:text/html;base64,AAAA',
+      'data:image/svg+xml;base64,AAAA',
+      'data:image/png,plain',
+      'https://example.com/a.png',
+      42
+    ]) {
+      expect(() => validateOverlayDataUrl(bad)).toThrow(/invalid ipc payload/i)
+    }
+  })
+
+  it('refuses a data url past the size cap', () => {
+    const huge = `data:image/png;base64,${'A'.repeat(14 * 1024 * 1024)}`
+    expect(() => validateOverlayDataUrl(huge)).toThrow(/too large/i)
+  })
+
+  it('accepts an overlay to apply, or null', () => {
+    expect(
+      validateOptionalOverlayApply({
+        imageId: '0123456789abcdef',
+        opacity: 0.5,
+        curtain: 0,
+        extra: 1
+      })
+    ).toEqual({ imageId: '0123456789abcdef', opacity: 0.5, curtain: 0 })
+    expect(validateOptionalOverlayApply(null)).toBeNull()
+    for (const bad of [
+      { imageId: 'nope', opacity: 0.5, curtain: 0 },
+      { imageId: '0123456789abcdef', opacity: 2, curtain: 0 },
+      { imageId: '0123456789abcdef', opacity: 0.5, curtain: -1 },
+      { imageId: '0123456789abcdef', opacity: '1', curtain: 0 },
+      'overlay',
+      []
+    ]) {
+      expect(() => validateOptionalOverlayApply(bad)).toThrow(/invalid ipc payload/i)
+    }
+  })
+
+  it('carries the persisted overlays through store:save, repaired', () => {
+    expect(
+      validatePersistedPatch({
+        designOverlays: {
+          '393x852': { imageId: '0123456789abcdef', mode: 'weird', opacity: 3, curtain: 0.5 }
+        }
+      })
+    ).toEqual({
+      designOverlays: {
+        '393x852': {
+          imageId: '0123456789abcdef',
+          mode: 'overlay',
+          opacity: 1,
+          curtain: 0.5,
+          enabled: true
+        }
+      }
+    })
+  })
+
+  it.each([
+    ['a junk key', { designOverlays: { phone: { imageId: '0123456789abcdef' } } }],
+    ['a missing image id', { designOverlays: { '393x852': { opacity: 1 } } }],
+    ['an array', { designOverlays: [] }]
+  ])('rejects store:save designOverlays with %s', (_label, patch) => {
+    expect(() => validatePersistedPatch(patch)).toThrow(/invalid ipc payload/i)
   })
 })

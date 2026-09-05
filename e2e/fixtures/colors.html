@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>colors</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+      }
+      /* Saturated red and green halves: the pair a deuteranopia simulation
+         changes most, so the mean colour of a screenshot moves visibly. */
+      body {
+        display: flex;
+      }
+      .red,
+      .green {
+        flex: 1;
+        min-height: 100vh;
+      }
+      .red {
+        background: #ff0000;
+      }
+      .green {
+        background: #00c000;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="red"></div>
+    <div class="green"></div>
+  </body>
+</html>

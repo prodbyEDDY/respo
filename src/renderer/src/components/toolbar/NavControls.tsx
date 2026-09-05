@@ -58,7 +58,7 @@ export function NavControls(): React.JSX.Element {
       <Control label="Forward" onClick={forward} disabled={!canGoForward}>
         <ArrowRightIcon />
       </Control>
-      <Control label="Reload" onClick={reload}>
+      <Control label="Reload" onClick={() => reload()}>
         <ArrowPathIcon />
       </Control>
     </div>

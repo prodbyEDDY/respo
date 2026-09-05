@@ -9,6 +9,15 @@ export type Probe = {
   dpr: number
   ua: string
   maxTouchPoints: number
+  /** `navigator.userAgentData`, or `null` when the page has none. */
+  uaData: {
+    brands: string[]
+    mobile: boolean
+    platform: string
+    platformVersion: string
+    model: string
+    architecture: string
+  } | null
 }
 
 export const PROBE_URL = pathToFileURL(resolve(__dirname, 'fixtures', 'probe.html')).href

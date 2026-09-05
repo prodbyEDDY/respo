@@ -25,19 +25,49 @@
       // What the page believes about itself. The title is the channel the e2e
       // suite reads: main can pull it off any webContents with `getTitle()`,
       // without needing a Playwright page for a WebContentsView.
+      // Client Hints, as the page sees them. `null` when the browser exposes
+      // none — what Safari does, and what a Safari user agent should do here.
+      var uaData = null
+
       function report() {
         var probe = {
           innerWidth: window.innerWidth,
           innerHeight: window.innerHeight,
           dpr: window.devicePixelRatio,
           ua: navigator.userAgent,
-          maxTouchPoints: navigator.maxTouchPoints
+          maxTouchPoints: navigator.maxTouchPoints,
+          uaData: uaData
         }
         document.title = JSON.stringify(probe)
         document.getElementById('out').textContent = JSON.stringify(probe, null, 2)
       }
 
+      function readClientHints() {
+        var data = navigator.userAgentData
+        if (!data || !data.brands || data.brands.length === 0) {
+          uaData = null
+          report()
+          return
+        }
+        data
+          .getHighEntropyValues(['platformVersion', 'model', 'architecture'])
+          .then(function (high) {
+            uaData = {
+              brands: data.brands.map(function (b) {
+                return b.brand
+              }),
+              mobile: data.mobile,
+              platform: data.platform,
+              platformVersion: high.platformVersion,
+              model: high.model,
+              architecture: high.architecture
+            }
+            report()
+          })
+      }
+
       report()
+      readClientHints()
       window.addEventListener('resize', report)
       window.addEventListener('load', report)
     </script>

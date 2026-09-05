@@ -226,3 +226,42 @@ describe('navigation store', () => {
     expect(bridge.unsubscribe).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('navigation store — per-device gestures', () => {
+  let bridge: BridgeMock
+
+  beforeEach(() => {
+    bridge = installBridge()
+  })
+
+  afterEach(() => {
+    Reflect.deleteProperty(window, 'respo')
+  })
+
+  it('a bare reload stays bare on the wire', () => {
+    useNavigation.getState().reload()
+    expect(bridge.invoke).toHaveBeenCalledWith('nav:reload')
+    expect(bridge.invoke.mock.calls[0]).toHaveLength(1)
+  })
+
+  it('a device reload and a cache-busting one carry their request', () => {
+    useNavigation.getState().reload({ deviceId: 'pixel-8' })
+    useNavigation.getState().reload({ ignoreCache: true })
+    expect(bridge.invoke).toHaveBeenCalledWith('nav:reload', { deviceId: 'pixel-8' })
+    expect(bridge.invoke).toHaveBeenCalledWith('nav:reload', { ignoreCache: true })
+  })
+
+  it('restart and scroll-to-top name the device', () => {
+    useNavigation.getState().restart('pixel-8')
+    useNavigation.getState().scrollToTop('iphone-15-pro')
+    expect(bridge.invoke).toHaveBeenCalledWith('view:restart', 'pixel-8')
+    expect(bridge.invoke).toHaveBeenCalledWith('view:scroll-to-top', 'iphone-15-pro')
+  })
+
+  it('a crash is a load state like any other, so the frame can draw its card', () => {
+    useNavigation
+      .getState()
+      .applyLoadStates([payload('pixel-8', { state: 'crashed', errorDesc: 'killed' })])
+    expect(useNavigation.getState().perDevice['pixel-8']?.state).toBe('crashed')
+  })
+})

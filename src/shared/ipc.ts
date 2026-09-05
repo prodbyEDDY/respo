@@ -7,6 +7,7 @@
  */
 
 import type { RespoBackupV1 } from './backup'
+import type { EmulationProfile, VisionDeficiency } from './emulation'
 import type { PersistedState } from './persistence-types'
 import type { DeviceSpec, Rect } from './types'
 
@@ -307,7 +308,32 @@ export type AuthPrompt = {
  */
 export type AuthCredentials = { username: string; password: string }
 
-export type LoadState = 'loading' | 'ready' | 'failed'
+/**
+ * The emulation pack as main is applying it: the global profile, and the
+ * devices whose vision simulation overrides it.
+ *
+ * The renderer owns the document (it persists this like every other slice);
+ * main mirrors it into every view and restores it at boot before the first
+ * view exists, so this payload is only what a renderer that has just started
+ * asks for when it wants to be sure.
+ */
+export type EmulationStatePayload = {
+  profile: EmulationProfile
+  /** Per-device vision overrides. An absent id inherits the profile. */
+  deviceVision: Record<string, VisionDeficiency>
+}
+
+/**
+ * Where one device's page is.
+ *
+ * `crashed` is its renderer process going away underneath it (`render-process-gone`):
+ * the document is gone but the view is not, and `view:restart` brings it back.
+ * It is kept apart from `failed` because the two need different words and a
+ * different button — a page that could not be fetched is retried, a page
+ * whose process died is restarted — and because a crash is the one state a
+ * reload of *every* device must not be the answer to (spec §7).
+ */
+export type LoadState = 'loading' | 'ready' | 'failed' | 'crashed'
 
 /**
  * Where the updater is in its life.
@@ -376,6 +402,7 @@ export type LoadStatePayload = {
   url: string
   title?: string
   errorCode?: number
+  /** For `failed`, Chromium's error name; for `crashed`, the exit reason. */
   errorDesc?: string
   /**
    * This view's own history, as of this event.
@@ -390,6 +417,114 @@ export type LoadStatePayload = {
   canGoForward?: boolean
 }
 
+/** One console message worth keeping: the level, and the first line of it. */
+export type DiagnosticMessage = {
+  /** `exception` is an uncaught error; the other two are `console.error` / `console.assert`. */
+  level: 'exception' | 'error' | 'assert'
+  /** Truncated in main; page text, so the renderer renders it as text only. */
+  text: string
+}
+
+/** One element that sticks out past the viewport's right edge. */
+export type OverflowItem = {
+  /** `tag#id.class`, for reading. The selector main highlights by stays in main. */
+  label: string
+  /** The element's rendered width, in the page's CSS pixels. */
+  width: number
+  /** How far its right edge is from the document's left edge, CSS pixels. */
+  right: number
+}
+
+/** What the overflow scan found, once a page has settled. */
+export type OverflowReport = {
+  clientWidth: number
+  scrollWidth: number
+  /** Up to ten offenders, outermost first; empty when nothing overflows. */
+  items: OverflowItem[]
+}
+
+/**
+ * What one device's page has been complaining about since it last navigated.
+ *
+ * `errors` counts every exception and error-level console call; `messages`
+ * keeps only the last few, so a page in a logging loop costs a bounded amount
+ * of memory and IPC. `overflow` is `null` until the first scan after a load.
+ */
+export type DiagnosticsPayload = {
+  deviceId: string
+  errors: number
+  messages: DiagnosticMessage[]
+  overflow: OverflowReport | null
+}
+
+/**
+ * What `diagnostics:highlight` points at: one offender by its index in the
+ * last report, all of them, or nothing (clear). An index rather than a
+ * selector on purpose — the selector is page-derived text, and it never
+ * leaves main.
+ */
+export type HighlightTarget = number | 'all' | 'none'
+
+/** The DevTools panels Respo can open a frontend on. */
+export type DevtoolsPanelName = 'elements' | 'console'
+
+/** Where one device's document is scrolled to, in its own CSS pixels. */
+export type ScrollStatePayload = { deviceId: string; x: number; y: number }
+
+/**
+ * Live reload, as the address bar shows it.
+ *
+ * `off` for anything that is not a local file — there is nothing to watch
+ * on `http(s)`, and the indicator is simply absent. `paused` keeps the watch
+ * and ignores it: the way to edit a file without every device jumping.
+ */
+export type WatcherState = {
+  state: 'watching' | 'paused' | 'off'
+  /** The watched page's path, for the tooltip. */
+  file: string | null
+  /** When the last change was acted on, epoch milliseconds. */
+  lastReloadAt: number | null
+}
+
+/** A design image main keeps, as the renderer sees it. */
+export type OverlayImage = {
+  /** Content id: the first sixteen hex digits of the bytes' SHA-256. */
+  id: string
+  width: number
+  height: number
+  bytes: number
+  /** The image itself. Sent on request only — the dialog and the side panel. */
+  dataUrl: string
+}
+
+/** Largest design image worth keeping. Past this it is not a mockup, it is a photo. */
+export const MAX_OVERLAY_IMAGE_BYTES = 10 * 1024 * 1024
+
+export type OverlayStoreResult =
+  | { ok: true; image: Omit<OverlayImage, 'dataUrl'> }
+  /** Larger than `MAX_OVERLAY_IMAGE_BYTES`, or not an image Chromium can decode. */
+  | { ok: false; reason: 'too-large' | 'unreadable'; message: string }
+
+/** How the overlay is shown: over the page, or in a panel beside the frame. */
+export type OverlayMode = 'overlay' | 'side-by-side'
+
+/** What the CSS layer over one page looks like. */
+export type OverlayApply = {
+  imageId: string
+  /** 0..1. */
+  opacity: number
+  /** How much of the image, from the left, is hidden: 0..1. */
+  curtain: number
+}
+
+/**
+ * The guides of one viewport size: `h` are horizontal lines (y positions),
+ * `v` vertical ones (x positions), in the page's CSS pixels from the
+ * document's origin. Keyed by `WxH` in the document, because a guide at
+ * 320px means something on a 320px-wide phone and nothing on a monitor.
+ */
+export type GuideSet = { h: number[]; v: number[] }
+
 /**
  * Batched main -> renderer notification. One `load-state` message carries many
  * devices; the DevTools and inspect messages carry one whole state each and are
@@ -398,6 +533,21 @@ export type LoadStatePayload = {
  */
 export type MainEvent =
   | { type: 'load-state'; payload: LoadStatePayload[] }
+  /**
+   * Console errors and overflow, coalesced like `load-state`: a page throwing
+   * in a loop is one message per flush window carrying the count, not one
+   * message per throw (CLAUDE.md §4).
+   */
+  | { type: 'diagnostics'; payload: DiagnosticsPayload[] }
+  /**
+   * Scroll offsets of the devices whose rulers are showing, one message per
+   * turn while any of them scrolls and nothing at all otherwise. The samples
+   * come from the same preload stream mirroring rides on — no second stream —
+   * and only devices with rulers on are asked to report (CLAUDE.md §4).
+   */
+  | { type: 'scroll-state'; payload: ScrollStatePayload[] }
+  /** The live-reload watcher's state, whenever it changes. Never per file event. */
+  | { type: 'watcher'; payload: WatcherState }
   | { type: 'devtools-state'; payload: DevtoolsStatePayload }
   | { type: 'inspect-mode'; payload: { active: boolean } }
   /**
@@ -438,7 +588,12 @@ export type MainEvent =
  * carry, the less there is to abuse.
  */
 export type InputEventPayload =
-  | { kind: 'scroll'; ratioX: number; ratioY: number }
+  /**
+   * `x`/`y` are the absolute offsets in the page's own CSS pixels, next to
+   * the ratios mirroring works in: the rulers need to know *where* a page is,
+   * not only how far along. Same message, two more numbers.
+   */
+  | { kind: 'scroll'; ratioX: number; ratioY: number; x: number; y: number }
   | {
       kind: 'mouse'
       type: 'down' | 'up'
@@ -500,6 +655,21 @@ export type BackupImportResult =
   | { ok: false; reason: 'invalid'; message: string }
   | { ok: false; reason: 'failed'; message: string }
 
+/**
+ * What one reload asks for.
+ *
+ * Both fields are optional because the common gesture — the toolbar button —
+ * says neither: every device, from cache. A device's own kebab names the
+ * device, and "Reload ignoring cache" (`mod+shift+r`) sets the flag; the
+ * combination is the whole space.
+ */
+export type ReloadRequest = {
+  /** One device, or every device when absent. */
+  deviceId?: string
+  /** `webContents.reloadIgnoringCache()` rather than `reload()`. */
+  ignoreCache?: boolean
+}
+
 /** renderer -> main request/response channels. Extended by later tasks. */
 export type IpcInvokeMap = {
   'app:get-version': { args: []; result: string }
@@ -522,7 +692,18 @@ export type IpcInvokeMap = {
    */
   'nav:back': { args: []; result: void }
   'nav:forward': { args: []; result: void }
-  'nav:reload': { args: []; result: void }
+  /** Reload every view, or one — see `ReloadRequest`. No argument is "all, from cache". */
+  'nav:reload': { args: [ReloadRequest?]; result: void }
+  /**
+   * Bring back a device whose renderer process died.
+   *
+   * Per device on purpose, unlike reload: the other viewports are alive and
+   * showing the page, and a crash in one must not cost the others their
+   * scroll position (spec §7). Ignored for a device that is not crashed.
+   */
+  'view:restart': { args: [string]; result: void }
+  /** Put one device's document back at its top. A user gesture, not a stream. */
+  'view:scroll-to-top': { args: [string]; result: void }
   'theme:set-source': { args: [ThemeSource]; result: void }
   /** Read the whole persisted document, already migrated and repaired by main. */
   'store:load': { args: []; result: PersistedState }
@@ -557,9 +738,11 @@ export type IpcInvokeMap = {
    * Open DevTools for one device, in whatever mode `dock` currently names.
    *
    * Opening the dock for a second device retargets it: the DevTools frontend is
-   * a `WebContentsView` main owns, and there is exactly one of it.
+   * a `WebContentsView` main owns, and there is exactly one of it. The panel
+   * is optional and defaults to whatever the frontend opens on (Elements);
+   * the errors chip asks for the console.
    */
-  'devtools:open': { args: [string]; result: DevtoolsStatePayload }
+  'devtools:open': { args: [string, DevtoolsPanelName?]; result: DevtoolsStatePayload }
   /** Close one device's DevTools, or (`null`) whatever is in the dock. */
   'devtools:close': { args: [string | null]; result: DevtoolsStatePayload }
   /**
@@ -712,6 +895,78 @@ export type IpcInvokeMap = {
   'updates:install': { args: []; result: void }
   /** The daily launch check on or off. Persisted by main. */
   'updates:set-auto-check': { args: [boolean]; result: UpdateStatePayload }
+  /**
+   * Put one environment on every device view at once.
+   *
+   * The whole profile, not a delta: main diffs it against what each view is
+   * already emulating and sends only the CDP calls that change something, so
+   * a colour-scheme flip costs one `Emulation.setEmulatedMedia` per view. The
+   * renderer persists the profile itself (`emulation` slice), and main
+   * restores it at boot before the first view exists.
+   */
+  'emulation:set': { args: [EmulationProfile]; result: void }
+  /**
+   * Simulate a vision deficiency on one device only, or (`null`) let it
+   * inherit the profile again. Wins over the profile's `vision` for that
+   * device — the way to compare two identical frames with and without.
+   */
+  'emulation:set-device-vision': { args: [string, VisionDeficiency | null]; result: void }
+  /** What main is actually applying. For a renderer that wants to be sure. */
+  'emulation:get': { args: []; result: EmulationStatePayload }
+  /**
+   * Outline one overflow offender, all of them, or none, on one device.
+   *
+   * A CSS layer (`webContents.insertCSS`) rather than DevTools' overlay: the
+   * outline then scrolls with the element and several can be shown at once.
+   * The selector is looked up in main by index — see `HighlightTarget`.
+   */
+  'diagnostics:highlight': { args: [string, HighlightTarget]; result: void }
+  /** Every device's diagnostics, for a renderer that has just started. */
+  'diagnostics:get': { args: []; result: DiagnosticsPayload[] }
+  /**
+   * Ask one device to report its scroll offsets, or stop (see `scroll-state`).
+   * The rulers and a side-by-side overlay both need it; the renderer counts
+   * the reasons and main sees a boolean. Answers with where the page is right
+   * now, so a ruler starts in the right place rather than at zero until the
+   * first scroll.
+   */
+  'scroll:track': { args: [string, boolean]; result: ScrollStatePayload | null }
+  /**
+   * Put a set of guides on one device's page, as a CSS layer that scrolls
+   * with the document. An empty set removes the layer. The renderer sends
+   * the set for the device's current size; the document is its to keep.
+   */
+  'guides:set': { args: [string, GuideSet]; result: void }
+  /**
+   * Keep a design image the user picked.
+   *
+   * The renderer reads the file it was handed (`<input type="file">` — it
+   * learns no path and writes nothing) and sends the data url once; main
+   * checks the size and that it decodes as an image, stores it under a
+   * content id in its own store key (100 MB total, least recently used goes
+   * first), and answers with the id and the dimensions.
+   */
+  'overlay:store-image': { args: [string]; result: OverlayStoreResult }
+  /** A stored image, for the dialog's thumbnail and the side-by-side panel. `null` if evicted. */
+  'overlay:image': { args: [string]; result: OverlayImage | null }
+  /**
+   * Put a design image over one device's page as a CSS layer, or (`null`)
+   * take it off. Opacity and curtain travel with it; the image is looked up
+   * by id in main, so the renderer never ships megabytes per change.
+   */
+  'overlay:set': { args: [string, OverlayApply | null]; result: void }
+  /** Pause or resume live reload of the local page. Answers with the state. */
+  'watcher:toggle': { args: []; result: WatcherState }
+  /** The watcher's state, for a renderer that has just started. */
+  'watcher:get': { args: []; result: WatcherState }
+  /**
+   * Outline every element on every device, or stop. A session mode, not a
+   * setting: a canvas that opened tomorrow full of outlines would be a
+   * mystery. The layer is a stylesheet, put back on every new document.
+   */
+  'debug:set-outline': { args: [boolean]; result: void }
+  /** The debug switches, for a renderer that has just started. */
+  'debug:get': { args: []; result: { outline: boolean } }
 }
 
 export type IpcChannel = keyof IpcInvokeMap
@@ -729,6 +984,8 @@ const CHANNEL_REGISTRY: Record<IpcChannel, true> = {
   'nav:back': true,
   'nav:forward': true,
   'nav:reload': true,
+  'view:restart': true,
+  'view:scroll-to-top': true,
   'theme:set-source': true,
   'store:load': true,
   'store:save': true,
@@ -764,7 +1021,21 @@ const CHANNEL_REGISTRY: Record<IpcChannel, true> = {
   'updates:check': true,
   'updates:download': true,
   'updates:install': true,
-  'updates:set-auto-check': true
+  'updates:set-auto-check': true,
+  'emulation:set': true,
+  'emulation:set-device-vision': true,
+  'emulation:get': true,
+  'diagnostics:highlight': true,
+  'diagnostics:get': true,
+  'scroll:track': true,
+  'guides:set': true,
+  'overlay:store-image': true,
+  'overlay:image': true,
+  'overlay:set': true,
+  'watcher:toggle': true,
+  'watcher:get': true,
+  'debug:set-outline': true,
+  'debug:get': true
 }
 
 export const IPC_CHANNELS: readonly IpcChannel[] = Object.keys(CHANNEL_REGISTRY) as IpcChannel[]

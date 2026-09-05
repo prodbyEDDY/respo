@@ -17,6 +17,69 @@ export const DEVICE_PARTITION = 'persist:respo'
 /** The only schemes Respo will ever hand to the operating system. */
 const EXTERNAL_PROTOCOLS: ReadonlySet<string> = new Set(['http:', 'https:'])
 
+/** The only schemes a popup may open with. A `file:` or `javascript:` popup is not a popup. */
+const POPUP_PROTOCOLS: ReadonlySet<string> = new Set(['http:', 'https:'])
+
+/**
+ * What `setWindowOpenHandler` answers with. The subset Respo uses of Electron's
+ * `WindowOpenHandlerResponse`, spelled out so the decision is testable without
+ * Electron's types.
+ */
+export type PopupDecision =
+  | { action: 'deny' }
+  | {
+      action: 'allow'
+      overrideBrowserWindowOptions: {
+        autoHideMenuBar: true
+        webPreferences: {
+          sandbox: true
+          contextIsolation: true
+          nodeIntegration: false
+          webSecurity: true
+          partition: string
+        }
+      }
+    }
+
+/**
+ * Whether a page's `window.open` gets a window (spec §5.4, §7a).
+ *
+ * Only the *leading* viewport's does. One page is driven across many views
+ * and a click on the lead is replayed into every follower, so a login popup
+ * would otherwise open five times; the followers' copies are refused
+ * silently — not sent to the system browser either, which is what the old
+ * policy did and what turned one click into five tabs.
+ *
+ * The window it gets is a device view in everything but placement: the same
+ * sandbox and isolation, the same `persist:respo` partition so the popup and
+ * the page share cookies (an OAuth flow depends on it), and only a web url —
+ * `file:` and everything else is refused whatever the opener is.
+ */
+export function popupDecision(url: string, isLead: boolean): PopupDecision {
+  if (!isLead) return { action: 'deny' }
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    return { action: 'deny' }
+  }
+  if (!POPUP_PROTOCOLS.has(parsed.protocol)) return { action: 'deny' }
+
+  return {
+    action: 'allow',
+    overrideBrowserWindowOptions: {
+      autoHideMenuBar: true,
+      webPreferences: {
+        sandbox: true,
+        contextIsolation: true,
+        nodeIntegration: false,
+        webSecurity: true,
+        partition: DEVICE_PARTITION
+      }
+    }
+  }
+}
+
 /**
  * Open a url in the user's default browser — but only when it is a web url.
  *

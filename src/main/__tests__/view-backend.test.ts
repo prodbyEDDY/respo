@@ -284,3 +284,54 @@ describe('showFrontendPanel', () => {
     expect(frontend.scripts).toEqual([])
   })
 })
+
+describe('watchLoadState — renderer crashes', () => {
+  let fake: ReturnType<typeof fakeWebContents>
+  let reported: LoadStatePayload[]
+
+  beforeEach(() => {
+    fake = fakeWebContents()
+    reported = []
+    watchLoadState(fake.wc, 'iphone-15', (payload) => {
+      reported.push(payload)
+    })
+    fake.url = 'https://example.com/'
+    fake.entries = ['about:blank', 'https://example.com/']
+    fake.activeIndex = 1
+  })
+
+  it('reports a dead renderer as crashed, with the reason', () => {
+    fake.emit('render-process-gone', null, { reason: 'killed', exitCode: 1 })
+
+    expect(reported).toEqual([
+      {
+        deviceId: 'iphone-15',
+        state: 'crashed',
+        url: 'https://example.com/',
+        errorDesc: 'killed',
+        canGoBack: false,
+        canGoForward: false
+      }
+    ])
+  })
+
+  it('stays crashed through whatever Chromium says about the dead document', () => {
+    fake.emit('render-process-gone', null, { reason: 'crashed', exitCode: 1 })
+    fake.emit('page-title-updated', null, 'Aw, Snap!')
+    fake.emit('did-finish-load')
+
+    expect(reported.map((p) => p.state)).toEqual(['crashed'])
+  })
+
+  it('comes back with the restart’s own navigation', () => {
+    fake.emit('render-process-gone', null, { reason: 'crashed', exitCode: 1 })
+    fake.emit('did-start-navigation', {
+      isMainFrame: true,
+      isSameDocument: false,
+      url: 'https://example.com/'
+    })
+    fake.emit('did-finish-load')
+
+    expect(reported.map((p) => p.state)).toEqual(['crashed', 'loading', 'ready'])
+  })
+})

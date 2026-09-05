@@ -4,33 +4,57 @@ import {
   ArrowPathRoundedSquareIcon,
   ArrowsPointingOutIcon,
   ArrowsUpDownIcon,
+  ArrowUpIcon,
   CameraIcon,
   ChevronDownIcon,
   ClipboardIcon,
   CodeBracketIcon,
+  Squares2X2Icon,
+  EllipsisVerticalIcon,
   ExclamationTriangleIcon,
+  EyeIcon,
+  FaceFrownIcon,
   LinkIcon,
+  PhotoIcon,
   LinkSlashIcon,
   ViewfinderCircleIcon
 } from '@heroicons/react/24/outline'
 import { isRotatable } from '@shared/custom-devices'
+import { VISION_DEFICIENCIES, VISION_LABELS, type VisionDeficiency } from '@shared/emulation'
 import type { LoadStatePayload } from '@shared/ipc'
+import { guidesKeyOf } from '@shared/persistence-types'
 import type { DeviceSpec } from '@shared/types'
 import { Button } from '@renderer/components/ui/button'
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
   DropdownMenuShortcut,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger
 } from '@renderer/components/ui/dropdown-menu'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
+import { ipcBridge } from '@renderer/lib/ipc'
 import { cn } from '@renderer/lib/utils'
+import { useDesignOverlay } from '@renderer/stores/design-overlay'
+import { useEmulation } from '@renderer/stores/emulation'
+import { NO_GUIDES, useGuides } from '@renderer/stores/guides'
 import { useLayout } from '@renderer/stores/layout'
 import { useNavigation } from '@renderer/stores/navigation'
+import { useNotices } from '@renderer/stores/notices'
 import { selectIsOpen, usePanels } from '@renderer/stores/panels'
 import { selectIsBusy, useShots } from '@renderer/stores/shots'
 import { useSync } from '@renderer/stores/sync'
+import { DesignOverlayDialog } from './DesignOverlayDialog'
+import { DiagnosticsChips } from './DiagnosticsChips'
+import { OverlayPanel } from './OverlayPanel'
+import { Rulers } from './Rulers'
 
 export type DeviceFrameProps = {
   device: DeviceSpec
@@ -66,7 +90,13 @@ function hostOf(url: string): string {
  * a `WebContentsView` composites above the entire window, so nothing the
  * renderer draws can ever sit on top of a live one.
  */
-function LoadError({ state }: { state: LoadStatePayload }): React.JSX.Element {
+function LoadError({
+  deviceId,
+  state
+}: {
+  deviceId: string
+  state: LoadStatePayload
+}): React.JSX.Element {
   const reload = useNavigation((s) => s.reload)
 
   return (
@@ -79,11 +109,259 @@ function LoadError({ state }: { state: LoadStatePayload }): React.JSX.Element {
         {state.errorDesc ?? 'The page failed to load'}
         {state.errorCode === undefined ? '' : ` (${state.errorCode})`}
       </p>
-      <Button variant="outline" size="sm" onClick={reload} className="mt-1">
+      {/* This device only: the others may well be showing the page. */}
+      <Button variant="outline" size="sm" onClick={() => reload({ deviceId })} className="mt-1">
         <ArrowPathIcon />
         Retry
       </Button>
     </div>
+  )
+}
+
+/**
+ * What the user sees when a device's renderer process died (spec §7).
+ *
+ * Its own card rather than the load-error one: the words are different ("the
+ * page crashed", not "could not load"), the button is different (a restart of
+ * *this* process, not a reload of every device), and the other frames are
+ * alive and untouched — which is the whole point of one process per view.
+ */
+function PageCrashed({
+  deviceId,
+  state
+}: {
+  deviceId: string
+  state: LoadStatePayload
+}): React.JSX.Element {
+  const restart = useNavigation((s) => s.restart)
+
+  return (
+    <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-4 text-center">
+      <FaceFrownIcon aria-hidden="true" className="size-6 text-status-error" />
+      <p className="text-caption font-medium text-foreground">This page crashed</p>
+      <p className="max-w-full truncate text-micro text-muted-foreground">
+        The renderer process {state.errorDesc === undefined ? 'went away' : state.errorDesc}. The
+        other devices are not affected.
+      </p>
+      <Button variant="outline" size="sm" onClick={() => restart(deviceId)} className="mt-1">
+        <ArrowPathIcon />
+        Restart
+      </Button>
+    </div>
+  )
+}
+
+/**
+ * The way into the design overlay dialog, from the device's menu.
+ */
+function OverlayItem({ deviceId }: { deviceId: string }): React.JSX.Element {
+  const openDialog = useDesignOverlay((s) => s.openDialog)
+  return (
+    <DropdownMenuItem onSelect={() => requestAnimationFrame(() => openDialog(deviceId))}>
+      <PhotoIcon />
+      Design overlay…
+    </DropdownMenuItem>
+  )
+}
+
+/**
+ * The one visible sign that a mockup is on this page (or beside it). Any
+ * active emulation must be visible where it applies; a page with a
+ * half-transparent design over it is the last thing that should be a
+ * mystery. Clicking it opens the controls.
+ */
+function OverlayChip({
+  deviceId,
+  guidesKey
+}: {
+  deviceId: string
+  guidesKey: string
+}): React.JSX.Element | null {
+  const overlay = useDesignOverlay((s) => s.overlays[guidesKey])
+  const openDialog = useDesignOverlay((s) => s.openDialog)
+  if (overlay === undefined || !overlay.enabled) return null
+  const label = overlay.mode === 'overlay' ? 'Overlay' : 'Side by side'
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="ghost"
+          size="xs"
+          aria-label={`Design ${label.toLowerCase()} on this device — adjust`}
+          data-overlay-mode={overlay.mode}
+          onClick={() => openDialog(deviceId)}
+          className="h-5 rounded-full bg-primary/10 px-1.5 text-primary hover:bg-primary/15 hover:text-primary"
+        >
+          <PhotoIcon />
+          {label}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>Design {label.toLowerCase()} — click to adjust or remove</TooltipContent>
+    </Tooltip>
+  )
+}
+
+/**
+ * Rulers for this device, as a toggle in its menu. `alt+r` on the frame the
+ * pointer is over does the same; the overflow menu's Debug section does it
+ * for every device at once.
+ */
+function RulersItem({ deviceId }: { deviceId: string }): React.JSX.Element {
+  const on = useGuides((s) => s.rulers[deviceId] === true)
+  const toggleRulers = useGuides((s) => s.toggleRulers)
+
+  return (
+    <DropdownMenuCheckboxItem checked={on} onCheckedChange={() => toggleRulers(deviceId)}>
+      <Squares2X2Icon />
+      Rulers
+      <DropdownMenuShortcut>Alt R</DropdownMenuShortcut>
+    </DropdownMenuCheckboxItem>
+  )
+}
+
+/** The radio value that means "no override": the profile decides. */
+const INHERIT = 'inherit'
+
+/**
+ * The vision simulation for one device: the profile's, or its own.
+ *
+ * A submenu of radio items rather than a toggle, because the question has
+ * eight answers and "inherit" is one of them — it is what makes a device that
+ * was set apart go back to matching the others, and it is where the current
+ * global choice is shown so nobody has to open the toolbar popover to learn
+ * what "inherit" would mean.
+ */
+function VisionItems({ deviceId }: { deviceId: string }): React.JSX.Element {
+  const override = useEmulation((s) => s.deviceVision[deviceId])
+  const global = useEmulation((s) => s.profile.vision)
+  const setDeviceVision = useEmulation((s) => s.setDeviceVision)
+
+  return (
+    <DropdownMenuSub>
+      <DropdownMenuSubTrigger>
+        <EyeIcon />
+        Vision
+        {override === undefined ? null : (
+          <DropdownMenuShortcut className="mr-1">{VISION_LABELS[override]}</DropdownMenuShortcut>
+        )}
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent>
+        <DropdownMenuRadioGroup
+          value={override ?? INHERIT}
+          onValueChange={(value) =>
+            setDeviceVision(deviceId, value === INHERIT ? null : (value as VisionDeficiency))
+          }
+        >
+          <DropdownMenuRadioItem value={INHERIT}>
+            Inherit global
+            <DropdownMenuShortcut>{VISION_LABELS[global]}</DropdownMenuShortcut>
+          </DropdownMenuRadioItem>
+          <DropdownMenuSeparator />
+          {VISION_DEFICIENCIES.map((type) => (
+            <DropdownMenuRadioItem key={type} value={type}>
+              {VISION_LABELS[type]}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
+  )
+}
+
+/**
+ * The one visible sign that this device sees the page differently from the
+ * others: its own vision simulation, when it has one.
+ *
+ * Any active emulation must be visible where it applies (W5 UX rule) — a frame
+ * that is quietly greyscale would be a mystery. Clicking it is the one-step
+ * undo: back to the profile, like every other device.
+ */
+function VisionChip({ deviceId }: { deviceId: string }): React.JSX.Element | null {
+  const override = useEmulation((s) => s.deviceVision[deviceId])
+  const setDeviceVision = useEmulation((s) => s.setDeviceVision)
+  if (override === undefined) return null
+
+  const label = override === 'none' ? 'No vision filter' : VISION_LABELS[override]
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="ghost"
+          size="xs"
+          aria-label={`Vision on this device: ${label}. Click to inherit the global setting`}
+          data-vision-override={override}
+          onClick={() => setDeviceVision(deviceId, null)}
+          className="h-5 rounded-full bg-primary/10 px-1.5 text-primary hover:bg-primary/15 hover:text-primary"
+        >
+          <EyeIcon />
+          {label}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>
+        {label} on this device only — click to inherit the global setting
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
+/**
+ * Everything about one device that is not worth a button of its own.
+ *
+ * The header keeps the four things people do constantly — mirror, rotate,
+ * shoot, DevTools — and this holds the rest: a reload of *this* device (the
+ * toolbar's reloads them all), a cache-busting one, a jump to the top, the
+ * vision simulation, the url for pasting somewhere. Rare gestures, one level
+ * down, so the header stays the same width whatever a device can do.
+ */
+function DeviceMenu({ deviceId }: { deviceId: string }): React.JSX.Element {
+  const reload = useNavigation((s) => s.reload)
+  const scrollToTop = useNavigation((s) => s.scrollToTop)
+  const url = useNavigation((s) => s.perDevice[deviceId]?.url ?? '')
+
+  const copyUrl = (): void => {
+    if (url === '') return
+    navigator.clipboard.writeText(url).then(
+      () => useNotices.getState().say('ok', 'URL copied'),
+      () => useNotices.getState().say('error', 'Could not copy the URL')
+    )
+  }
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          aria-label="More for this device"
+          className="text-muted-foreground hover:text-foreground data-[state=open]:text-foreground"
+        >
+          <EllipsisVerticalIcon />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start">
+        <DropdownMenuItem onSelect={() => reload({ deviceId })}>
+          <ArrowPathIcon />
+          Reload
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => reload({ deviceId, ignoreCache: true })}>
+          <ArrowPathIcon />
+          Reload ignoring cache
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => scrollToTop(deviceId)}>
+          <ArrowUpIcon />
+          Scroll to top
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <RulersItem deviceId={deviceId} />
+        <OverlayItem deviceId={deviceId} />
+        <VisionItems deviceId={deviceId} />
+        <DropdownMenuSeparator />
+        <DropdownMenuItem disabled={url === ''} onSelect={copyUrl}>
+          <ClipboardIcon />
+          Copy URL
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 
@@ -332,6 +610,42 @@ export function DeviceFrame({ device, zoom, viewportRef }: DeviceFrameProps): Re
   const expandable = useLayout((s) => s.mode !== 'individual')
   const width = Math.round(device.width * zoom)
   const height = Math.round(device.height * zoom)
+  const rulers = useGuides((s) => s.rulers[device.id] === true)
+  const guidesKey = guidesKeyOf(device.width, device.height)
+  const guides = useGuides((s) => s.guides[guidesKey])
+  const overlay = useDesignOverlay((s) => s.overlays[guidesKey])
+  const overlayDialogOpen = useDesignOverlay((s) => s.dialogDeviceId === device.id)
+  const openOverlayDialog = useDesignOverlay((s) => s.openDialog)
+  const closeOverlayDialog = useDesignOverlay((s) => s.closeDialog)
+  const sideBySide = overlay !== undefined && overlay.enabled && overlay.mode === 'side-by-side'
+
+  // The overlay mode is a stylesheet main puts on the page; the frame sends
+  // what this size's settings say whenever they change, and nothing when the
+  // mockup is off or shown beside the frame instead.
+  useEffect(() => {
+    const bridge = ipcBridge()
+    if (bridge === null) return
+    const apply =
+      overlay !== undefined && overlay.enabled && overlay.mode === 'overlay'
+        ? { imageId: overlay.imageId, opacity: overlay.opacity, curtain: overlay.curtain }
+        : null
+    void bridge.invoke('overlay:set', device.id, apply).catch((error: unknown) => {
+      console.error('overlay:set failed', error)
+    })
+  }, [device.id, overlay])
+
+  // The lines live in the page (main draws them as a stylesheet), and they
+  // show only while the rulers do: a line with no ruler to read it against is
+  // a page that "looks strange". Sent whenever this size's set changes.
+  useEffect(() => {
+    const bridge = ipcBridge()
+    if (bridge === null) return
+    void bridge
+      .invoke('guides:set', device.id, rulers ? (guides ?? NO_GUIDES) : NO_GUIDES)
+      .catch((error: unknown) => {
+        console.error('guides:set failed', error)
+      })
+  }, [device.id, rulers, guides])
 
   return (
     <section
@@ -382,6 +696,10 @@ export function DeviceFrame({ device, zoom, viewportRef }: DeviceFrameProps): Re
           {zoom === 1 ? '' : ` · ${Math.round(zoom * 100)}%`}
         </p>
         {load?.state === 'loading' ? <Spinner /> : null}
+        {/* What the page is complaining about, and what sets this device apart. */}
+        <DiagnosticsChips deviceId={device.id} />
+        <VisionChip deviceId={device.id} />
+        <OverlayChip deviceId={device.id} guidesKey={guidesKey} />
         {/*
           Next to the caption rather than pushed to the far edge: a 1920px
           frame would put a right-aligned control most of a screen away from
@@ -397,17 +715,59 @@ export function DeviceFrame({ device, zoom, viewportRef }: DeviceFrameProps): Re
           instead of one more device control.
         */}
         {expandable ? <ExpandButton deviceId={device.id} /> : null}
+        <DeviceMenu deviceId={device.id} />
       </header>
 
-      <div
-        ref={viewportRef}
-        data-device-id={device.id}
-        data-load-state={load?.state ?? 'idle'}
-        className="relative rounded-md border border-border bg-card shadow-hairline"
-        style={{ width, height }}
-      >
-        {load?.state === 'failed' ? <LoadError state={load} /> : null}
-      </div>
+      {/*
+        The rulers sit *around* the measured box, never over it: the native
+        view is glued to that box, and the frame simply grows by one strip on
+        two sides while they are showing.
+      */}
+      {(() => {
+        const viewport = (
+          <div
+            ref={viewportRef}
+            data-device-id={device.id}
+            data-load-state={load?.state ?? 'idle'}
+            className={cn(
+              'relative bg-card',
+              rulers ? '' : 'rounded-md border border-border shadow-hairline'
+            )}
+            style={{ width, height }}
+          >
+            {load?.state === 'failed' ? <LoadError deviceId={device.id} state={load} /> : null}
+            {load?.state === 'crashed' ? <PageCrashed deviceId={device.id} state={load} /> : null}
+          </div>
+        )
+        const framed = rulers ? (
+          <Rulers deviceId={device.id} width={device.width} height={device.height} zoom={zoom}>
+            {viewport}
+          </Rulers>
+        ) : (
+          viewport
+        )
+        // The side-by-side panel is a sibling of the frame, never inside it:
+        // the measured box has to stay exactly the device.
+        return sideBySide && overlay !== undefined ? (
+          <div className="flex items-start gap-2">
+            {framed}
+            <OverlayPanel
+              deviceId={device.id}
+              imageId={overlay.imageId}
+              width={device.width}
+              height={device.height}
+              zoom={zoom}
+            />
+          </div>
+        ) : (
+          framed
+        )
+      })()}
+      <DesignOverlayDialog
+        device={device}
+        open={overlayDialogOpen}
+        onOpenChange={(open) => (open ? openOverlayDialog(device.id) : closeOverlayDialog())}
+      />
     </section>
   )
 }

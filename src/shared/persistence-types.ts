@@ -10,9 +10,21 @@
 import { slugify } from './custom-devices'
 import { DEFAULT_ACTIVE_DEVICE_IDS } from './deviceCatalog'
 import {
+  defaultEmulationProfile,
+  isGeolocation,
+  isLocaleTag,
+  isNetworkPreset,
+  isTimezoneId,
+  isVisionDeficiency,
+  type EmulationProfile,
+  type VisionDeficiency
+} from './emulation'
+import {
   isPermissionType,
   normalizeUrl,
   type DockPosition,
+  type GuideSet,
+  type OverlayMode,
   type PermissionType,
   type ShotDpr,
   type ShotFormat,
@@ -182,6 +194,67 @@ export type UpdateSettings = {
 }
 
 /**
+ * The environment the pages are shown in — see `EmulationProfile`.
+ *
+ * Persisted because it is a *setting about the project*, not a mode: someone
+ * checking a German dark-mode site comes back tomorrow to the same German
+ * dark-mode site. The toolbar badge is what keeps a restored override from
+ * being a surprise. `deviceVision` is keyed by device id and, like `rotated`,
+ * only the exceptions are kept.
+ */
+export type EmulationSettings = {
+  profile: EmulationProfile
+  deviceVision: Record<string, VisionDeficiency>
+}
+
+/** One override per device the user ever set one on, catalog included. */
+const MAX_DEVICE_VISION = 256
+
+/**
+ * Guides, by viewport size (`393x852`). See `GuideSet`.
+ *
+ * Per size rather than per device: two devices of the same size share a
+ * layout, and a guide someone dragged to a column edge on one is the same
+ * guide on the other. Written on a debounce from the renderer — a drag is not
+ * a stream of documents.
+ */
+export type GuidesDocument = Record<string, GuideSet>
+
+/** How many viewport sizes may keep guides. Past this the oldest are junk. */
+export const MAX_GUIDE_SIZES = 100
+/** How many guides one axis of one size may hold. */
+export const MAX_GUIDES_PER_AXIS = 50
+/** Furthest a guide may sit from the document's origin, in CSS pixels. */
+export const MAX_GUIDE_POSITION = 100_000
+
+/**
+ * One design overlay, by viewport size like the guides: a mockup exported at
+ * 393px belongs on the 393px frames. The image itself lives under its own
+ * store key in main (`overlayImages`) and is referenced by content id.
+ */
+export type OverlaySettings = {
+  imageId: string
+  mode: OverlayMode
+  /** 0..1. */
+  opacity: number
+  /** How much of the image, from the left, is hidden: 0..1. */
+  curtain: number
+  enabled: boolean
+}
+
+export type OverlaysDocument = Record<string, OverlaySettings>
+
+/** How many viewport sizes may keep an overlay. */
+export const MAX_OVERLAY_SIZES = 100
+
+/** The document key for a viewport: `393x852`. */
+export function guidesKeyOf(width: number, height: number): string {
+  return `${Math.round(width)}x${Math.round(height)}`
+}
+
+const GUIDES_KEY_RE = /^\d{1,5}x\d{1,5}$/
+
+/**
  * More sites than anyone reviews by hand. A document past this is not a list of
  * decisions any more, and the oldest entries are the ones nobody remembers.
  */
@@ -239,6 +312,12 @@ export type PersistedState = {
   security: SecuritySettings
   /** What the updater remembers between launches. Main's field. See `UpdateSettings`. */
   updates: UpdateSettings
+  /** The environment the pages are shown in. See `EmulationSettings`. */
+  emulation: EmulationSettings
+  /** Ruler guides, by viewport size. See `GuidesDocument`. */
+  guides: GuidesDocument
+  /** Design overlays, by viewport size. See `OverlaysDocument`. */
+  designOverlays: OverlaysDocument
   /**
    * The page every session opens on, or `''` for "no home page".
    *
@@ -316,6 +395,12 @@ export function defaultPersistedState(): PersistedState {
     // Never checked, and checking daily: a tool that stops telling you about
     // fixes is a tool that quietly gets worse.
     updates: { lastCheckAt: null, autoCheck: true },
+    // Nothing overridden: the pages see the real machine until someone asks
+    // otherwise, and the toolbar badge is off.
+    emulation: { profile: defaultEmulationProfile(), deviceVision: {} },
+    // No guides anywhere: they are drawn by the user, one ruler click at a time.
+    guides: {},
+    designOverlays: {},
     homeUrl: ''
   }
 }
@@ -348,6 +433,9 @@ export function mergePersistedState(
     permissions: clonePermissions(patch.permissions ?? base.permissions),
     security: { ...(patch.security ?? base.security) },
     updates: { ...(patch.updates ?? base.updates) },
+    emulation: cloneEmulation(patch.emulation ?? base.emulation),
+    guides: cloneGuides(patch.guides ?? base.guides),
+    designOverlays: cloneOverlays(patch.designOverlays ?? base.designOverlays),
     homeUrl: patch.homeUrl ?? base.homeUrl,
     schemaVersion: SCHEMA_VERSION
   }
@@ -412,10 +500,178 @@ export function migratePersistedState(raw: unknown): MigrationResult {
       permissions: sanitizePermissions(doc['permissions']),
       security: sanitizeSecurity(doc['security']),
       updates: sanitizeUpdates(doc['updates']),
+      emulation: sanitizeEmulation(doc['emulation']),
+      guides: sanitizeGuides(doc['guides']),
+      designOverlays: sanitizeOverlays(doc['designOverlays']),
       homeUrl: sanitizeHomeUrl(doc['homeUrl'])
     },
     backup: null
   }
+}
+
+function cloneOverlays(overlays: OverlaysDocument): OverlaysDocument {
+  const out: OverlaysDocument = {}
+  for (const [key, settings] of Object.entries(overlays)) out[key] = { ...settings }
+  return out
+}
+
+/** A content id as `overlay:store-image` mints them: sixteen hex digits. */
+export const IMAGE_ID_RE = /^[0-9a-f]{16}$/
+
+/** A fraction, clamped. Anything that is not a number reads as `fallback`. */
+export function clampUnit(value: unknown, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback
+  return Math.min(1, Math.max(0, value))
+}
+
+/**
+ * Repair one overlay, or drop it. The image id is the one field with no
+ * repair: without it there is nothing to show, and a junk one is dropped
+ * rather than kept pointing at nothing.
+ */
+export function sanitizeOverlay(value: unknown): OverlaySettings | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
+  const overlay = value as Record<string, unknown>
+  const imageId = overlay['imageId']
+  if (typeof imageId !== 'string' || !IMAGE_ID_RE.test(imageId)) return null
+  return {
+    imageId,
+    mode: overlay['mode'] === 'side-by-side' ? 'side-by-side' : 'overlay',
+    opacity: clampUnit(overlay['opacity'], 0.5),
+    curtain: clampUnit(overlay['curtain'], 0),
+    enabled: overlay['enabled'] !== false
+  }
+}
+
+function sanitizeOverlays(value: unknown): OverlaysDocument {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return {}
+  const out: OverlaysDocument = {}
+  let sizes = 0
+  for (const [key, entry] of Object.entries(value)) {
+    if (sizes >= MAX_OVERLAY_SIZES) break
+    if (!GUIDES_KEY_RE.test(key)) continue
+    const overlay = sanitizeOverlay(entry)
+    if (overlay === null) continue
+    out[key] = overlay
+    sizes += 1
+  }
+  return out
+}
+
+function cloneGuides(guides: GuidesDocument): GuidesDocument {
+  const out: GuidesDocument = {}
+  for (const [key, set] of Object.entries(guides)) out[key] = { h: [...set.h], v: [...set.v] }
+  return out
+}
+
+/** Repair one axis: whole, non-negative, bounded, deduplicated, ascending. */
+export function sanitizeGuideAxis(value: unknown): number[] {
+  if (!Array.isArray(value)) return []
+  const out = new Set<number>()
+  for (const entry of value) {
+    if (typeof entry !== 'number' || !Number.isFinite(entry)) continue
+    const position = Math.round(entry)
+    if (position < 0 || position > MAX_GUIDE_POSITION) continue
+    out.add(position)
+    if (out.size >= MAX_GUIDES_PER_AXIS) break
+  }
+  return [...out].sort((a, b) => a - b)
+}
+
+/**
+ * Repair the guides. A field, not a document: a junk size costs its own
+ * guides and nothing else, and a set with nothing left is not stored — the
+ * absence of a key already means "no guides here".
+ */
+function sanitizeGuides(value: unknown): GuidesDocument {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return {}
+  const out: GuidesDocument = {}
+  let sizes = 0
+  for (const [key, entry] of Object.entries(value)) {
+    if (sizes >= MAX_GUIDE_SIZES) break
+    if (!GUIDES_KEY_RE.test(key)) continue
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) continue
+    const set = entry as Record<string, unknown>
+    const guides = { h: sanitizeGuideAxis(set['h']), v: sanitizeGuideAxis(set['v']) }
+    if (guides.h.length === 0 && guides.v.length === 0) continue
+    out[key] = guides
+    sizes += 1
+  }
+  return out
+}
+
+function cloneEmulation(emulation: EmulationSettings): EmulationSettings {
+  return {
+    profile: {
+      ...emulation.profile,
+      geolocation:
+        emulation.profile.geolocation === null ? null : { ...emulation.profile.geolocation }
+    },
+    deviceVision: { ...emulation.deviceVision }
+  }
+}
+
+/**
+ * Repair one emulation profile, field by field.
+ *
+ * Every field degrades to "no override" on its own: a junk time zone must not
+ * cost the user their dark-mode setting, and the safe reading of any damaged
+ * value is the real environment. Exported because main's boot-time restore
+ * and the renderer's hydrate both read the result.
+ */
+export function sanitizeEmulationProfile(value: unknown): EmulationProfile {
+  const defaults = defaultEmulationProfile()
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return defaults
+
+  const profile = value as Record<string, unknown>
+  const colorScheme = profile['colorScheme']
+  const media = profile['media']
+  const vision = profile['vision']
+  const network = profile['network']
+  const geolocation = profile['geolocation']
+  const locale = profile['locale']
+  const timezone = profile['timezone']
+
+  return {
+    colorScheme:
+      colorScheme === 'light' || colorScheme === 'dark' ? colorScheme : defaults.colorScheme,
+    reducedMotion: profile['reducedMotion'] === true,
+    forcedColors: profile['forcedColors'] === true,
+    media: media === 'screen' || media === 'print' ? media : defaults.media,
+    vision: isVisionDeficiency(vision) ? vision : defaults.vision,
+    network: isNetworkPreset(network) ? network : defaults.network,
+    geolocation: isGeolocation(geolocation)
+      ? { latitude: geolocation.latitude, longitude: geolocation.longitude }
+      : null,
+    locale: isLocaleTag(locale) ? locale : null,
+    timezone: isTimezoneId(timezone) ? timezone : null
+  }
+}
+
+/**
+ * Repair the emulation slice.
+ *
+ * Absent on every document written before this build, so "missing" means the
+ * defaults rather than a reset — a field, not a document (see
+ * `migratePersistedState`). A per-device override that is `none` is kept: it
+ * means "this device, unlike the profile, simulates nothing", which is a real
+ * decision and not the default said out loud.
+ */
+function sanitizeEmulation(value: unknown): EmulationSettings {
+  const defaults: EmulationSettings = { profile: defaultEmulationProfile(), deviceVision: {} }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return defaults
+
+  const emulation = value as Record<string, unknown>
+  const raw = emulation['deviceVision']
+  const deviceVision: Record<string, VisionDeficiency> = {}
+  if (typeof raw === 'object' && raw !== null && !Array.isArray(raw)) {
+    for (const [id, vision] of Object.entries(raw).slice(0, MAX_DEVICE_VISION)) {
+      if (id.length === 0 || id.length > 200 || !isVisionDeficiency(vision)) continue
+      deviceVision[id] = vision
+    }
+  }
+
+  return { profile: sanitizeEmulationProfile(emulation['profile']), deviceVision }
 }
 
 function cloneSuite(suite: Suite): Suite {

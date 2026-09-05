@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>diagnostics</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 12px;
+        font:
+          14px/1.4 system-ui,
+          sans-serif;
+      }
+      /* Wider than every phone and tablet on the default canvas (≤ 768px),
+         narrower than its laptops (≥ 1280px): the overflow chip should appear
+         on exactly three of the five frames. */
+      #wide {
+        width: 1000px;
+        height: 40px;
+        background: #fde68a;
+      }
+    </style>
+  </head>
+  <body>
+    <p>diagnostics fixture</p>
+    <div id="wide" class="banner promo"></div>
+    <script>
+      console.error('first problem', { code: 1 })
+    </script>
+    <script>
+      // A separate script so the throw does not stop the line above.
+      throw new Error('second problem')
+    </script>
+    <script>
+      // The title is the channel the suite reads. Set last, so a page that
+      // shows it has run every script above.
+      document.title = 'diagnostics-ready'
+    </script>
+  </body>
+</html>

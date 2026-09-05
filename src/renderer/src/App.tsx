@@ -9,6 +9,8 @@ import { useAddressHotkeys } from '@renderer/hooks/useAddressHotkeys'
 import { useClearHotkeys } from '@renderer/hooks/useClearHotkeys'
 import { useInspectHotkeys } from '@renderer/hooks/useInspectHotkeys'
 import { useLayoutHotkeys } from '@renderer/hooks/useLayoutHotkeys'
+import { useNavHotkeys } from '@renderer/hooks/useNavHotkeys'
+import { useRulerHotkeys } from '@renderer/hooks/useRulerHotkeys'
 import { useShotHotkeys } from '@renderer/hooks/useShotHotkeys'
 import { ipcBridge } from '@renderer/lib/ipc'
 import { createLayoutTelemetry, type LayoutTelemetry } from '@renderer/lib/layout-telemetry'
@@ -17,14 +19,21 @@ import { cn } from '@renderer/lib/utils'
 import { attachAuthBridge } from '@renderer/stores/auth'
 import { useBookmarks } from '@renderer/stores/bookmarks'
 import { useDevices } from '@renderer/stores/devices'
+import { attachDiagnosticsBridge, useDiagnostics } from '@renderer/stores/diagnostics'
+import { useEmulation } from '@renderer/stores/emulation'
+import { hydrateDebug } from '@renderer/stores/debug'
+import { useDesignOverlay } from '@renderer/stores/design-overlay'
+import { useGuides } from '@renderer/stores/guides'
 import { applyRotation, useLayout } from '@renderer/stores/layout'
 import { attachNavigationBridge, useNavigation } from '@renderer/stores/navigation'
 import { attachPanelsBridge, selectDockVisible, usePanels } from '@renderer/stores/panels'
 import { attachPermissionsBridge } from '@renderer/stores/permissions'
+import { attachScrollBridge, useScroll } from '@renderer/stores/scroll'
 import { useSettings } from '@renderer/stores/settings'
 import { attachShotsBridge, useShots } from '@renderer/stores/shots'
 import { useSync } from '@renderer/stores/sync'
 import { attachUpdatesBridge } from '@renderer/stores/updates'
+import { attachWatcherBridge } from '@renderer/stores/watcher'
 
 /**
  * Main owns the start url (CLI/deep-link argument, or the default) and has
@@ -79,6 +88,11 @@ function usePersistedState(): boolean {
         useLayout.getState().hydrateLayout(state.layout)
         usePanels.getState().hydrate(state.devtools)
         useShots.getState().hydrate(state.screenshots)
+        // Main put the environment on the views before this renderer existed;
+        // this only mirrors it so the popover and the badge agree with it.
+        useEmulation.getState().hydrate(state.emulation)
+        useGuides.getState().hydrate(state.guides)
+        useDesignOverlay.getState().hydrate(state.designOverlays)
         // The home page itself is main's to apply — it decides the start url
         // before the renderer has hydrated — so this only mirrors it.
         useBookmarks.getState().hydrate(state)
@@ -147,6 +161,17 @@ function App(): React.JSX.Element {
   // Whether there is a newer Respo. Main checks on its own schedule and pushes;
   // the toolbar chip is the only thing that listens.
   useEffect(() => attachUpdatesBridge(), [])
+  // Console errors and overflow per device, batched like load events.
+  useEffect(() => attachDiagnosticsBridge(), [])
+
+  // Scroll offsets of the devices something follows, batched the same way.
+  useEffect(() => attachScrollBridge(), [])
+
+  // Whether a local page is being watched for live reload.
+  useEffect(() => attachWatcherBridge(), [])
+
+  // The debug switches are a session mode main holds; ask once.
+  useEffect(() => hydrateDebug(), [])
 
   // mod+i arms the element picker, Escape puts it away.
   useInspectHotkeys()
@@ -158,6 +183,10 @@ function App(): React.JSX.Element {
   useAddressHotkeys()
   // mod+alt+q/a/z/del forget this site's storage, cookies or cache.
   useClearHotkeys()
+  // mod+r reloads every device, mod+shift+r reloads them ignoring the cache.
+  useNavHotkeys()
+  // alt+r toggles the rulers of the device under the pointer.
+  useRulerHotkeys()
 
   // Hand main the device set. Runs again whenever the selection changes; the
   // view manager reuses the views that stayed and loads the current url into
@@ -175,7 +204,11 @@ function App(): React.JSX.Element {
   // A device that left the canvas must not keep a load state — or the address
   // bar, if it was the view the bar was following.
   useEffect(() => {
-    useNavigation.getState().pruneDevices(devices.map((d) => d.id))
+    const ids = devices.map((d) => d.id)
+    useNavigation.getState().pruneDevices(ids)
+    useDiagnostics.getState().pruneDevices(ids)
+    useGuides.getState().pruneDevices(ids)
+    useScroll.getState().pruneDevices(ids)
   }, [devices])
 
   // Point every view at the start url. It arrives from main a round trip after

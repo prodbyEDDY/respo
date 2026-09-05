@@ -62,6 +62,13 @@ export type FrameScheduler = (task: () => void) => () => void
 
 export type SyncEngineOptions = {
   scheduleFrame?: FrameScheduler
+  /**
+   * Told where a view's document is scrolled to, for every view that reports
+   * — the lead, and any device asked to report through `setReporting`. Not a
+   * mirroring concern: the rulers follow it. Called at the preload's own
+   * rate (one batch per frame per view), never more.
+   */
+  onScroll?: (deviceId: string, x: number, y: number) => void
 }
 
 /** One animation frame at 60Hz. Scrolls are applied at most this often. */
@@ -130,6 +137,14 @@ type Entry = SyncDeviceRegistration & {
 export class SyncEngine implements SyncRegistry {
   private readonly dispatcher: SyncDispatcher
   private readonly scheduleFrame: FrameScheduler
+  private readonly onScroll: ((deviceId: string, x: number, y: number) => void) | null
+
+  /**
+   * Devices asked to keep reporting whether or not they lead — the ones with
+   * rulers showing. Their input still mirrors nothing unless they lead; only
+   * their scroll offsets are passed on.
+   */
+  private readonly reporting = new Set<string>()
 
   private readonly byDeviceId = new Map<string, Entry>()
   /** Reverse index: an input event names its source by `webContents` id. */
@@ -157,6 +172,22 @@ export class SyncEngine implements SyncRegistry {
   constructor(dispatcher: SyncDispatcher, options: SyncEngineOptions = {}) {
     this.dispatcher = dispatcher
     this.scheduleFrame = options.scheduleFrame ?? defaultScheduler
+    this.onScroll = options.onScroll ?? null
+  }
+
+  /**
+   * Keep one device's preload reporting even while it does not lead.
+   *
+   * What the rulers need: a follower's scroll offset is not something main
+   * can compute (followers are placed by ratio), so the view says where it is
+   * — at the same one-batch-per-frame rate the lead already reports at, and
+   * only while its rulers are showing.
+   */
+  setReporting(deviceId: string, reporting: boolean): void {
+    if (this.reporting.has(deviceId) === reporting) return
+    if (reporting) this.reporting.add(deviceId)
+    else this.reporting.delete(deviceId)
+    this.publishCapture()
   }
 
   /** Devices currently registered, in registration order. Test/diagnostic seam. */
@@ -200,6 +231,7 @@ export class SyncEngine implements SyncRegistry {
     this.byDeviceId.delete(deviceId)
     this.byWcId.delete(entry.target.id)
     this.pendingScroll.delete(deviceId)
+    this.reporting.delete(deviceId)
     // Losing the lead must not leave the canvas with no source at all: hand it
     // to whoever is still here and still mirroring.
     if (this.leadDeviceId === deviceId) {
@@ -283,11 +315,21 @@ export class SyncEngine implements SyncRegistry {
    * arrive in floods and only the last one is true.
    */
   handleInput(sourceWcId: number, batch: readonly InputEventPayload[]): void {
-    if (this.disposed || !this.globalEnabled || batch.length === 0) return
+    if (this.disposed || batch.length === 0) return
 
     const source = this.byWcId.get(sourceWcId)
-    // Not a view we know, not the lead, or a lead the user muted: no source.
-    if (source === undefined || !source.enabled) return
+    if (source === undefined) return
+
+    // Where the page is, for whoever asked — before any of the mirroring
+    // rules, which are about what *drives* the others, not about knowing.
+    if (this.onScroll !== null) {
+      let last: Extract<InputEventPayload, { kind: 'scroll' }> | null = null
+      for (const event of batch) if (event.kind === 'scroll') last = event
+      if (last !== null) this.onScroll(source.deviceId, last.x, last.y)
+    }
+
+    // Not the lead, or a lead the user muted, or the master switch off: no source.
+    if (!this.globalEnabled || !source.enabled) return
     if (source.deviceId !== this.leadDeviceId) return
 
     for (const event of batch) {
@@ -312,6 +354,7 @@ export class SyncEngine implements SyncRegistry {
     this.byDeviceId.clear()
     this.byWcId.clear()
     this.disabled.clear()
+    this.reporting.clear()
     this.leadDeviceId = null
   }
 
@@ -326,7 +369,9 @@ export class SyncEngine implements SyncRegistry {
    */
   private publishCapture(): void {
     for (const entry of this.byDeviceId.values()) {
-      const capturing = this.globalEnabled && entry.enabled && entry.deviceId === this.leadDeviceId
+      const capturing =
+        (this.globalEnabled && entry.enabled && entry.deviceId === this.leadDeviceId) ||
+        this.reporting.has(entry.deviceId)
       if (entry.capturing === capturing) continue
       entry.capturing = capturing
       entry.setCapturing?.(capturing)

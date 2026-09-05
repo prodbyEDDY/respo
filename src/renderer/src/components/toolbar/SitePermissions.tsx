@@ -182,7 +182,7 @@ function Panel(): React.JSX.Element {
       {changed ? (
         <div className="flex items-center justify-between gap-2 rounded-md bg-muted px-2 py-1.5">
           <span className="min-w-0 text-micro text-muted-foreground">Reload to apply</span>
-          <Button variant="ghost" size="xs" onClick={reload}>
+          <Button variant="ghost" size="xs" onClick={() => reload()}>
             <ArrowPathIcon />
             Reload
           </Button>
