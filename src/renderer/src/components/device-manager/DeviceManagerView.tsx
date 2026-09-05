@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
-import { MagnifyingGlassIcon, PlusIcon, XMarkIcon } from '@heroicons/react/24/outline'
-import { matchesQuery, type CustomDeviceInput } from '@shared/custom-devices'
+import {
+  ChevronDownIcon,
+  MagnifyingGlassIcon,
+  PlusIcon,
+  XMarkIcon
+} from '@heroicons/react/24/outline'
+import { deviceTypeOf, matchesQuery, type CustomDeviceInput } from '@shared/custom-devices'
 import { DEVICE_CATALOG } from '@shared/deviceCatalog'
 import type { DeviceSpec } from '@shared/types'
 import { Button } from '@renderer/components/ui/button'
@@ -20,27 +25,62 @@ import { DeviceCard } from './DeviceCard'
 import { DeviceEditDialog } from './DeviceEditDialog'
 import { SuitesPanel } from './SuitesPanel'
 
-function Section({
+const CATEGORIES = ['Phones', 'Tablets', 'Laptops', 'Desktops'] as const
+function categoryOf(device: DeviceSpec): (typeof CATEGORIES)[number] {
+  const type = deviceTypeOf(device)
+  if (type === 'phone') return 'Phones'
+  if (type === 'tablet') return 'Tablets'
+  return /macbook|laptop|chromebook/i.test(device.id) ? 'Laptops' : 'Desktops'
+}
+
+function Category({
   title,
-  count,
-  caption,
+  devices,
+  selected,
+  searching,
   children
 }: {
   title: string
-  count: number
-  caption?: string
+  devices: readonly DeviceSpec[]
+  selected: ReadonlySet<string>
+  searching: boolean
   children: React.ReactNode
-}): React.JSX.Element {
+}): React.JSX.Element | null {
+  const [expanded, setExpanded] = useState(title === 'Your devices')
+  const [showAll, setShowAll] = useState(false)
+  if (devices.length === 0) return null
+  const open = searching || expanded
+  const count = devices.filter((device) => selected.has(device.id)).length
+  const id = `category-${title.toLowerCase().replaceAll(' ', '-')}`
   return (
-    <section className="flex flex-col gap-2">
-      <div className="flex items-baseline gap-2">
-        <h3 className="text-caption font-medium text-foreground">{title}</h3>
-        <span className="text-micro tabular-nums text-muted-foreground">{count}</span>
-        {caption === undefined ? null : (
-          <span className="text-micro text-muted-foreground">· {caption}</span>
+    <section className="border-b border-border pb-3 last:border-0">
+      <h3>
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-controls={id}
+          onClick={() => setExpanded(!expanded)}
+          className="flex w-full items-center gap-3 rounded-lg px-2 py-3 text-left hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring"
+        >
+          <ChevronDownIcon
+            aria-hidden="true"
+            className={`size-4 shrink-0 text-muted-foreground transition-transform ${open ? '' : '-rotate-90'}`}
+          />
+          <span className="text-body font-medium">{title}</span>
+          <span className="text-caption tabular-nums text-muted-foreground">{devices.length}</span>
+          {count > 0 && <span className="ml-auto text-micro text-primary">{count} in suite</span>}
+        </button>
+      </h3>
+      <div id={id} hidden={!open} className="pt-2">
+        <div className={!searching && !showAll ? 'device-category-preview' : undefined}>
+          {children}
+        </div>
+        {!searching && devices.length > 9 && (
+          <Button variant="ghost" size="sm" className="mt-3" onClick={() => setShowAll(!showAll)}>
+            {showAll ? 'Show fewer' : `Show all ${devices.length} ${title.toLowerCase()}`}
+          </Button>
         )}
       </div>
-      {children}
     </section>
   )
 }
@@ -216,7 +256,7 @@ export function DeviceManagerView(): React.JSX.Element {
       <header className="flex shrink-0 items-center gap-3 border-b border-border px-5 py-3">
         <h2 className="text-heading font-medium text-foreground">Devices</h2>
 
-        <div className="relative ml-2 max-w-xs flex-1">
+        <div className="relative ml-2 max-w-sm flex-1">
           <MagnifyingGlassIcon
             aria-hidden="true"
             className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground"
@@ -249,25 +289,24 @@ export function DeviceManagerView(): React.JSX.Element {
       <SuitesPanel />
 
       <div className="min-h-0 flex-1 overflow-auto px-5 py-4">
-        <div className="flex flex-col gap-6">
+        <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
           {suiteError === null ? null : (
             <p role="status" className="text-caption text-status-error">
               {suiteError}
             </p>
           )}
 
-          <Section
-            title="Your devices"
-            count={custom.length}
-            caption={customDevices.length === 0 ? undefined : 'editable'}
-          >
-            {custom.length === 0 ? (
-              <p className="rounded-lg border border-dashed border-border px-3 py-6 text-center text-caption text-muted-foreground">
-                {customDevices.length === 0
-                  ? 'No devices of your own yet. Add one to test a viewport the catalog does not cover.'
-                  : 'No matches here.'}
-              </p>
-            ) : (
+          <p className="text-caption text-muted-foreground">
+            Browse a category or search by name and screen size. Selected devices are in the suite
+            above.
+          </p>
+          <div className="flex flex-col gap-1">
+            <Category
+              title="Your devices"
+              devices={custom}
+              selected={inSuite}
+              searching={!!query.trim()}
+            >
               <Grid>
                 {custom.map((device) => (
                   <DeviceCard
@@ -283,21 +322,31 @@ export function DeviceManagerView(): React.JSX.Element {
                   />
                 ))}
               </Grid>
-            )}
-          </Section>
-
-          <Section title="Built-in devices" count={catalog.length} caption="read-only">
-            <Grid>
-              {catalog.map((device) => (
-                <DeviceCard
-                  key={device.id}
-                  device={device}
-                  inSuite={inSuite.has(device.id)}
-                  onToggleSuite={() => toggleSuite(device)}
-                />
-              ))}
-            </Grid>
-          </Section>
+            </Category>
+            {CATEGORIES.map((title) => {
+              const devices = catalog.filter((device) => categoryOf(device) === title)
+              return (
+                <Category
+                  key={title}
+                  title={title}
+                  devices={devices}
+                  selected={inSuite}
+                  searching={!!query.trim()}
+                >
+                  <Grid>
+                    {devices.map((device) => (
+                      <DeviceCard
+                        key={device.id}
+                        device={device}
+                        inSuite={inSuite.has(device.id)}
+                        onToggleSuite={() => toggleSuite(device)}
+                      />
+                    ))}
+                  </Grid>
+                </Category>
+              )
+            })}
+          </div>
 
           {nothingFound ? (
             <p className="text-center text-caption text-muted-foreground">

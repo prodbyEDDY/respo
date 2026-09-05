@@ -8,6 +8,25 @@ Release notes on GitHub are generated from this file (`scripts/release-notes.mjs
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-09-06
+
+### Changed
+
+- Replaced the toolbar overflow menu and emulation popover with one searchable settings dialog. Seven sections organize appearance, canvas, emulation, developer tools, screenshots, browsing data and updates; smaller windows use a section picker.
+- Grouped the device library into collapsible Phones, Tablets, Laptops and Desktops categories. Lists initially show nine devices, with an explicit expansion; search reveals every match.
+- Refreshed screenshots and usage instructions for the new interface.
+
+### Added
+
+- A persisted horizontal layout with devices in one row. Mouse-wheel scrolling over the canvas moves sideways; scrolling inside a website and Ctrl+wheel zoom keep their existing behavior.
+- Regression coverage for consistent website color schemes through canvas culling, horizontal scrolling, responsive settings, keyboard navigation and device search.
+
+### Fixed
+
+- Restored keyboard focus to the settings button on close, keeping shortcuts usable after leaving a dialog.
+- Windows installer shortcuts reference a versioned copy of the current icon and notify Explorer when updated, avoiding stale executable-icon cache entries.
+- Browsing-data feedback appears inside settings; the cache action now explains that it applies across websites.
+
 ## [0.1.1] - 2026-09-05
 
 ### Fixed

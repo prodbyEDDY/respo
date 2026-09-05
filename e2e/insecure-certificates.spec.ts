@@ -1,3 +1,4 @@
+import { openSettings } from './settings'
 import { test, expect, _electron as electron } from '@playwright/test'
 import { resolve } from 'node:path'
 import { ownProfile } from './profile'
@@ -33,8 +34,7 @@ test('the certificate switch is off, warns when on, and is remembered', async ()
   try {
     const window = await app.firstWindow()
 
-    await window.getByLabel('More options').click()
-    await window.getByRole('menuitem', { name: 'Settings…' }).click()
+    await openSettings(window, 'Developer tools')
 
     const setting = window.locator('[data-slot="insecure-certificates"]')
     await expect(setting).toBeVisible({ timeout: 10_000 })
@@ -56,8 +56,7 @@ test('the certificate switch is off, warns when on, and is remembered', async ()
   const restarted = await electron.launch(LAUNCH)
   try {
     const window = await restarted.firstWindow()
-    await window.getByLabel('More options').click()
-    await window.getByRole('menuitem', { name: 'Settings…' }).click()
+    await openSettings(window, 'Developer tools')
 
     await expect(window.locator('[data-slot="insecure-certificates"]')).toHaveAttribute(
       'data-enabled',

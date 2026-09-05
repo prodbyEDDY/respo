@@ -1,3 +1,4 @@
+import { openSettings } from './settings'
 import { test, expect, _electron as electron } from '@playwright/test'
 import { resolve } from 'node:path'
 import { ownProfile } from './profile'
@@ -48,12 +49,14 @@ test('clearing says whose data it can and cannot take', async () => {
       .toBe(5)
 
     // The menu is one control, not four destructive buttons in the toolbar.
-    await window.getByLabel('Clear browsing data').click()
-    for (const label of ['Storage', 'Cookies', 'Cache', 'Everything']) {
-      await expect(window.getByRole('menuitem', { name: label })).toBeVisible()
+    await openSettings(window, 'Browsing data')
+    for (const label of ['Clear storage', 'Clear cookies', 'Clear cache', 'Clear all site data']) {
+      await expect(window.getByRole('button', { name: label })).toBeVisible()
     }
 
-    await window.getByRole('menuitem', { name: 'Cookies' }).click()
+    await window.getByRole('button', { name: 'Clear cookies' }).click()
+    await window.getByRole('button', { name: 'Done', exact: true }).click()
+    await expect(window.getByRole('dialog')).toHaveCount(0)
     // There is no site here, so nothing was touched — and it says so.
     await expect(window.locator(NOTICE)).toContainText('no site here', { timeout: 10_000 })
 

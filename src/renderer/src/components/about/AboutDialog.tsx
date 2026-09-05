@@ -3,21 +3,9 @@ import { ArrowTopRightOnSquareIcon, FolderOpenIcon } from '@heroicons/react/24/o
 import type { AppInfo, AppResource, UpdateStatePayload } from '@shared/ipc'
 import mark from '@renderer/assets/respo-mark.svg'
 import { Button } from '@renderer/components/ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle
-} from '@renderer/components/ui/dialog'
 import { ipcBridge } from '@renderer/lib/ipc'
 import { cn } from '@renderer/lib/utils'
 import { useUpdates } from '@renderer/stores/updates'
-
-export type AboutDialogProps = {
-  open: boolean
-  onOpenChange: (open: boolean) => void
-}
 
 /** Where the project lives. One place, so a rename is one edit. */
 export const REPO_URL = 'https://github.com/prodbyEDDY/respo'
@@ -125,7 +113,7 @@ function openResource(resource: AppResource): void {
  * Quiet on purpose: no release notes, no "what's new", no counters. It answers
  * "which build is this" and "is there a newer one" and gets out of the way.
  */
-export function AboutDialog({ open, onOpenChange }: AboutDialogProps): React.JSX.Element {
+export function AboutContent(): React.JSX.Element {
   const [info, setInfo] = useState<AppInfo | null>(null)
   const status = useUpdates((s) => s.status)
   const refresh = useUpdates((s) => s.refresh)
@@ -134,7 +122,6 @@ export function AboutDialog({ open, onOpenChange }: AboutDialogProps): React.JSX
   // opened rarely enough that one round trip per opening is nothing — and the
   // updater's picture is worth refreshing at the same time.
   useEffect(() => {
-    if (!open) return
     refresh()
     const bridge = ipcBridge()
     if (bridge === null) return
@@ -150,56 +137,54 @@ export function AboutDialog({ open, onOpenChange }: AboutDialogProps): React.JSX
     return () => {
       live = false
     }
-  }, [open, refresh])
+  }, [refresh])
 
   const version = info?.version ?? status.current
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-sm" data-slot="about-dialog">
-        <DialogHeader className="items-center text-center">
-          <img src={mark} alt="" width={56} height={56} className="mb-1 rounded-xl" />
-          <DialogTitle className="text-heading">Respo</DialogTitle>
-          <DialogDescription>
-            <span data-slot="about-version">Version {version === '' ? '…' : version}</span>
-            {info === null ? null : (
-              <>
-                <br />
-                <span className="text-micro">
-                  Electron {info.electron} · Chromium {info.chromium} · Node {info.node}
-                </span>
-              </>
-            )}
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="flex items-center justify-between gap-3 rounded-md border border-border p-2.5">
-          <p className="min-w-0 text-caption text-muted-foreground" data-slot="update-summary">
-            {updateSummary(status)}
-          </p>
-          <UpdateAction />
-        </div>
-
-        <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5">
-          <ExternalLink href={REPO_URL}>GitHub</ExternalLink>
-          <ExternalLink href={ISSUES_URL}>Report an issue</ExternalLink>
-          <ExternalLink href={CHANGELOG_URL}>Changelog</ExternalLink>
-        </div>
-
-        <div className="flex items-center justify-center gap-1">
-          <Button variant="ghost" size="xs" onClick={() => openResource('logs')}>
-            <FolderOpenIcon />
-            Open logs folder
-          </Button>
-          <Button variant="ghost" size="xs" onClick={() => openResource('notices')}>
-            Third-party notices
-          </Button>
-        </div>
-
-        <p className="text-center text-micro text-muted-foreground">
-          MIT licensed. Free and open source.
+    <section className="flex flex-col gap-5" data-slot="about-dialog">
+      <header className="flex flex-col items-center gap-1 text-center">
+        <img src={mark} alt="" width={56} height={56} className="mb-1 rounded-xl" />
+        <h3 className="text-heading">Respo</h3>
+        <p>
+          <span data-slot="about-version">Version {version === '' ? '…' : version}</span>
+          {info === null ? null : (
+            <>
+              <br />
+              <span className="text-micro">
+                Electron {info.electron} · Chromium {info.chromium} · Node {info.node}
+              </span>
+            </>
+          )}
         </p>
-      </DialogContent>
-    </Dialog>
+      </header>
+
+      <div className="flex items-center justify-between gap-3 rounded-md border border-border p-2.5">
+        <p className="min-w-0 text-caption text-muted-foreground" data-slot="update-summary">
+          {updateSummary(status)}
+        </p>
+        <UpdateAction />
+      </div>
+
+      <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5">
+        <ExternalLink href={REPO_URL}>GitHub</ExternalLink>
+        <ExternalLink href={ISSUES_URL}>Report an issue</ExternalLink>
+        <ExternalLink href={CHANGELOG_URL}>Changelog</ExternalLink>
+      </div>
+
+      <div className="flex items-center justify-center gap-1">
+        <Button variant="ghost" size="xs" onClick={() => openResource('logs')}>
+          <FolderOpenIcon />
+          Open logs folder
+        </Button>
+        <Button variant="ghost" size="xs" onClick={() => openResource('notices')}>
+          Third-party notices
+        </Button>
+      </div>
+
+      <p className="text-center text-micro text-muted-foreground">
+        MIT licensed. Free and open source.
+      </p>
+    </section>
   )
 }

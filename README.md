@@ -10,13 +10,13 @@
 </p>
 <p align="center"><a href="https://github.com/prodbyEDDY/respo/releases/latest"><strong>Download for Windows</strong></a> · <a href="#quick-start">Quick start</a> · <a href="#what-you-can-do">Features</a> · <a href="#development">Development</a></p>
 
-![Respo 0.1.1: phone, tablet and desktop previews of the same responsive page](docs/assets/screenshot-light.png)
+![Respo 0.1.2: phone, tablet and desktop previews of the same responsive page](docs/assets/screenshot-light.png)
 
 <p align="center"><sub>Real Respo screenshots. Northstar is the included fictional responsive demo, shown at 67% canvas zoom.</sub></p>
 
 ## Install
 
-**Windows 10/11, x64.** Download [Respo-Setup-0.1.1.exe](https://github.com/prodbyEDDY/respo/releases/download/v0.1.1/Respo-Setup-0.1.1.exe), or install the latest release from PowerShell:
+**Windows 10/11, x64.** Download [Respo-Setup-0.1.2.exe](https://github.com/prodbyEDDY/respo/releases/download/v0.1.2/Respo-Setup-0.1.2.exe), or install the latest release from PowerShell:
 
 ```powershell
 irm https://raw.githubusercontent.com/prodbyEDDY/respo/main/scripts/install.ps1 | iex
@@ -30,20 +30,20 @@ Builds are not code-signed yet, so Windows SmartScreen may ask for confirmation.
 
 1. Paste a website URL, or press **Ctrl+O** to open a local HTML file.
 2. Pick a device suite. Scroll, click or type in a preview; the other devices follow.
-3. Open **Emulate** to check color schemes, network conditions and more. Use a device's **DevTools** button to inspect it, or **Ctrl+S** to capture every device.
+3. Open **Settings → Emulation** to check color schemes, network conditions and more. Use a device's **DevTools** button to inspect it, or **Ctrl+S** to capture every device.
 
-Use the device menu for rotation, screenshots, guides and other per-device actions. The main menu holds layouts, zoom, settings and theme controls.
+Use the device menu for rotation, screenshots, guides and other per-device actions. The settings button opens a searchable window with General, Canvas, Emulation, Developer tools, Screenshots, Browsing data and About & updates. On smaller windows, a section picker replaces the sidebar.
 
 ## What you can do
 
-| Your task                   | Respo tools                                                                                                                                      |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Check responsive layouts    | 110 device presets, custom devices, named suites, rotation and canvas zoom from 25–200%. Column, flexible rows, masonry and one-device layouts.  |
-| Work across screens         | Synchronized navigation, scrolling, clicks and typing. Mute an individual device or pause mirroring globally.                                    |
-| Inspect a problem           | DevTools for each device, console-error indicators, overflow detection and an element picker. Dock below, to the right, or in a separate window. |
-| Test different environments | Color scheme, reduced motion, forced colors, print, six vision simulations, network throttling, geolocation, locale and time zone.               |
-| Check the visual details    | Rulers, draggable guides, design-image overlays, CSS outlines and full-page or viewport screenshots.                                             |
-| Keep a workspace ready      | Bookmarks, history, portable suite import/export, local-file live reload, site permissions and persisted settings.                               |
+| Your task                   | Respo tools                                                                                                                                                                      |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Check responsive layouts    | 110 device presets grouped into phones, tablets, laptops and desktops. Custom devices, named suites, rotation and 25–200% canvas zoom. Five layouts, including a horizontal row. |
+| Work across screens         | Synchronized navigation, scrolling, clicks and typing. Mute an individual device or pause mirroring globally.                                                                    |
+| Inspect a problem           | DevTools for each device, console-error indicators, overflow detection and an element picker. Dock below, to the right, or in a separate window.                                 |
+| Test different environments | Color scheme, reduced motion, forced colors, print, six vision simulations, network throttling, geolocation, locale and time zone.                                               |
+| Check the visual details    | Rulers, draggable guides, design-image overlays, CSS outlines and full-page or viewport screenshots.                                                                             |
+| Keep a workspace ready      | Bookmarks, history, portable suite import/export, local-file live reload, site permissions and persisted settings.                                                               |
 
 Device emulation uses Chromium's DevTools Protocol, including viewport, pixel ratio, touch, user agent and Client Hints. It remains Chromium: an iPhone preset does not run Safari's rendering engine.
 
@@ -56,7 +56,7 @@ Device emulation uses Chromium's DevTools Protocol, including viewport, pixel ra
 <details>
 <summary><strong>Emulation controls</strong></summary>
 
-![The Emulate panel displayed above native device previews](docs/assets/screenshot-emulation.png)
+![Emulation settings displayed above native device previews](docs/assets/screenshot-emulation.png)
 
 </details>
 <details>
@@ -65,6 +65,22 @@ Device emulation uses Chromium's DevTools Protocol, including viewport, pixel ra
 ![Device library with a responsive review suite](docs/assets/screenshot-devices.png)
 
 </details>
+
+<details>
+<summary><strong>Settings and horizontal layout</strong></summary>
+
+![Settings grouped into searchable sections](docs/assets/screenshot-settings.png)
+
+![A single horizontal row of responsive previews](docs/assets/screenshot-horizontal.png)
+
+</details>
+
+## New in 0.1.2
+
+- One settings window with seven organized sections, search and a compact layout for smaller screens.
+- A collapsible device library with category counts, search across all categories and expandable lists.
+- Horizontal canvas layout: previews in one row, with sideways scrolling using the mouse wheel over the canvas.
+- Versioned Windows shortcut icons, so updates refresh the monogram without clearing the system icon cache.
 
 ## New in 0.1.1
 
@@ -109,6 +125,15 @@ npm run build:win  # Windows NSIS installer in dist/
 To refresh the README captures on Windows, build the app and run `node scripts/screenshots.mjs`. It uses a separate temporary profile and serves [the demo](docs/assets/demo.html) on loopback port 4178. `node scripts/icon-options.mjs && npm run icons` regenerates the icon assets.
 
 Electron · WebContentsView · React · TypeScript · Zustand · shadcn/ui · Tailwind. See [CONTRIBUTING.md](CONTRIBUTING.md) and the [architecture documentation](docs/README.md) (Russian).
+
+## Star history
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/star-history-dark.svg">
+  <img src="docs/assets/star-history-light.svg" alt="Respo star history" width="800">
+</picture>
+
+Cumulative starred-at dates of current stargazers from GitHub. Removed stars are not included. Refresh with `node scripts/star-history.mjs` (requires an authenticated GitHub CLI).
 
 ## License
 
