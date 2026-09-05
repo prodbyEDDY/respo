@@ -8,7 +8,7 @@ Release notes on GitHub are generated from this file (`scripts/release-notes.mjs
 
 ## [Unreleased]
 
-## [0.1.0] - 2026-09-XX
+## [0.1.0] - 2026-09-05
 
 The first public release: everything built in waves W1–W6.
 
