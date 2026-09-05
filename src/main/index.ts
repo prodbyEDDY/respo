@@ -189,7 +189,10 @@ function createWindow(): void {
     minHeight: 480,
     show: false,
     autoHideMenuBar: true,
-    ...(process.platform === 'linux' ? { icon } : {}),
+    // A packaged build carries the icon in the executable; this is for the
+    // unpackaged runs (`npm run dev`, e2e), which would otherwise show
+    // Electron's own mark in the taskbar. Harmless where it is ignored.
+    icon,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,

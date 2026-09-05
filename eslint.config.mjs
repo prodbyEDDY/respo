@@ -31,5 +31,13 @@ export default defineConfig(
       ...eslintPluginReactRefresh.configs.vite.rules
     }
   },
+  {
+    // Build-time Node scripts (`scripts/*.mjs`) are plain ESM, not TypeScript:
+    // there are no types to annotate.
+    files: ['scripts/**/*.mjs'],
+    rules: {
+      '@typescript-eslint/explicit-function-return-type': 'off'
+    }
+  },
   eslintConfigPrettier
 )
