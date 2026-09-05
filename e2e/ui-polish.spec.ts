@@ -40,41 +40,6 @@ test('floating UI covers native pages, nested menus and a dock; closing restores
         })
       )
       .toBeGreaterThan(0)
-      .catch(async (error: unknown) => {
-        console.log(
-          'Native capture diagnostics',
-          await app.evaluate(async ({ BrowserWindow, WebContentsView, webContents }) => {
-            const describe = (view: Electron.View): unknown => ({
-              type: view.constructor.name,
-              visible: view.getVisible(),
-              bounds: view.getBounds(),
-              ...(view instanceof WebContentsView
-                ? {
-                    url: view.webContents.getURL(),
-                    debugger: view.webContents.debugger.isAttached()
-                  }
-                : {}),
-              children: view.children.map(describe)
-            })
-            const win = BrowserWindow.getAllWindows()[0]
-            if (!win) return null
-            const sample = webContents.getAllWebContents().find((wc) => wc.debugger.isAttached())
-            const capture = await sample?.debugger
-              .sendCommand('Page.captureScreenshot', {
-                format: 'png',
-                captureBeyondViewport: false
-              })
-              .then((answer: { data?: string }) => ({ bytes: answer.data?.length }))
-              .catch((error: unknown) => String(error))
-            return JSON.stringify({
-              window: win.getContentBounds(),
-              tree: describe(win.contentView),
-              capture
-            })
-          })
-        )
-        throw error
-      })
     await page
       .getByRole('button', { name: 'Emulate media, vision, network and location', exact: true })
       .click()
