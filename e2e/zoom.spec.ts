@@ -2,6 +2,7 @@ import { test, expect, _electron as electron, type ElectronApplication } from '@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { PROBE_URL } from './probe'
 
 const ROOT = resolve(__dirname, '..')
@@ -226,5 +227,83 @@ test('a desktop device keeps its own viewport at 50% canvas zoom', async () => {
       .toBe(1440)
   } finally {
     await app.close()
+  }
+})
+
+const FRAME_URL = pathToFileURL(resolve(__dirname, 'fixtures', 'frame.html')).href
+
+/**
+ * What a zoomed-out canvas *paints* for a mobile-emulated view.
+ *
+ * `setZoomFactor` is swallowed by mobile emulation, so for a long time a 393px
+ * phone on a canvas at 75% was painted 1:1 into a 295px frame and clipped on
+ * the right and bottom — the media queries were right and the picture was
+ * wrong. The override's `scale` is what paints it small; this is the evidence,
+ * read straight off the view's surface: the fixture draws a thick dark border
+ * hugging its viewport, and the border is at the surface's edges only if the
+ * whole viewport fits inside the widget.
+ */
+test('a mobile device is painted at the canvas zoom, not clipped by it', async () => {
+  // A profile of its own: the first test leaves every device rotated, and a
+  // landscape iPhone is 639px wide before any zoom.
+  const paintProfile = mkdtempSync(join(tmpdir(), 'respo-zoom-paint-'))
+  const app = await electron.launch({
+    args: [MAIN_ENTRY, `--user-data-dir=${paintProfile}`],
+    env: {
+      ...(process.env as Record<string, string>),
+      RESPO_START_URL: FRAME_URL
+    }
+  })
+
+  try {
+    const window = await app.firstWindow()
+    await expect(window.locator('[data-load-state="ready"]')).toHaveCount(5)
+    await window.getByRole('button', { name: 'More options' }).click()
+    await window.getByRole('menuitem', { name: 'Reset zoom' }).click()
+    await zoomOut(window, 2)
+
+    // The iPhone's surface: its size, and the darkness of the pixels just
+    // inside its far edges. Read after the zoom has landed in the view.
+    const edges = async (): Promise<{ width: number; right: number; bottom: number } | null> =>
+      app.evaluate(async ({ webContents }, url: string) => {
+        // The CDP user-agent override is invisible to `getUserAgent()`; ask
+        // each page which one it is.
+        let wc: Electron.WebContents | undefined
+        for (const c of webContents.getAllWebContents()) {
+          if (c.isDestroyed() || c.getURL() !== url) continue
+          const ua = (await c.executeJavaScript('navigator.userAgent')) as string
+          if (/iPhone/.test(ua)) wc = c
+        }
+        if (wc === undefined) return null
+        const image = await wc.capturePage()
+        const { width, height } = image.getSize()
+        if (width === 0 || height === 0) return null
+        const bitmap = image.toBitmap()
+        const at = (x: number, y: number): number => {
+          const i = (y * width + x) * 4
+          return ((bitmap[i] ?? 255) + (bitmap[i + 1] ?? 255) + (bitmap[i + 2] ?? 255)) / 3
+        }
+        return {
+          width,
+          right: at(width - 3, Math.round(height / 2)),
+          bottom: at(Math.round(width / 2), height - 3)
+        }
+      }, FRAME_URL)
+
+    await expect
+      .poll(async () => (await edges())?.width ?? 0, { message: 'the iPhone surface never shrank' })
+      .toBeLessThan(393)
+
+    const zoomed = await edges()
+    expect(zoomed).not.toBeNull()
+    // 393 × 0.75, give or take the rounding of a frame.
+    expect(zoomed?.width).toBeGreaterThan(280)
+    expect(zoomed?.width).toBeLessThan(310)
+    // Dark: the border made it to the far edges, so the whole viewport did.
+    expect(zoomed?.right).toBeLessThan(96)
+    expect(zoomed?.bottom).toBeLessThan(96)
+  } finally {
+    await app.close()
+    rmSync(paintProfile, { recursive: true, force: true })
   }
 })

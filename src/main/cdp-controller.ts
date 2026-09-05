@@ -195,15 +195,24 @@ function metricsOf(
   height: number
   deviceScaleFactor: number
   mobile: boolean
+  scale: number
 } {
   const mobile = isMobileDevice(spec)
-  const scale = mobile ? 1 : normalizeZoom(zoom)
+  const factor = normalizeZoom(zoom)
 
+  // Two different mechanisms for the same picture. A desktop view is scaled by
+  // page zoom, so its override is pre-divided (above). A mobile view ignores
+  // page zoom entirely, so nothing scaled it at all: a 393px phone on a canvas
+  // at 50% was painted at 1:1 into a 197px frame and clipped. The override's
+  // own `scale` — the knob DevTools' device mode uses to fit a phone into a
+  // small window — paints the emulated viewport into the widget at that size,
+  // and the page keeps laying out at 393 (`e2e/zoom.spec.ts`).
   return {
-    width: Math.round(spec.width * scale),
-    height: Math.round(spec.height * scale),
+    width: Math.round(spec.width * (mobile ? 1 : factor)),
+    height: Math.round(spec.height * (mobile ? 1 : factor)),
     deviceScaleFactor: spec.dpr,
-    mobile
+    mobile,
+    scale: mobile ? factor : 1
   }
 }
 
@@ -301,10 +310,10 @@ export class CDPController {
    * Tell the controller what zoom factor a view is painted at.
    *
    * Called from the layout path, once per view per change — never per frame,
-   * because `ViewManager` only reports a zoom that actually moved. For a mobile
-   * device it is bookkeeping (Chromium ignores page zoom under mobile
-   * emulation); for a desktop one it re-states the metrics override, which is
-   * what keeps the page's own viewport the device's own. See `metricsOf`.
+   * because `ViewManager` only reports a zoom that actually moved. It re-states
+   * the metrics override either way: for a desktop device that is what keeps
+   * the page's own viewport the device's own, for a mobile one it is what
+   * paints the viewport at the new size at all. See `metricsOf`.
    */
   setZoom(target: CdpTarget, zoom: number): void {
     const session = this.sessions.get(target.id)
@@ -317,7 +326,7 @@ export class CDPController {
     const device = session.device
     // Nothing to re-state before the device profile has been applied — the
     // `applyDevice` that follows will use the zoom stored above.
-    if (device === null || isMobileDevice(device)) return
+    if (device === null) return
     if (!this.live(target)) return
 
     void this.send(target, 'Emulation.setDeviceMetricsOverride', metricsOf(device, next))
@@ -509,15 +518,21 @@ export class CDPController {
     const session = this.sessions.get(target.id)
     const spec = session?.device ?? null
     const zoom = session?.zoom ?? 1
-    // Nothing to override when the device is already at 1×, and nothing to
-    // restore when we never learned what this view emulates.
-    const override = options.dpr === 1 && spec !== null && spec.dpr !== 1
+    // Two reasons to restate the emulation for the capture: a 1× shot of a
+    // denser device, and a mobile view on a zoomed canvas, whose `scale` paints
+    // the viewport smaller than it is — a screenshot must not inherit the
+    // painting scale any more than it inherits a desktop's page zoom. Nothing
+    // to restore when we never learned what this view emulates.
+    const flatten = options.dpr === 1 && spec !== null && spec.dpr !== 1
+    const unscale = spec !== null && isMobileDevice(spec) && normalizeZoom(zoom) !== 1
+    const override = flatten || unscale
 
     try {
       if (override && spec !== null) {
         await this.send(target, 'Emulation.setDeviceMetricsOverride', {
           ...metricsOf(spec, zoom),
-          deviceScaleFactor: 1
+          scale: 1,
+          ...(flatten ? { deviceScaleFactor: 1 } : {})
         })
       }
 

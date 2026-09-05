@@ -411,14 +411,17 @@ export class SyncEngine implements SyncRegistry {
     const pressed = event.type === 'down'
 
     for (const entry of this.followers(source)) {
-      // The fraction becomes the follower's own device pixels, and then — for a
-      // mobile-emulated view only — the space `Input.dispatchMouseEvent` reads
-      // it in: Chromium multiplies what it is handed by the widget's zoom, so a
-      // canvas at 50% needs twice the number to land in the same place. A
-      // desktop view's emulation already cancels that out; see `mobile`.
-      const scale = entry.mobile === true ? entry.zoom : 1
-      const x = Math.round((xNorm * entry.width) / scale)
-      const y = Math.round((yNorm * entry.height) / scale)
+      // The fraction becomes the follower's own device CSS pixels, which is
+      // the space `Input.dispatchMouseEvent` reads at any canvas zoom. A
+      // desktop view's page zoom is cancelled by its pre-divided override; a
+      // mobile view is painted small by the override's `scale`, and Chromium
+      // maps a dispatched coordinate through that scale itself (`metricsOf`
+      // in `cdp-controller`, proven at 50% by `e2e/sync.spec.ts`). Until the
+      // scale existed, a mobile view had to be handed the coordinate divided
+      // by the zoom; `mobile` and `zoom` stay on the entry as the record of
+      // which space each view is in, should either mechanism change again.
+      const x = Math.round(xNorm * entry.width)
+      const y = Math.round(yNorm * entry.height)
 
       if (pressed) {
         // Hover state first: menus, tooltips and delegated handlers all key off

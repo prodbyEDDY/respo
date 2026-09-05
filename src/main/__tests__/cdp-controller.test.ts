@@ -202,7 +202,8 @@ describe('CDPController.applyDevice', () => {
       width: 393,
       height: 852,
       deviceScaleFactor: 3,
-      mobile: true
+      mobile: true,
+      scale: 1
     })
     expect(paramsOf(target, 'Network.setUserAgentOverride')).toEqual({
       userAgent: IPHONE.userAgent
@@ -702,11 +703,11 @@ describe('CDPController — canvas zoom and the emulated viewport', () => {
     // Page zoom multiplies CSS pixels by 1/0.5 on the way in, so half the
     // widget is a whole 1440px viewport.
     expect(overridesOf(target)).toEqual([
-      { width: 720, height: 450, deviceScaleFactor: 1, mobile: false }
+      { width: 720, height: 450, deviceScaleFactor: 1, mobile: false, scale: 1 }
     ])
   })
 
-  it('leaves a mobile override alone: that emulation swallows the zoom itself', async () => {
+  it('paints a mobile override at the zoom instead: that emulation swallows page zoom', async () => {
     const target = fakeTarget()
     await controller.attach(target)
     await controller.applyDevice(target, IPHONE)
@@ -715,7 +716,52 @@ describe('CDPController — canvas zoom and the emulated viewport', () => {
     controller.setZoom(target, 0.5)
     await Promise.resolve()
 
+    // The page still lays out at 393px; only the painting is half size.
+    expect(overridesOf(target)).toEqual([
+      { width: 393, height: 852, deviceScaleFactor: 3, mobile: true, scale: 0.5 }
+    ])
+  })
+
+  it('ignores a zoom that did not change', async () => {
+    const target = fakeTarget()
+    await controller.attach(target)
+    await controller.applyDevice(target, IPHONE)
+    target.calls.length = 0
+
+    controller.setZoom(target, 1)
+    await Promise.resolve()
+
     expect(methods(target)).toEqual([])
+  })
+
+  it('captures a zoomed mobile view at full size, then paints it small again', async () => {
+    const target = fakeTarget()
+    await controller.attach(target)
+    await controller.applyDevice(target, IPHONE)
+    controller.setZoom(target, 0.5)
+    await Promise.resolve()
+    target.calls.length = 0
+
+    await controller.capture(target, { format: 'png', fullPage: false, dpr: 'device' })
+
+    const overrides = overridesOf(target)
+    expect(overrides).toHaveLength(2)
+    // Before the shot: the emulated viewport painted 1:1, at the device density.
+    expect(overrides[0]).toEqual({
+      width: 393,
+      height: 852,
+      deviceScaleFactor: 3,
+      mobile: true,
+      scale: 1
+    })
+    // After: the canvas's own picture again.
+    expect(overrides[1]).toEqual({
+      width: 393,
+      height: 852,
+      deviceScaleFactor: 3,
+      mobile: true,
+      scale: 0.5
+    })
   })
 
   it('keeps the zoom for the emulation that follows a device change', async () => {
