@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>perf</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: system-ui, sans-serif;
+      }
+      .band {
+        height: 400px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 48px;
+        color: #fff;
+      }
+      /* One overflow culprit, so the diagnostics scan has something to find. */
+      .wide {
+        width: 120vw;
+        height: 20px;
+        background: #ff3e00;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wide"></div>
+    <script>
+      // Twelve bands: a long runway for the scroll stress.
+      for (let i = 0; i < 12; i++) {
+        const band = document.createElement('div')
+        band.className = 'band'
+        band.style.background = `hsl(${i * 30}, 60%, 45%)`
+        band.textContent = String(i + 1)
+        document.body.appendChild(band)
+      }
+      // Console traffic the diagnostics counters have to keep up with:
+      // an error every 100 ms, a log every 50 ms, on every device at once.
+      let n = 0
+      setInterval(() => console.error('perf error ' + n++), 100)
+      setInterval(() => console.log('perf log ' + n), 50)
+    </script>
+  </body>
+</html>
